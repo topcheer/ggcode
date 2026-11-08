@@ -12,7 +12,10 @@ export type StreamMsg =
   | { type: "system"; text: string }
   | { type: "done"; usage?: { input_tokens: number; output_tokens: number } }
   | { type: "error"; error: string }
-  | { type: "user_ack"; text: string };
+  | { type: "user_ack"; text: string }
+  // 二层契约(§6.1 实时流):后端 emit 后前端自动激活;零事件=完全降级不变
+  | { type: "subagent_delta"; id: string; kind: "text" | "reasoning"; text: string }
+  | { type: "subagent_done"; id: string; result: string; is_error: boolean };
 
 type Handlers = {
   onMsg: (m: StreamMsg) => void;

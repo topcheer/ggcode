@@ -19,6 +19,7 @@ func (m Model) handleWebuiReadyMsg(msg webuiReadyMsg) (tea.Model, tea.Cmd) {
 		if msg.Token != "" {
 			url += "#token=" + msg.Token
 		}
+		m.webuiURL = url // /webui 命令消费(P 派单件)
 		m.chatWriteSystem(nextSystemID(), "\u2B21 WebUI: "+url)
 		m.chatListScrollToBottom()
 	}

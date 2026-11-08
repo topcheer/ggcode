@@ -1261,6 +1261,21 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	webuiSrv.SetChatBridge(tuiBridge)
 	repl.SetWebUIBridge(tuiBridge)
 
+	// 子代理实时流一等接线(§6.1):manager 回调构造 StreamEvent 广播进总线,
+	// TUI/webui/桌面共用同一契约(webui WS 由 streamEventToJSON 转 subagent_delta 帧)
+	subMgr.SetOnStreamText(func(agentID, text string) {
+		tuiBridge.BroadcastEvent(provider.StreamEvent{
+			Type:     provider.StreamEventSubagentDelta,
+			Subagent: &provider.SubagentEvent{ID: agentID, Kind: "text", Text: text},
+		})
+	})
+	subMgr.SetOnReasoning(func(agentID, text string) {
+		tuiBridge.BroadcastEvent(provider.StreamEvent{
+			Type:     provider.StreamEventSubagentDelta,
+			Subagent: &provider.SubagentEvent{ID: agentID, Kind: "reasoning", Text: text},
+		})
+	})
+
 	webuiSrv.SetRestartFn(func() {
 		repl.InjectRestart()
 	})

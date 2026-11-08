@@ -1,18 +1,26 @@
 import { useEffect, useState } from "react";
 import { configApi } from "@/api/client";
-import DomainPage from "@/pages/DomainPage";
 import VendorsPage from "@/pages/VendorsPage";
+import CronPage from "@/pages/CronPage";
+import CheckpointsPage from "@/pages/CheckpointsPage";
+import SessionsPage from "@/pages/SessionsPage";
+import KnightPage from "@/pages/KnightPage";
+import MCPPage from "@/pages/MCPPage";
+import IMPage from "@/pages/IMPage";
+import A2APage from "@/pages/A2APage";
 
-/** SettingsShell:七域 tab 导航;Config=JSON 编辑代表页,其余六域=DomainPage 取数框架 */
+/** SettingsShell:十域 tab 导航;每域专属页(Config/Vendors/MCP/IM/A2A/Sessions/Knight/Cron/Checkpoints) */
 const TABS = [
   { id: "config", label: "配置", comp: ConfigPage },
   { id: "general", label: "常规", comp: ConfigPage }, // general 复用配置编辑形态
   { id: "vendors", label: "供应商", comp: VendorsPage },
-  { id: "mcp", label: "MCP", comp: () => <DomainPage domain="mcp" /> },
-  { id: "im", label: "IM", comp: () => <DomainPage domain="im" /> },
-  { id: "a2a", label: "A2A", comp: () => <DomainPage domain="a2a" /> },
-  { id: "sessions", label: "会话", comp: () => <DomainPage domain="sessions" /> },
-  { id: "knight", label: "Knight", comp: () => <DomainPage domain="knight" /> },
+  { id: "mcp", label: "MCP", comp: MCPPage },
+  { id: "im", label: "IM", comp: IMPage },
+  { id: "a2a", label: "A2A", comp: A2APage },
+  { id: "sessions", label: "会话", comp: SessionsPage },
+  { id: "knight", label: "Knight", comp: KnightPage },
+  { id: "cron", label: "定时任务", comp: CronPage },
+  { id: "checkpoints", label: "检查点", comp: CheckpointsPage },
 ] as const;
 
 export default function Settings({ onBack }: { onBack: () => void }) {

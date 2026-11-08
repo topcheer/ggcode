@@ -301,6 +301,7 @@ type Model struct {
 	clipboardLoader        func() (imageAttachedMsg, error)
 	clipboardWriter        func(string) error
 	urlOpener              func(string) error
+	webuiURL               string // WebUI 完整 URL(含 #token)；由 webuiReadyMsg 就绪时写入，/webui 命令消费
 	webuiBridge            WebUIEventBroadcaster
 	updateSvc              *update.Service
 	updateInfo             update.CheckResult

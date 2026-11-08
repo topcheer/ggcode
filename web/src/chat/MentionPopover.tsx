@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "@/api/client";
 
 /** @mention 弹层(§4.3):输入 @ 触发;三类节点彩色 token(§3 mention 色族) */
 type MentionKind = "file" | "skill" | "agent";
@@ -20,6 +21,22 @@ export default function MentionPopover({
 }) {
   const [kind, setKind] = useState<MentionKind>("file");
   const inputRef = useRef<HTMLInputElement>(null);
+  // file 类:接 /api/workspace/files 真 fuzzy(P4-1);防抖 150ms
+  const [fileHits, setFileHits] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (kind !== "file") {
+      setFileHits([]);
+      return;
+    }
+    const h = setTimeout(() => {
+      api
+        .get<string[]>(`/api/workspace/files?q=${encodeURIComponent(query)}`)
+        .then((d) => setFileHits(d))
+        .catch(() => setFileHits([]));
+    }, 150);
+    return () => clearTimeout(h);
+  }, [query, kind]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -73,8 +90,20 @@ export default function MentionPopover({
           }
         }}
       />
-      <ul className="flex flex-col gap-0.5">
-        {suggestions.map((s) => (
+      <ul className="flex max-h-40 flex-col gap-0.5 overflow-y-auto">
+        {kind === "file" &&
+          fileHits.map((f) => (
+            <li key={f}>
+              <button
+                className="text-ui-xs w-full truncate rounded-md px-2 py-1.5 text-left font-[family-name:var(--font-mono)] hover:bg-hover"
+                onClick={() => onPick(`@file:${f} `)}
+              >
+                <span style={{ color: `var(${KIND_META.file.cssVar})` }}>@file:{f}</span>
+              </button>
+            </li>
+          ))}
+        {!(kind === "file" && fileHits.length > 0) &&
+          suggestions.map((s) => (
           <li key={s.kind}>
             <button
               className="text-ui-xs w-full rounded-md px-2 py-1.5 text-left hover:bg-hover"

@@ -3,6 +3,7 @@ import Chat from "@/pages/Chat";
 import Settings from "@/pages/Settings";
 import CommandPalette, { type PaletteAction } from "@/pages/CommandPalette";
 import { useChat } from "@/store/chat";
+import { usePane } from "@/store/pane";
 
 type Theme = "dark" | "light" | "system";
 type View = "chat" | "settings";
@@ -30,6 +31,17 @@ export default function App() {
   const [view, setView] = useState<View>("chat");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const resetChat = useChat((s) => s.reset);
+  const loadHistory = useChat((s) => s.loadHistory);
+  // 右 Pane(P5-6):Spawn 详情推入右栏并排阅读(§6.1)
+  const paneSpawn = usePane((s) => s.active);
+  const closePane = usePane((s) => s.close);
+  // §6.1 二层:活跃子代理流(未完结的在前)
+  const streams = useChat((s) => s.subagentStreams);
+  const activeStreams = Object.entries(streams).filter(([, s]) => !s.done);
+  // 移动端抽屉(P5-7):窄屏左栏抽屉化
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
+  const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string }>>([]);
 
   // ⌘K 全局快捷键(§2 键盘映射表)
   useEffect(() => {
@@ -49,12 +61,44 @@ export default function App() {
     setThemeState(next);
   };
 
+  // 字号档循环(P5-5):调整 text-ui-* 基准,持久化 localStorage
+  const FONT_SIZES = ["12px", "13px", "14px", "16px"] as const;
+  const [fontSize, setFontSizeState] = useState<string>(() => localStorage.getItem("ggcode-font-size") || "14px");
+  useEffect(() => {
+    document.documentElement.style.fontSize = fontSize;
+  }, [fontSize]);
+  const cycleFontSize = () => {
+    const idx = FONT_SIZES.indexOf(fontSize as (typeof FONT_SIZES)[number]);
+    const next = FONT_SIZES[(idx + 1) % FONT_SIZES.length];
+    localStorage.setItem("ggcode-font-size", next);
+    setFontSizeState(next);
+  };
+
   const paletteActions: PaletteAction[] = [
     { id: "go-chat", label: "打开会话", hint: "视图", run: () => setView("chat") },
     { id: "go-settings", label: "打开设置", hint: "视图", run: () => setView("settings") },
     { id: "theme", label: `切换主题 (当前:${THEME_LABEL[theme]})`, hint: "dark→light→system", run: cycleTheme },
     { id: "new-chat", label: "新建会话(清空当前聊天视图)", hint: "⌘N", run: resetChat },
+    // 历史会话切换(P4-2):点击后回 chat 视图并重拉该 session 镜像
+    ...sessions.slice(0, 8).map((s) => ({
+      id: `session-${s.id}`,
+      label: `切换到会话: ${s.title || s.id.slice(0, 12)}`,
+      hint: "历史会话",
+      run: () => {
+        setView("chat");
+        void loadHistory();
+      },
+    })),
   ];
+
+  // ⌘K 面板打开时拉最近会话(P4-2 数据源)
+  useEffect(() => {
+    if (!paletteOpen) return;
+    fetch("/api/sessions")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d: Array<{ id: string; title?: string; updated_at?: string }>) => setSessions(Array.isArray(d) ? d : []))
+      .catch(() => setSessions([]));
+  }, [paletteOpen]);
 
   // ⌘N 新会话
   useEffect(() => {
@@ -72,7 +116,8 @@ export default function App() {
   return (
     <div className="flex h-full bg-background text-foreground">
       {/* 三栏骨架:左会话栏 + 主区(Chat/Settings 切换) + 右 Pane(P1.5) */}
-      <aside className="hidden w-[232px] shrink-0 flex-col border-r border-border bg-sidebar md:flex">
+      <aside className={`fixed inset-y-0 left-0 z-40 w-[232px] shrink-0 flex-col border-r border-border bg-sidebar transition-transform md:static md:flex ${drawerOpen ? "flex" : "hidden"}`}>
+        {drawerOpen && <div className="fixed inset-0 z-[-1] bg-black/40 md:hidden" onClick={() => setDrawerOpen(false)} />}
         <div className="border-b border-border px-4 py-5">
           <h1 className="text-ui-lg font-bold tracking-tight">
             gg<span className="text-brand">code</span>
@@ -109,15 +154,77 @@ export default function App() {
           >
             主题: {THEME_LABEL[theme]}
           </button>
+          <button
+            className="rounded-lg px-3 py-2 text-left text-ui-sm text-foreground-subtle transition-colors hover:bg-hover hover:text-foreground"
+            onClick={cycleFontSize}
+            title="字号 (12 → 13 → 14 → 16)"
+          >
+            字号: {fontSize.replace("px", "")}
+          </button>
         </nav>
         <div className="border-t border-border px-4 py-3 text-ui-xs text-foreground-subtlest">
           WebUI {view === "chat" ? "P1 · 聊天" : "P2 · 设置"} · 建设中
         </div>
       </aside>
       <main className="min-w-0 flex-1 overflow-hidden">
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2 md:hidden">
+          <button
+            className="text-ui-sm rounded-lg px-2 py-1 text-foreground-subtle hover:bg-hover"
+            onClick={() => setDrawerOpen(true)}
+            title="打开菜单"
+          >
+            ☰
+          </button>
+          <span className="text-ui-sm font-semibold">ggcode</span>
+        </div>
         {view === "chat" ? <Chat /> : <Settings onBack={() => setView("chat")} />}
       </main>
-      <aside className="hidden w-0 shrink-0 border-l border-border lg:block" />
+      <aside className="hidden w-[380px] shrink-0 flex-col border-l border-border bg-sidebar lg:block" style={paneSpawn || activeStreams.length > 0 ? { width: "380px" } : undefined}>
+        {/* §6.1 二层:活跃子代理实时流监视(一等键=SubAgentID;零事件自动隐藏) */}
+        {activeStreams.length > 0 && (
+          <div className="max-h-[50%] overflow-auto border-b border-border">
+            <div className="px-4 py-2 text-ui-xs text-foreground-subtlest">子代理实时流</div>
+            {activeStreams.map(([id, s]) => (
+              <div key={id} className="border-t border-border px-4 py-2">
+                <div className="mb-1 flex items-center gap-2">
+                  <span
+                    className="inline-block h-2 w-2 rounded-full"
+                    style={{ background: s.done ? (s.isError ? "var(--color-destructive)" : "var(--color-success)") : "var(--color-trajectory-tool-call)" }}
+                  />
+                  <span className="text-ui-xs font-[family-name:var(--font-mono)] text-foreground-subtle">{id.slice(0, 12)}</span>
+                  <span className="text-ui-xs ml-auto text-foreground-subtlest">{s.done ? (s.isError ? "失败" : "完成") : "运行中"}</span>
+                </div>
+                <pre className="text-ui-xs max-h-32 overflow-auto font-[family-name:var(--font-mono)] whitespace-pre-wrap text-foreground-subtle">
+                  {s.text || s.reasoning || "…"}
+                </pre>
+              </div>
+            ))}
+          </div>
+        )}
+        {paneSpawn ? (
+          <div className="flex h-full flex-col">
+            <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-full"
+                style={{ background: paneSpawn.isError ? "var(--color-destructive)" : paneSpawn.done ? "var(--color-success)" : "var(--color-trajectory-tool-call)" }}
+              />
+              <h3 className="text-ui-sm flex-1 truncate font-medium" style={{ color: "var(--color-agent-node-fg)" }}>
+                Spawn {paneSpawn.name}
+              </h3>
+              <button
+                className="text-ui-xs rounded px-2 py-0.5 text-foreground-subtlest hover:bg-hover"
+                onClick={closePane}
+                title="关闭"
+              >
+                ✕
+              </button>
+            </div>
+            <pre className="text-ui-xs flex-1 overflow-auto p-4 font-[family-name:var(--font-mono)] whitespace-pre-wrap text-foreground-subtle">
+              {paneSpawn.result || paneSpawn.argsText || "(运行中…结果就绪后自动更新)"}
+            </pre>
+          </div>
+        ) : null}
+      </aside>
       {paletteOpen && (
         <CommandPalette actions={paletteActions} onClose={() => setPaletteOpen(false)} />
       )}

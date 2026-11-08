@@ -3,9 +3,14 @@ import { useChat } from "@/store/chat";
 import MentionPopover from "@/chat/MentionPopover";
 
 /** Composer(§4.3):发光活跃态+⌘⏎发送+Esc 中断面;P1.5 加 @mention 弹层 */
-export default function Composer({ onSend }: { onSend: (text: string) => void }) {
+export default function Composer({
+  onSend,
+}: {
+  onSend: (text: string, images?: string[]) => void;
+}) {
   const [value, setValue] = useState("");
   const [focused, setFocused] = useState(false);
+  const [pastedImages, setPastedImages] = useState<string[]>([]); // dataURL 缩略图预览(P4-4)
   const busy = useChat((s) => s.busy);
   const conn = useChat((s) => s.conn);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -29,9 +34,22 @@ export default function Composer({ onSend }: { onSend: (text: string) => void })
 
   const submit = () => {
     const text = value.trim();
-    if (!text || busy || conn !== "open") return;
-    onSend(text);
+    if ((!text && pastedImages.length === 0) || busy || conn !== "open") return;
+    onSend(text, pastedImages.length ? pastedImages : undefined);
     setValue("");
+    setPastedImages([]);
+  };
+
+  // 截图/图片粘贴(P4-4):读为 dataURL 缩略图,发送时附 images
+  const onPaste = (e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (files.length === 0) return;
+    e.preventDefault();
+    for (const f of files.slice(0, 4)) {
+      const rd = new FileReader();
+      rd.onload = () => setPastedImages((prev) => [...prev, String(rd.result)]);
+      rd.readAsDataURL(f);
+    }
   };
 
   return (
@@ -47,6 +65,7 @@ export default function Composer({ onSend }: { onSend: (text: string) => void })
           rows={2}
           value={value}
           disabled={conn !== "open"}
+          onPaste={onPaste}
           onChange={(e) => {
             setValue(e.target.value);
             // @ 触发 mention 弹层(§4.3)
@@ -67,6 +86,22 @@ export default function Composer({ onSend }: { onSend: (text: string) => void })
             }
           }}
         />
+        {pastedImages.length > 0 && (
+          <div className="mb-2 flex gap-2">
+            {pastedImages.map((src, i) => (
+              <div key={i} className="relative">
+                <img src={src} alt="paste" className="h-16 w-16 rounded-lg border border-border object-cover" />
+                <button
+                  className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-popover text-ui-xs text-foreground-subtle"
+                  onClick={() => setPastedImages((p) => p.filter((_, j) => j !== i))}
+                  title="移除"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {mention && (
           <MentionPopover
             query={mention.query}
