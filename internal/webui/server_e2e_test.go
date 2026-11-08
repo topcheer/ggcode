@@ -1167,7 +1167,9 @@ func TestE2EAssetsStaticServing(t *testing.T) {
 		}
 	}
 	if jsName == "" || cssName == "" {
-		t.Skip("dist/assets not populated in this checkout")
+		// assets 是入库的 tracked 制品(#5279 契约):缺失即回归,必须 FAIL
+		// 而非 skip——否则静态路由 MIME 断言在 CI 永不执行(spec-gaming 面)
+		t.Fatal("dist/assets missing from checkout: tracked artifacts regressed (PR #5279 contract)")
 	}
 
 	// JS:200 + JavaScript MIME(Strict MIME 检查关键)
