@@ -195,12 +195,6 @@ func shouldEmitSwarmBoardUpdate(eventType string) bool {
 	}
 }
 
-func (b *ChatBridge) SetTunnelHost(th *agentruntime.TunnelHost) {
-	b.mu.Lock()
-	b.tunnelHost = th
-	b.mu.Unlock()
-}
-
 func (b *ChatBridge) WorkingDir() string {
 	return b.workingDir
 }
