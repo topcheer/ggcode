@@ -14,3 +14,4 @@
 - [11-08 20:46 巡检50并入] /webui tunnel 提交遇 replace 路径问题：wt 相对 ../et 不存在（go.mod 相对 wt 目录解析）——已回退 wt 绝对路径待解决提交策略（go.work 或 SDK vendoring 或发版依赖），巡检态：webui 构建绿。阻塞：etunnel 依赖路径策略待定。
 - [11-08 20:48 /webui tunnel 交付] etunnel SDK 接入落定：go.mod replace ../et（主树正路）+未跟踪 go.work 供 wt 构建（.gitignore 补 go.work）；TunnelCtl+三态命令+off 关闭；双包全绿已推；二进制已更新。
 - [11-08 21:02 巡检51+off/修复] /webui tunnel off 词位 bug（parts[1]=tunnel，off 应检 parts[2]）+公网 URL 缺 #token 修复（已激活打印与异步就绪消息均带）；StopClearsURL 钉测；双包全绿已推；二进制已更新；阻塞无。
+- [11-08 21:15 巡检52] WS隧道403根因=CheckOrigin跨源比对(Origin vs 回环Host)——持证跨源放行+authScript双token去重+3分支钉测；模型选择器 vendor·endpoint optgroup 层级化；et发现(Host未转发/X-Forwarded-Host缺/PROTOCOL.md漂移)已DM et席(DapperShark,正改stream.go/proxy.go)；webui测试+pnpm build 双绿已推+二进制更新；阻塞无。
