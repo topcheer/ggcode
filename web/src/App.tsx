@@ -52,6 +52,19 @@ export default function App() {
     setThemeState(next);
   };
 
+  // 字号档循环(P5-5):调整 text-ui-* 基准,持久化 localStorage
+  const FONT_SIZES = ["12px", "13px", "14px", "16px"] as const;
+  const [fontSize, setFontSizeState] = useState<string>(() => localStorage.getItem("ggcode-font-size") || "14px");
+  useEffect(() => {
+    document.documentElement.style.fontSize = fontSize;
+  }, [fontSize]);
+  const cycleFontSize = () => {
+    const idx = FONT_SIZES.indexOf(fontSize as (typeof FONT_SIZES)[number]);
+    const next = FONT_SIZES[(idx + 1) % FONT_SIZES.length];
+    localStorage.setItem("ggcode-font-size", next);
+    setFontSizeState(next);
+  };
+
   const paletteActions: PaletteAction[] = [
     { id: "go-chat", label: "打开会话", hint: "视图", run: () => setView("chat") },
     { id: "go-settings", label: "打开设置", hint: "视图", run: () => setView("settings") },
@@ -130,6 +143,13 @@ export default function App() {
             title="切换主题 (dark → light → system)"
           >
             主题: {THEME_LABEL[theme]}
+          </button>
+          <button
+            className="rounded-lg px-3 py-2 text-left text-ui-sm text-foreground-subtle transition-colors hover:bg-hover hover:text-foreground"
+            onClick={cycleFontSize}
+            title="字号 (12 → 13 → 14 → 16)"
+          >
+            字号: {fontSize.replace("px", "")}
           </button>
         </nav>
         <div className="border-t border-border px-4 py-3 text-ui-xs text-foreground-subtlest">

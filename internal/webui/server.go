@@ -325,6 +325,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/sessions", a(s.handleSessions))
 	s.mux.HandleFunc("/api/sessions/", a(s.handleSessionDetail))
 	s.mux.HandleFunc("/api/workspace/files", a(s.handleWorkspaceFiles))
+	s.mux.HandleFunc("/api/cron/jobs", a(s.handleCronJobs))
 	s.mux.HandleFunc("/api/chat/ws", a(s.handleChatWS))
 	s.mux.HandleFunc("/api/chat/history", a(s.handleChatHistory))
 	s.mux.HandleFunc("/api/restart", a(s.handleRestart))
