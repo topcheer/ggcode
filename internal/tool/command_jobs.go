@@ -500,11 +500,26 @@ func (m *CommandJobManager) waitForJob(ctx context.Context, cmd *exec.Cmd, job *
 				errMsg += "\n" + exitIntel
 			}
 		}
+		// #5278: compute the safety hint BEFORE finish() - the hint write used to
+		// happen after close(done), so a Wait()-then-snapshot() caller raced the
+		// unlocked write (snapshot reads safetyHint under job.mu) and could read
+		// an empty hint. Assigning first keeps the write sequenced before the
+		// done signal, inside the goroutine that owns the job fields.
+		hint := detectDetachedWorktreePush(context.Background(), job.Command, strings.Join(job.Lines, "\n"), job.ErrText, m.workingDir)
+		// #5278: publish the hint under the job lock BEFORE finish() closes done
+		// - this gives the locked snapshot reader a happens-before edge through
+		// finish's own critical section, so a Wait()-then-snapshot() caller can
+		// never race the write or observe an empty hint.
+		job.mu.Lock()
+		job.safetyHint = hint
+		job.mu.Unlock()
 		job.finish(CommandJobFailed, errMsg)
-		job.safetyHint = detectDetachedWorktreePush(context.Background(), job.Command, strings.Join(job.Lines, "\n"), job.ErrText, m.workingDir)
 	default:
+		hint := verifyWorktreeAddResult(context.Background(), job.Command, m.workingDir)
+		job.mu.Lock()
+		job.safetyHint = hint
+		job.mu.Unlock()
 		job.finish(CommandJobCompleted, "")
-		job.safetyHint = verifyWorktreeAddResult(context.Background(), job.Command, m.workingDir)
 	}
 
 	m.mu.Lock()
