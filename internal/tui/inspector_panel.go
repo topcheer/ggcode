@@ -1203,6 +1203,12 @@ func inspectorText(lang Language, key string, args ...any) string {
 	switch lang {
 	case LangZhCN:
 		switch key {
+		// #5281: search keys were missing from the zh branch - Go switch has no
+		// fallthrough to the outer default, so zh users saw raw key names.
+		case "search_no_query":
+			msg = "用法：/search <关键词> — 在所有会话的消息内容中搜索"
+		case "search_no_results":
+			msg = "未找到匹配的会话。"
 		case "hint_sessions":
 			msg = "↑/↓ 选择 • Enter 恢复 • A 全部工作区 • E 导出 • / 过滤 • Esc 关闭"
 		case "session_filter":
@@ -1379,11 +1385,11 @@ func inspectorText(lang Language, key string, args ...any) string {
 		case "session_filter":
 			msg = "Filter: %s (Esc to clear)"
 		case "search_no_query":
-			msg = "用法：/search <关键词> — 在所有会话的消息内容中搜索"
+			msg = "usage: /search <keyword> — search message content across all sessions" // #5281: was Chinese copy-paste
 		case "search_no_results":
-			msg = "未找到匹配的会话。"
-		case "search_results":
-			msg = "找到 %d 条结果（来自 %d 个会话）"
+			msg = "no matching sessions found." // #5281: was Chinese
+		// #5281: dead key search_results removed - zero callers in internal/tui
+		// (the search results panel renders its own text)
 		case "hint_search":
 			msg = "↑/↓ select • Enter resume session • Esc close"
 		case "hint_agents":
