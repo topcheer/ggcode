@@ -1,51 +1,83 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 type Controls = { model?: string; mode?: string; reasoning_effort?: string };
 
 const MODES = ["supervised", "bypass"] as const;
 const EFFORTS = ["low", "medium", "high"] as const;
 
-/** useChatControls:三能力共用快照轮询+命令提交(20s 轮询;提交后 600ms 刷新) */
+/** chat-controls 全局单例 store:头部(模型+effort)与输入框下(mode toggle)
+ *  共享同一份快照与 busy,消除多组件各开 20s 轮询的竞态(切态回显抖动根因) */
+let snapState: Controls = {};
+let snapBusy = false;
+const snapSubs = new Set<(c: Controls, b: boolean) => void>();
+let pollTimer: number | undefined;
+let refCount = 0;
+
+const notify = () => snapSubs.forEach((f) => f(snapState, snapBusy));
+
+function poll() {
+  fetch("/api/chat/controls")
+    .then((r) => (r.ok ? r.json() : {}))
+    .then((d: Controls) => {
+      snapState = d;
+      notify();
+    })
+    .catch(() => {});
+}
+
+/** useChatControls:订阅共享快照;首个订阅者开 20s 轮询,末个退订 */
 function useChatControls() {
-  const [ctrl, setCtrl] = useState<Controls>({});
-  const [busy, setBusy] = useState(false);
-  const timer = useRef<number | undefined>(undefined);
-
-  const load = () => {
-    fetch("/api/chat/controls")
-      .then((r) => (r.ok ? r.json() : {}))
-      .then((d) => setCtrl(d))
-      .catch(() => {});
-  };
-
+  const [, force] = useState(0);
   useEffect(() => {
-    load();
-    timer.current = window.setInterval(load, 20000);
-    return () => window.clearInterval(timer.current);
+    const sub = (c: Controls, b: boolean) => {
+      snapState = c;
+      snapBusy = b;
+      force((n) => n + 1);
+    };
+    snapSubs.add(sub);
+    force((n) => n + 1);
+    refCount++;
+    if (refCount === 1) {
+      poll();
+      pollTimer = window.setInterval(poll, 20000);
+    }
+    return () => {
+      snapSubs.delete(sub);
+      refCount--;
+      if (refCount === 0 && pollTimer) {
+        window.clearInterval(pollTimer);
+        pollTimer = undefined;
+      }
+    };
   }, []);
 
-  const submit = (text: string) => {
-    setBusy(true);
-    fetch("/api/chat/commands", {
+  /** submitCommand:提交 slash;乐观更新由调用方在 resolve 后做,失败弹错误 */
+  const submitCommand = (text: string) => {
+    snapBusy = true;
+    notify();
+    return fetch("/api/chat/commands", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
-    })
-      .then(() => setTimeout(load, 600))
-      .catch(() => {})
-      .finally(() => setBusy(false));
+    }).then((r) => {
+      if (!r.ok) {
+        // 409/400:后端拒绝(命令层校验失败),读错误体弹给 UI
+        return r.text().then((t) => {
+          throw new Error(t || `command rejected (${r.status})`);
+        });
+      }
+    });
   };
 
-  return { ctrl, busy, submit };
+  return { ctrl: snapState, busy: snapBusy, submitCommand };
 }
 
-/** ChatControls(头部):模型下拉 + effort 分段胶囊条;
- *  提交走 /api/chat/commands(TUI slash 全链),反馈系统消息经 WS 回流 */
+/** ChatControls(头部):模型下拉 + effort 分段胶囊条 */
 export default function ChatControls() {
-  const { ctrl, busy, submit } = useChatControls();
+  const { ctrl, busy, submitCommand } = useChatControls();
   const [groups, setGroups] = useState<{ vendor: string; endpoint: string; models: string[] }[]>([]);
-  // 活动 provider·endpoint 取自 /api/config 顶层(/api/chat/controls 不含这两项)
   const [active, setActive] = useState<{ vendor?: string; endpoint?: string }>({});
+  const [err, setErr] = useState("");
 
   useEffect(() => {
     fetch("/api/config")
@@ -64,13 +96,21 @@ export default function ChatControls() {
       .catch(() => {});
   }, []);
 
+  const run = (text: string) => {
+    setErr("");
+    submitCommand(text)
+      .then(() => setTimeout(poll, 600))
+      .catch((e) => setErr(String(e.message || e)));
+  };
+
   const select = "text-ui-xs rounded-lg border border-border bg-card px-2 py-1 text-foreground disabled:opacity-50";
   const activeModels = groups.find((g) => g.vendor === active.vendor && g.endpoint === active.endpoint)?.models ?? [];
   const effort = ctrl.reasoning_effort || "medium";
 
   return (
     <div className="flex items-center gap-2">
-      <select className={select} value={ctrl.model ?? ""} disabled={busy} title="切换模型" onChange={(e) => submit(`/model ${e.target.value}`)}>
+      {err && <span className="text-ui-xs text-[var(--color-destructive-surface-fg)]">{err}</span>}
+      <select className={select} value={ctrl.model ?? ""} disabled={busy} title="切换模型" onChange={(e) => run(`/model ${e.target.value}`)}>
         <option value="" disabled>
           {ctrl.model || "模型"}
         </option>
@@ -83,14 +123,14 @@ export default function ChatControls() {
             </option>
           ))}
       </select>
-      {/* effort 分段胶囊条(活力棒):三档单选,当前档反色高亮 */}
+      {/* effort 分段胶囊条:三档单选,当前档反色高亮 */}
       <div className="text-ui-xs flex items-center rounded-full border border-border bg-card p-0.5" title="推理力度">
         {EFFORTS.map((e) => (
           <button
             key={e}
             type="button"
             disabled={busy}
-            onClick={() => submit(`/effort ${e}`)}
+            onClick={() => run(`/effort ${e}`)}
             className={`rounded-full px-2 py-0.5 transition-colors disabled:opacity-50 ${
               effort === e ? "bg-foreground text-background" : "text-foreground-subtle hover:text-foreground"
             }`}
@@ -103,21 +143,31 @@ export default function ChatControls() {
   );
 }
 
-/** ModeToggle(输入框下方):双态权限模式开关——track 左 supervised 右 bypass,
- *  点击拨到另一态提交 /mode;当前态在 track 内反色小字直读 */
+/** ModeToggle(输入框下方):双态权限开关——点击拨到另一态;提交失败弹错误,
+ *  成功后 600ms 快照确认(乐观不盲信,防"切了但没生效"死循环) */
 export function ModeToggle() {
-  const { ctrl, busy, submit } = useChatControls();
+  const { ctrl, busy, submitCommand } = useChatControls();
   const mode = ctrl.mode || "supervised";
   const isBypass = mode === "bypass";
+  const [err, setErr] = useState("");
+
+  const flip = () => {
+    const target = isBypass ? MODES[0] : MODES[1];
+    setErr("");
+    submitCommand(`/mode ${target}`)
+      .then(() => setTimeout(poll, 600))
+      .catch((e) => setErr(String(e.message || e)));
+  };
 
   return (
     <div className="text-ui-xs flex items-center justify-center gap-2 px-4 pb-1.5" title="权限模式( supervised=监督执行 / bypass=跳过审批 )">
+      {err && <span className="text-[var(--color-destructive-surface-fg)]">{err}</span>}
       <span className="text-foreground-subtlest">权限模式</span>
       <button
         type="button"
         disabled={busy}
         aria-pressed={isBypass}
-        onClick={() => submit(`/mode ${isBypass ? MODES[0] : MODES[1]}`)}
+        onClick={flip}
         className={`relative h-5 w-10 rounded-full border transition-colors disabled:opacity-50 ${
           isBypass ? "border-[var(--color-warning-surface-fg)] bg-[var(--color-warning-surface)]" : "border-border bg-card"
         }`}

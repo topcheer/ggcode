@@ -5,7 +5,7 @@ import (
 	"os"
 	"sync"
 
-	etunnel "etunnel/sdk"
+	etunnel "github.com/topcheer/etunnel/sdk"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
