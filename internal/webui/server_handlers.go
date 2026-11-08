@@ -13,6 +13,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/secretfield"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 func sanitizeEndpoints(endpoints map[string]config.EndpointConfig) map[string]interface{} {
@@ -1082,6 +1083,9 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		Vendor    string `json:"vendor,omitempty"`
 		Endpoint  string `json:"endpoint,omitempty"`
 		Model     string `json:"model,omitempty"`
+		// 锁定态:他实例持有 flock(会话正被另一 TUI/desktop 实例使用)——
+		// 探测用 non-blocking flock 试锁后立即释放,不产生副作用
+		LockedByPID int `json:"locked_by_pid,omitempty"`
 	}
 	type workspaceGroup struct {
 		Workspace string           `json:"workspace"`
@@ -1115,14 +1119,15 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		g := groupMap[ws]
 		g.Sessions = append(g.Sessions, sessionSummary{
-			ID:        ses.ID,
-			Title:     ses.Title,
-			CreatedAt: ses.CreatedAt.Format(time.RFC3339),
-			UpdatedAt: ses.UpdatedAt.Format(time.RFC3339),
-			MsgCount:  len(ses.Messages),
-			Vendor:    ses.Vendor,
-			Endpoint:  ses.Endpoint,
-			Model:     ses.Model,
+			ID:          ses.ID,
+			Title:       ses.Title,
+			CreatedAt:   ses.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:   ses.UpdatedAt.Format(time.RFC3339),
+			MsgCount:    len(ses.Messages),
+			Vendor:      ses.Vendor,
+			Endpoint:    ses.Endpoint,
+			Model:       ses.Model,
+			LockedByPID: sessionProbeLockHolderPID(ses.ID),
 		})
 		g.Count++
 	}
@@ -1412,4 +1417,15 @@ func sanitizeMTLS(m *config.A2AMTLSConfig) interface{} {
 		"key_file":  m.KeyFile,
 		"ca_file":   m.CAFile,
 	}
+}
+
+// sessionProbeLockHolderPID 会话锁持有者探测桥(session.ProbeLockHolderPID):
+// 他实例正持有 flock → 返回其 PID(webui /api/sessions locked_by_pid 字段源);
+// 无锁/探测失败 → 0。每会话一次 non-blocking 试锁即放,不产生副作用。
+func sessionProbeLockHolderPID(sessionID string) int {
+	storeDir, err := session.DefaultDir()
+	if err != nil {
+		return 0
+	}
+	return session.ProbeLockHolderPID(storeDir, sessionID)
 }

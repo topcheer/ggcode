@@ -42,8 +42,8 @@ export default function App() {
   // 移动端抽屉(P5-7):窄屏左栏抽屉化
   const [drawerOpen, setDrawerOpen] = useState(false);
   // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
-  // 会话列表(左栏,同桌面逻辑:本 workspace 全量,锁定态由 busy/current 标示)
-  const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string }>>([]);
+  // 会话列表(左栏,同桌面逻辑:本 workspace 全量,锁定态由 locked_by_pid 标示)
+  const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string; locked_by_pid?: number }>>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>("");
   const [switching, setSwitching] = useState(false);
 
@@ -102,7 +102,7 @@ export default function App() {
       .then((r) => (r.ok ? r.json() : { groups: [] }))
       .then((d) => {
         const groups = Array.isArray(d?.groups) ? d.groups : [];
-        const flat = groups.flatMap((g: { sessions: Array<{ id: string; title?: string; updated_at?: string }> }) => g.sessions || []);
+        const flat = groups.flatMap((g: { sessions: Array<{ id: string; title?: string; updated_at?: string; locked_by_pid?: number }> }) => g.sessions || []);
         setSessions(flat);
         const cur = groups.find((g: { current?: boolean }) => g.current);
         if (cur?.sessions?.length) setCurrentSessionId(cur.sessions[0].id);
@@ -205,22 +205,25 @@ export default function App() {
           <div className="text-ui-xs px-3 py-1.5 text-foreground-subtlest">会话</div>
           {sessions.map((s) => {
             const current = s.id === currentSessionId;
+            const locked = !!s.locked_by_pid;
             return (
               <button
                 key={s.id}
-                disabled={current || switching}
-                title={current ? "当前会话" : switching ? "切换中…" : "切换到此会话"}
+                disabled={current || switching || locked}
+                title={current ? "当前会话" : locked ? `被另一实例锁定 (PID ${s.locked_by_pid})` : switching ? "切换中…" : "切换到此会话"}
                 className={
                   "w-full truncate rounded-lg px-3 py-1.5 text-left text-ui-xs transition-colors " +
                   (current
                     ? "bg-selected font-medium text-foreground"
-                    : switching
-                      ? "cursor-wait text-foreground-subtlest"
-                      : "text-foreground-subtle hover:bg-hover hover:text-foreground")
+                    : locked
+                      ? "cursor-not-allowed text-foreground-subtlest opacity-60"
+                      : switching
+                        ? "cursor-wait text-foreground-subtlest"
+                        : "text-foreground-subtle hover:bg-hover hover:text-foreground")
                 }
                 onClick={() => switchSession(s.id)}
               >
-                {s.title || s.id.slice(0, 16)}
+                {locked ? "🔒 " : ""}{s.title || s.id.slice(0, 16)}
               </button>
             );
           })}
