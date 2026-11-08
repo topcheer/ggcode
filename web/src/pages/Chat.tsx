@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useChat } from "@/store/chat";
 import { ChatWS } from "@/ws/client";
 import MessageList from "@/chat/MessageList";
+import ChatControls from "@/chat/ChatControls";
 import Composer from "@/chat/Composer";
 import WelcomeScreen from "@/pages/WelcomeScreen";
 
@@ -45,6 +46,9 @@ export default function Chat() {
 
   return (
     <div className="flex h-full flex-col">
+      <div className="flex items-center justify-end gap-2 border-b border-border px-4 py-1.5">
+        <ChatControls />
+      </div>
       {lastError && (
         <div className="text-ui-sm border-b border-[var(--color-destructive-surface)] bg-[var(--color-destructive-surface)] px-6 py-2 text-center text-[var(--color-destructive-surface-fg)]">
           {lastError}
