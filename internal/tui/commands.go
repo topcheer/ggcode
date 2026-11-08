@@ -233,7 +233,7 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/lang", "/model", "/provider", "/impersonate", "/chat", "/nick",
 		"/qq", "/telegram", "/tg", "/pc", "/discord",
 		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa", "/im",
-		"/skills", "/skill", "/stats", "/sessions", "/search", "/mcp", "/usage",
+		"/skills", "/skill", "/stats", "/sessions", "/search", "/mcp", "/usage", "/webui",
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status", "/inspector",
 		"/stream", "/restart", "/help", "/?",
 		"/share", "/tunnel", "/unshare",
@@ -493,6 +493,23 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleUndoRunCommand()
 		case "/files":
 			return m.handleFilesCommand()
+		case "/webui":
+			if m.webuiURL == "" {
+				m.chatWriteSystem(nextSystemID(), "ⓘ WebUI server is not running in this session (e.g. --no-webui or headless mode).")
+				return nil
+			}
+			m.chatWriteSystem(nextSystemID(), "⬢ WebUI: "+m.webuiURL)
+			if m.urlOpener != nil {
+				// 仅唤起浏览器打开地址，不暴露 token 片段到系统日志
+				base := m.webuiURL
+				if idx := strings.Index(base, "#"); idx >= 0 {
+					base = base[:idx]
+				}
+				if err := m.urlOpener(base); err != nil {
+					m.chatWriteSystem(nextSystemID(), "⚠ Could not open browser: "+err.Error()+" — open the URL above manually.")
+				}
+			}
+			return nil
 		case "/checkpoints":
 			return m.handleCheckpointsCommand()
 		case "/compact":

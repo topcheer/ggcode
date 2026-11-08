@@ -301,7 +301,7 @@ var SlashCommands = []string{
 	"/inspector", "/image", "/mode", "/allow", "/export", "/bug", "/config", "/reflect", "/rules",
 	"/chat", "/nick", "/init", "/exit", "/quit",
 	"/compact", "/todo", "/status", "/stats", "/knight", "/tmux", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
-	"/diff", "/hooks", "/cost", "/usage", "/commit", "/review", "/copy", "/context", "/debug",
+	"/diff", "/hooks", "/cost", "/usage", "/commit", "/review", "/copy", "/context", "/debug", "/webui",
 	"/retry",
 	"/edit",
 	"/regenerate", "/regen", "/branch", "/fork", "/branches", "/branch-switch", "/rewind",
@@ -319,6 +319,7 @@ var SlashCommands = []string{
 
 var SlashCommandDescriptions = map[string]string{
 	"/help":            "Show help message",
+	"/webui":           "Show WebUI URL and open it in the browser",
 	"/retry":           "Retry last submission after error",
 	"/edit":            "Edit and resend last submission",
 	"/?":               "Show help message",
