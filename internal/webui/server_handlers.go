@@ -2,6 +2,7 @@ package webui
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -31,21 +32,119 @@ func sanitizeEndpoints(endpoints map[string]config.EndpointConfig) map[string]in
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.RLock()
+		defer s.mu.RUnlock()
 
-	result := sanitizeConfigForAPI(s.cfg)
-	result["_scope"] = map[string]interface{}{
-		"current":         s.saveScope,
-		"hasInstance":     s.cfg.HasInstanceConfigAttached(),
-		"hasInstanceFile": s.cfg.HasInstanceConfigFile(),
-		"instanceDir":     s.cfg.InstanceDirPath(),
+		result := sanitizeConfigForAPI(s.cfg)
+		result["_scope"] = map[string]interface{}{
+			"current":         s.saveScope,
+			"hasInstance":     s.cfg.HasInstanceConfigAttached(),
+			"hasInstanceFile": s.cfg.HasInstanceConfigFile(),
+			"instanceDir":     s.cfg.InstanceDirPath(),
+		}
+		writeJSON(w, result)
+	case http.MethodPut:
+		// #5298: 设置页「配置/常规」保存(此前非 GET 恒 405,按钮自 #5277 起 DOA)。
+		// GET 返回的是 sanitizeConfigForAPI 脱敏视图(api_key→***、env/headers→has_*),
+		// 原样回写会污染配置;vendors/mcp_servers/im/a2a 属字段级页管辖。
+		// 故仅接受顶层可写标量白名单合并,其余键忽略并在响应中回显。
+		var body map[string]interface{}
+		if err := readJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		applied := make([]string, 0, len(body))
+		ignored := make([]string, 0, len(body))
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		// 活动选择三元组:任一出现即整体校验(复用 SetActiveSelection 相干性语义)
+		vendor, endpoint, model := s.cfg.Vendor, s.cfg.Endpoint, s.cfg.Model
+		hasSelection := false
+		for _, key := range []string{"vendor", "endpoint", "model"} {
+			if _, ok := body[key]; ok {
+				hasSelection = true
+				v, ok := body[key].(string)
+				if !ok {
+					writeError(w, http.StatusBadRequest, fmt.Sprintf("field %q must be a string", key))
+					return
+				}
+				switch key {
+				case "vendor":
+					vendor = v
+				case "endpoint":
+					endpoint = v
+				case "model":
+					model = v
+				}
+			}
+		}
+		if hasSelection {
+			if err := s.cfg.SetActiveSelection(vendor, endpoint, model); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			applied = append(applied, "vendor", "endpoint", "model")
+		}
+		for key, val := range body {
+			switch key {
+			case "vendor", "endpoint", "model":
+				// 三元组已整体处理,此处跳过
+			case "language", "default_mode", "extra_prompt":
+				str, ok := val.(string)
+				if !ok {
+					writeError(w, http.StatusBadRequest, fmt.Sprintf("field %q must be a string", key))
+					return
+				}
+				switch key {
+				case "language":
+					s.cfg.Language = str
+				case "default_mode":
+					s.cfg.DefaultMode = str
+				case "extra_prompt":
+					s.cfg.ExtraPrompt = str
+				}
+				applied = append(applied, key)
+			case "max_iterations":
+				num, ok := val.(float64)
+				if !ok || num < 0 {
+					writeError(w, http.StatusBadRequest, fmt.Sprintf("field %q must be a non-negative number", key))
+					return
+				}
+				s.cfg.MaxIterations = int(num)
+				applied = append(applied, key)
+			case "allowed_dirs":
+				raw, ok := val.([]interface{})
+				if !ok {
+					writeError(w, http.StatusBadRequest, fmt.Sprintf("field %q must be an array of strings", key))
+					return
+				}
+				dirs := make([]string, 0, len(raw))
+				for _, d := range raw {
+					str, ok := d.(string)
+					if !ok {
+						writeError(w, http.StatusBadRequest, fmt.Sprintf("field %q must be an array of strings", key))
+						return
+					}
+					dirs = append(dirs, str)
+				}
+				s.cfg.AllowedDirs = dirs
+				applied = append(applied, key)
+			default:
+				// 脱敏键(api_key 等)、派生键(_scope)与对象域(vendors/mcp_servers/im/a2a)不可经此写入
+				ignored = append(ignored, key)
+			}
+		}
+		if err := s.saveConfig(); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]interface{}{"status": "ok", "applied": applied, "ignored": ignored})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
-	writeJSON(w, result)
 }
 
 func (s *Server) handleConfigScope(w http.ResponseWriter, r *http.Request) {
