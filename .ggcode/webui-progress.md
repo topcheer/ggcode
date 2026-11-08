@@ -25,3 +25,4 @@
 - [11-08 22:27 模块迁移+两修复收口] etunnel改名github.com/topcheer/etunnel→go.mod/imports/go.work同步(pre-push vet曾拦截);mode切不回修复(单例store+错误弹显);📎/🎤上传落地;双包绿已推+二进制更新;阻塞无。
 - [11-08 22:40 巡检59·最小形态] 模块迁移+mode修复+上传收口(6e57c1e88+767fab430已推,双包绿);wt构建绿;P0-P3维持P1+增量交付态;阻塞无。
 - [11-08 22:52 修复] controls快照旧值根因=REPL.model启动拷贝(值语义,mode/agent字段不回写)→改读指针共享真值源(policy.CurrentMode+r.agent);钉测TestChatControlsSnapshotReadsLiveSources;tui全量绿已推+二进制更新;阻塞无。
+- [11-08 23:00 巡检60·最小形态] 快照真值源修复收口(590961132+22dee8ba0已推,钉测+tui全量绿);wt构建绿;P0-P3维持P1+增量交付态;阻塞无。
