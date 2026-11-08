@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // 本文件锁定四新增面的后端契约(P3 e2e 回归扩充):
@@ -22,7 +24,7 @@ import (
 
 func newE2EServer(t *testing.T) (*Server, *httptest.Server) {
 	t.Helper()
-	s := NewServer(nil)
+	s := NewServer(config.DefaultConfig()) // 与既有 e2e 一致:WS 路径依赖非 nil cfg
 	srv := httptest.NewServer(s.mux)
 	t.Cleanup(srv.Close)
 	return s, srv
@@ -183,5 +185,64 @@ func TestE2EChatQueueSnapshotAPI(t *testing.T) {
 	}
 	if body.Count != 1 || len(body.Items) != 1 || body.Items[0] != "only item" {
 		t.Fatalf("queue snapshot = %+v, want 1 item", body)
+	}
+}
+
+// ===== 报障修链路(审计轮四修面)的可执行回归 =====
+// 面界定:报障四修无独立 HTTP 端点;可执行回归锁定三条 WS 层契约——
+// 非法 payload 非静默回错、合法提交触达派发面、反馈经 WS system 通道可达前端。
+
+// 用例5:非法 payload(坏 JSON)→ WS 层非静默回 error 消息(4xx 的 WS 等价)
+func TestE2EWSInvalidPayloadFeedback(t *testing.T) {
+	s, srv := newE2EServer(t)
+	s.SetChatBridge(&mockChatBridge{})
+	ws := wsDial(t, srv, s.Token())
+	// 先发上行再消费快照:helper 会阻塞读快照后下一条,发送必须在 skip 之前
+	if err := ws.WriteMessage(websocket.TextMessage, []byte(`{broken json`)); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]interface{}{}
+	skipQueueSnapshot(t, ws, &got) // helper 返回时 got 已是首条非 queue 消息(error)
+	if got["type"] != "error" || !strings.Contains(got["error"].(string), "invalid message format") {
+		t.Fatalf("invalid payload should yield error feedback, got %v", got)
+	}
+}
+
+// 用例6:合法 user_message → user_ack 且派发面(bridge.lastContent)收到完整文本
+func TestE2EWSValidSubmitDispatchesBridge(t *testing.T) {
+	s, srv := newE2EServer(t)
+	bridge := &mockChatBridge{}
+	s.SetChatBridge(bridge)
+	ws := wsDial(t, srv, s.Token())
+	// 先发上行再消费快照(发送必须在 skip 之前,否则 helper 阻塞等快照后下一条)
+	if err := ws.WriteJSON(map[string]string{"type": "user_message", "text": "故障上报内容"}); err != nil {
+		t.Fatal(err)
+	}
+	ack := map[string]interface{}{}
+	skipQueueSnapshot(t, ws, &ack) // helper 返回时 ack 已是首条非 queue 消息(user_ack)
+	if ack["type"] != "user_ack" || ack["text"] != "故障上报内容" {
+		t.Fatalf("want user_ack echo, got %v", ack)
+	}
+	if len(bridge.lastContent) != 1 || bridge.lastContent[0].Text != "故障上报内容" {
+		t.Fatalf("dispatch path not reached: lastContent = %v", bridge.lastContent)
+	}
+}
+
+// 用例7:反馈经 WS system 通道可达前端(三能力失败反馈的通道契约:
+// TUI 命令失败 chatWriteSystem → 系统消息回流;e2e 以 bridge 广播同型事件锁定通道)
+func TestE2EWSBridgeSystemFeedbackReachesClient(t *testing.T) {
+	s, srv := newE2EServer(t)
+	bridge := &mockChatBridge{}
+	s.SetChatBridge(bridge)
+	ws := wsDial(t, srv, s.Token())
+	// 广播先于 helper 启动(helper 阻塞读快照后下一条,后启动 goroutine 会死锁)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "session.switch_blocked_running"})
+	}()
+	got := map[string]interface{}{}
+	skipQueueSnapshot(t, ws, &got) // helper 返回时 got 已是首条非 queue 消息(system)
+	if got["type"] != "system" || got["text"] != "session.switch_blocked_running" {
+		t.Fatalf("system feedback should reach the client, got %v", got)
 	}
 }

@@ -1269,6 +1269,7 @@ func TestE2EIMStatusCallback(t *testing.T) {
 // 使 ack 断言与流事件计数不受新事件影响
 func skipQueueSnapshot(t *testing.T, ws *websocket.Conn, ack *map[string]interface{}) {
 	t.Helper()
+	ws.SetReadDeadline(time.Now().Add(2 * time.Second)) // 防挂:快照后无后续消息时限时失败
 	for {
 		if err := ws.ReadJSON(ack); err != nil {
 			t.Fatalf("read: %v", err)
