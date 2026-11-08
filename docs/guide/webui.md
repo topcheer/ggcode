@@ -20,7 +20,9 @@ go build -tags goolm ./cmd/ggcode   # 重新编译使新 dist 生效
 - **聊天为核心**：首屏 WelcomeScreen + 大输入框；流式 markdown 渲染、思考过程折叠块、工具调用状态卡片（spinner→绿/红+耗时；diff 类结果逐行红绿着色）、乐观 UI（离线消息队列补发）；截图/图片直接粘贴进输入框（缩略图预览，随消息发送）
 - **Composer**：`⌘/Ctrl+Enter` 发送、`Shift+Enter` 换行、输入 `@` 唤起文件（实时搜索 workspace 真实路径）/技能/Agent 彩色引用弹层、活跃发光态
 - **子代理委派**：spawn_agent 等委派在聊天流中以单行 `Spawn <目标>` 条目呈现；右栏自动显示**子代理实时流监视器**（推理/文本增量，完结转状态色，空闲自动隐藏）——TUI/WebUI/桌面共用同一 `StreamEventSubagent*` 事件契约
-- **命令面板**：`⌘/Ctrl+K`（切视图/切主题/新建会话/切换最近会话）；`⌘/Ctrl+N` 新会话；TUI 内 `/webui` 打印地址并唤起浏览器（服务器未运行时友好提示）
+- **命令面板**：`⌘/Ctrl+K`（切视图/切主题/新建会话/切换最近会话）；`⌘/Ctrl+N` 新会话；TUI 内 `/webui` 打印地址并唤起浏览器（含 `#token=`，服务器未运行时友好提示）
+- **聊天控制**：顶部三下拉——切换模型（列表来自配置）、选择推理力度（复用 `/effort` 循环语义）、切换权限模式（supervised/bypass）；全部经 `POST /api/chat/commands` 走 TUI slash 命令全链（校验/busy 语义/反馈消息零复制），变更反馈以系统消息回流聊天流
+- **会话切换**：左侧栏列示本 workspace 全量会话；当前会话高亮锁定，其余点击即切——实际切换由后端 TUI resume 全链执行（`POST /api/sessions/switch`），agent 运行中（busy）会话返回 409 锁定不可切
 - **设置页**：配置（JSON 编辑）、供应商、MCP、IM、A2A、会话、Knight、定时任务（只读）、检查点（只读时间线）九域
 - **双主题**：暗色/亮色/跟随系统（主题选择先于首帧渲染，无闪白）；侧栏字号循环按钮（12/13/14/16px，localStorage 持久化）
 - **只读 API**：`GET /api/workspace/files?q=`（文件搜索）、`GET /api/cron/jobs`（当前 workspace 定时任务）、`GET /api/checkpoints`（最近编辑检查点）
