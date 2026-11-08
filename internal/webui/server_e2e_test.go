@@ -1148,6 +1148,67 @@ func TestE2EChatWSCheckOrigin(t *testing.T) {
 	}
 }
 
+func TestE2EAssetsStaticServing(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	// 真实 Vite 产物(hash 名来自 dist/index.html 引用,PR #5279 已入库)
+	jsName, cssName := "", ""
+	if entries, err := os.ReadDir("dist/assets"); err == nil {
+		for _, e := range entries {
+			switch {
+			case strings.HasSuffix(e.Name(), ".js"):
+				jsName = e.Name()
+			case strings.HasSuffix(e.Name(), ".css"):
+				cssName = e.Name()
+			}
+		}
+	}
+	if jsName == "" || cssName == "" {
+		t.Skip("dist/assets not populated in this checkout")
+	}
+
+	// JS:200 + JavaScript MIME(Strict MIME 检查关键)
+	resp, err := authGet(srv.URL+"/assets/"+jsName, s.Token())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 for %s, got %d", jsName, resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Errorf("expected javascript MIME for module script, got %q (serveSPA fallback would return text/html)", ct)
+	}
+
+	// CSS:200 + css MIME
+	resp2, err := authGet(srv.URL+"/assets/"+cssName, s.Token())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != 200 {
+		t.Fatalf("expected 200 for %s, got %d", cssName, resp2.StatusCode)
+	}
+	if ct := resp2.Header.Get("Content-Type"); !strings.Contains(ct, "text/css") {
+		t.Errorf("expected text/css, got %q", ct2(ct))
+	}
+
+	// 不存在的资产:404(不得 fallback 成 index.html)
+	resp3, err := authGet(srv.URL+"/assets/definitely-missing.js", s.Token())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp3.Body.Close()
+	if resp3.StatusCode != 404 {
+		t.Errorf("expected 404 for missing asset, got %d", resp3.StatusCode)
+	}
+}
+
+func ct2(v string) string { return v }
+
 func TestE2EIMStatusCallback(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
