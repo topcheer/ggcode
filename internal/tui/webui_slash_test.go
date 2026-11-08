@@ -38,3 +38,18 @@ func TestWebuiURLStoredOnReady(t *testing.T) {
 		t.Fatalf("webuiURL = %q", nm.webuiURL)
 	}
 }
+
+// 钉测(WS token 修复回归):/webui 唤起必须带完整 URL 含 #token——
+// 新开标签页没有 sessionStorage,剥掉 hash 会导致 token 拿不到→WS 握手 401 循环
+func TestWebuiSlashOpensFullURLWithToken(t *testing.T) {
+	var opened string
+	m := Model{
+		sessionMu: &sync.Mutex{},
+		webuiURL:  "http://127.0.0.1:9999#token=tok",
+		urlOpener: func(u string) error { opened = u; return nil },
+	}
+	m.handleCommandWithDisplay("/webui", true)
+	if opened != "http://127.0.0.1:9999#token=tok" {
+		t.Fatalf("urlOpener got %q, want full URL including #token fragment", opened)
+	}
+}
