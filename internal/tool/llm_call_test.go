@@ -66,6 +66,106 @@ func lastUserMsg(f *fakeLLMProvider) provider.Message {
 	return f.gotMsgs[len(f.gotMsgs)-1]
 }
 
+// effortFake returns a DISTINCT clone (unlike clonableFake) so isolation
+// semantics - the shared provider is never mutated - can be asserted.
+type effortFake struct {
+	*fakeLLMProvider
+	effort string
+	clones []*effortFake
+}
+
+func (e *effortFake) CloneWithModel(model string) provider.Provider {
+	c := &effortFake{fakeLLMProvider: &fakeLLMProvider{name: model, replies: []string{"ok"}}}
+	e.clones = append(e.clones, c)
+	return c
+}
+func (e *effortFake) ModelName() string                { return "base-model" }
+func (e *effortFake) SetReasoningEffort(effort string) { e.effort = effort }
+func (e *effortFake) ReasoningEffort() string          { return e.effort }
+
+func TestLLMCall_ReasoningEffortInvalidRejected(t *testing.T) {
+	f := &fakeLLMProvider{name: "f", replies: []string{"ok"}}
+	tool := LLMCallTool{Provider: f}
+	res, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"prompt":"hi","reasoning_effort":"turbo"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, "low|medium|high") {
+		t.Errorf("invalid reasoning_effort should be rejected, got: %+v", res)
+	}
+	if f.chats != 0 {
+		t.Errorf("no provider call expected on validation failure, got %d", f.chats)
+	}
+}
+
+func TestLLMCall_ReasoningEffortIsolatedSameModelClone(t *testing.T) {
+	base := &effortFake{fakeLLMProvider: &fakeLLMProvider{name: "base", replies: []string{"ok"}}}
+	tool := LLMCallTool{Provider: base}
+	res, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"prompt":"hi","reasoning_effort":"low"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", res.Content)
+	}
+	if base.effort != "" {
+		t.Errorf("shared session provider was mutated: base.effort=%q", base.effort)
+	}
+	if len(base.clones) != 1 {
+		t.Fatalf("expected exactly 1 isolation clone, got %d", len(base.clones))
+	}
+	if base.clones[0].effort != "low" {
+		t.Errorf("clone effort = %q, want low", base.clones[0].effort)
+	}
+	if base.clones[0].chats != 1 {
+		t.Errorf("expected 1 chat on the clone, got %d", base.clones[0].chats)
+	}
+	if base.chats != 0 {
+		t.Errorf("session provider must not serve the call, got %d chats", base.chats)
+	}
+}
+
+func TestLLMCall_ReasoningEffortWithExplicitModel(t *testing.T) {
+	base := &effortFake{fakeLLMProvider: &fakeLLMProvider{name: "base", replies: []string{"ok"}}}
+	tool := LLMCallTool{Provider: base}
+	res, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"prompt":"hi","model":"glm-5.3-flash","reasoning_effort":"high"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", res.Content)
+	}
+	if base.effort != "" {
+		t.Errorf("session provider mutated even with explicit model: %q", base.effort)
+	}
+	if len(base.clones) == 0 {
+		t.Fatal("expected a model clone, got none")
+	}
+	last := base.clones[len(base.clones)-1]
+	if last.effort != "high" || last.name != "glm-5.3-flash" {
+		t.Errorf("serving clone wrong: name=%q effort=%q, want glm-5.3-flash/high", last.name, last.effort)
+	}
+}
+
+func TestLLMCall_ReasoningEffortNonClonableGuarded(t *testing.T) {
+	f := &fakeLLMProvider{name: "plain", replies: []string{"ok"}} // no CloneWithModel
+	tool := LLMCallTool{Provider: f}
+	res, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"prompt":"hi","reasoning_effort":"low"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, "isolated provider") {
+		t.Errorf("non-clonable provider + effort must fail closed, got: %+v", res)
+	}
+	if f.chats != 0 {
+		t.Errorf("no call expected on guard failure, got %d", f.chats)
+	}
+}
+
 func TestLLMCall_PlainPromptPassthrough(t *testing.T) {
 	f := &fakeLLMProvider{name: "fake", replies: []string{"Bonjour"}}
 	res, err := LLMCallTool{Provider: f}.Execute(context.Background(),
