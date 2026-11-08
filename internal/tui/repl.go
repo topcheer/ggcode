@@ -588,6 +588,11 @@ func (r *REPL) SetWebUIReadyAddr(addr, token string) {
 	r.webuiToken = token
 }
 
+// SetWebUITunnelCtl 注入 /webui tunnel 控制器(webuiSrv 侧 TunnelCtl 单例)
+func (r *REPL) SetWebUITunnelCtl(ctl *webui.TunnelCtl) {
+	r.model.webuiTunnel = ctl
+}
+
 func (r *REPL) SetInitialSessionID(sessionID, mode string) {
 	r.currentSessionMu.Lock()
 	r.initialSessionID = sessionID

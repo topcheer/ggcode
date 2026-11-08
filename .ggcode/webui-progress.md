@@ -10,3 +10,4 @@
 - [11-08 19:40 巡检47] 态不变（3d3a93373 等 PR 令）；web build 零错误；收口态；阻塞无。
 - [11-08 20:00 巡检48] 态不变（3d3a93373 等 PR 令）；web build 零错误；收口态；阻塞无。
 - [11-08 20:21 巡检49+锁定态交付] 会话锁定态全链（用户报障）：/api/sessions 新增 locked_by_pid（session.ProbeLockHolderPID non-blocking flock 试锁即放，unix 实现+windows 桩）+左栏锁图标/禁点/PID tooltip；session/webui 双包全绿+web build ✓534ms；二进制已更新；阻塞无。
+- [11-08 20:45 /webui tunnel 交付] etunnel SDK 接入（go.mod replace ../et）：webui.TunnelCtl 单例+ 打印公网 https URL（含 #token 鉴权）+ 关闭；tui/webui 双包全绿。注：wt 内构建需临时改 replace 绝对路径；官方 SDK 已发布 pub.dev（文档注记待补）。

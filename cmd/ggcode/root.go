@@ -1298,6 +1298,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		defer webuiSrv.Close()
 
 		repl.SetWebUIReadyAddr(actualAddr, webuiSrv.Token())
+		// /webui tunnel 控制器:etunnel 隧道映射本 WebUI 到公网(../et SDK)
+		tunnelCtl := &webui.TunnelCtl{}
+		repl.SetWebUITunnelCtl(tunnelCtl)
 
 		repl.SetWorkingDir(workingDir)
 		webuiSrv.SetStatusFn(repl.RuntimeStatus)

@@ -496,6 +496,9 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/files":
 			return m.handleFilesCommand()
 		case "/webui":
+			if len(parts) > 1 {
+				return m.handleWebuiTunnelCommand(parts)
+			}
 			if m.webuiURL == "" {
 				m.chatWriteSystem(nextSystemID(), "ⓘ WebUI server is not running in this session (e.g. --no-webui or headless mode).")
 				return nil
