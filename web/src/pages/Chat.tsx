@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useChat } from "@/store/chat";
 import { ChatWS } from "@/ws/client";
 import MessageList from "@/chat/MessageList";
-import ChatControls from "@/chat/ChatControls";
+import ChatControls, { ModeToggle } from "@/chat/ChatControls";
 import Composer from "@/chat/Composer";
 import WelcomeScreen from "@/pages/WelcomeScreen";
 
@@ -72,6 +72,7 @@ export default function Chat() {
             </div>
           )}
           <Composer onSend={send} />
+          <ModeToggle />
         </>
       ) : (
         <>
