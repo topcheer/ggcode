@@ -16,6 +16,9 @@ import (
 // 存储复刻 internal/checkpoint 的 journal 布局:
 // os.UserConfigDir()/ggcode/checkpoints/<hex(sha256(workspace))[:2]>/<hex16>.jsonl(每行一个 Checkpoint 事件)。
 // 只读浏览(P6-9 边界):回滚仍走 TUI 面板。
+// userConfigDir 可在测试中替换(os.UserConfigDir 在 darwin 忽略 XDG,注入难)
+var userConfigDir = os.UserConfigDir
+
 func (s *Server) handleCheckpoints(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -25,7 +28,7 @@ func (s *Server) handleCheckpoints(w http.ResponseWriter, r *http.Request) {
 	ws := s.workspace
 	s.mu.RUnlock()
 
-	base, err := os.UserConfigDir()
+	base, err := userConfigDir()
 	if err != nil || ws == "" {
 		writeJSON(w, []interface{}{})
 		return
