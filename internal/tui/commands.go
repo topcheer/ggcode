@@ -473,6 +473,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleSkillCommand(parts)
 		case "/pin":
 			return m.handlePinCommand(parts)
+		case "/effort":
+			return m.handleEffortCommand(parts)
 		case "/mode":
 			return m.handleModeCommand(parts)
 		case "/init":

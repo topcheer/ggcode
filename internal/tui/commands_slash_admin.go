@@ -474,6 +474,42 @@ func (m *Model) cycleReasoningEffort() (string, bool) {
 	return next, true
 }
 
+// handleEffortCommand /effort 无参=cycle(与 ctrl+g 同语义);带参=minimal|low|medium|high 直设。
+// webui 聊天面板 effort 下拉走带参直设,替代前端循环模拟。
+func (m *Model) handleEffortCommand(parts []string) tea.Cmd {
+	if m.agent == nil {
+		m.chatWriteSystem(nextSystemID(), m.t("reasoning.effort.unsupported"))
+		return nil
+	}
+	if len(parts) < 2 {
+		if effort, ok := m.cycleReasoningEffort(); ok {
+			label := displayReasoningEffort(effort)
+			m.statusActivity = m.t("reasoning.effort.status", label)
+			m.chatWriteSystem(nextSystemID(), m.t("reasoning.effort.set", label))
+		} else {
+			m.statusActivity = m.t("reasoning.effort.unsupported.status")
+			m.chatWriteSystem(nextSystemID(), m.t("reasoning.effort.unsupported"))
+		}
+		return nil
+	}
+	want := strings.ToLower(strings.TrimSpace(parts[1]))
+	for _, effort := range reasoningEffortCycle {
+		if want == effort {
+			if m.agent.SetReasoningEffort(effort) {
+				label := displayReasoningEffort(effort)
+				m.statusActivity = m.t("reasoning.effort.status", label)
+				m.chatWriteSystem(nextSystemID(), m.t("reasoning.effort.set", label))
+			} else {
+				m.statusActivity = m.t("reasoning.effort.unsupported.status")
+				m.chatWriteSystem(nextSystemID(), m.t("reasoning.effort.unsupported"))
+			}
+			return nil
+		}
+	}
+	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Invalid effort %q. Valid: %s", parts[1], strings.Join(reasoningEffortCycle, " | ")))
+	return nil
+}
+
 func (m *Model) handleStyleCommand(parts []string) tea.Cmd {
 	var current string
 	if m.config != nil {

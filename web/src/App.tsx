@@ -134,7 +134,12 @@ export default function App() {
         body: JSON.stringify({ id }),
       })
         .then((r) => {
-          if (r.ok) setCurrentSessionId(id);
+          if (r.ok) {
+            setCurrentSessionId(id);
+            // 后端切换经 program msg 队列异步落地:800ms+2.5s 双保险重拉聊天历史
+            setTimeout(() => useChat.getState().loadHistory(), 800);
+            setTimeout(() => useChat.getState().loadHistory(), 2500);
+          }
           loadSessions();
         })
         .catch(() => {})

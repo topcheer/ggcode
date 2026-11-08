@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 type Controls = { model?: string; mode?: string; reasoning_effort?: string };
 
 const MODES = ["supervised", "bypass"];
-const EFFORTS = ["minimal", "low", "medium", "high"];
+const EFFORTS = ["low", "medium", "high"];
 
 /** ChatControls(队列2):聊天头部三能力——模型/effort/mode 下拉;
  *  提交走 /api/chat/commands(TUI slash 全链),反馈系统消息经 WS 回流 */
@@ -18,15 +18,15 @@ export default function ChatControls() {
       .then((r) => (r.ok ? r.json() : {}))
       .then((d) => setCtrl(d))
       .catch(() => {});
-    // 模型可选列表:config 域 vendors→endpoints→models 扁平
+      // 模型可选列表:config vendors(map)→endpoints(map)→models 扁平
     fetch("/api/config")
       .then((r) => (r.ok ? r.json() : null))
-      .then((cfg) => {
+      .then((cfg: { vendors?: Record<string, { endpoints?: Record<string, { models?: string[] }> }> } | null) => {
         const list: string[] = [];
-        for (const v of cfg?.vendors ?? []) {
-          for (const e of v?.endpoints ?? []) for (const m of e?.models ?? []) list.push(m);
+        for (const v of Object.values(cfg?.vendors ?? {})) {
+          for (const e of Object.values(v?.endpoints ?? {})) for (const m of e?.models ?? []) list.push(m);
         }
-        setModels(list);
+        setModels([...new Set(list)]);
       })
       .catch(() => {});
   };
@@ -74,22 +74,7 @@ export default function ChatControls() {
         value={ctrl.reasoning_effort || ""}
         disabled={busy}
         title="推理力度"
-        onChange={(e) => {
-          // effort 走 TUI cycle 语义:选定目标值提交 /effort 不存在直设命令——
-          // 循环至目标(medium 起步的 cycle 步数)由命令层完成,这里提交相对切换
-          const order = EFFORTS;
-          const cur = order.indexOf(ctrl.reasoning_effort || "medium");
-          const next = order.indexOf(e.target.value);
-          const steps = (next - cur + order.length) % order.length || 1;
-          let remaining = steps;
-          const tick = () => {
-            if (remaining-- > 0) {
-              submit("/effort");
-              setTimeout(tick, 400);
-            }
-          };
-          tick();
-        }}
+        onChange={(e) => submit(`/effort ${e.target.value}`)}
       >
         <option value="" disabled>
           {ctrl.reasoning_effort || "effort"}
