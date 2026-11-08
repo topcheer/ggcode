@@ -5,25 +5,34 @@ import MessageList from "@/chat/MessageList";
 import Composer from "@/chat/Composer";
 import WelcomeScreen from "@/pages/WelcomeScreen";
 
-/** Chat 页:WS 接线+乐观 UI+错误横幅;ws=/api/chat/ws 由 vite proxy/embed 同源提供 */
+/** Chat 页:TUI session 镜像(WS 增量+/api/chat/history 初始全量);ws=/api/chat/ws 同源提供 */
 export default function Chat() {
   const messages = useChat((s) => s.messages);
   const conn = useChat((s) => s.conn);
   const lastError = useChat((s) => s.lastError);
   const applyMsg = useChat((s) => s.applyMsg);
   const setConn = useChat((s) => s.setConn);
+  const loadHistory = useChat((s) => s.loadHistory);
   const pushOptimistic = useChat((s) => s.pushOptimistic);
   const wsRef = useRef<ChatWS | null>(null);
+  const historyLoaded = useRef(false);
 
   useEffect(() => {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new ChatWS(`${proto}://${location.host}/api/chat/ws`, {
       onMsg: applyMsg,
-      onState: setConn,
+      onState: (s) => {
+        setConn(s);
+        // 连接建立后拉一次当前 TUI session 全量(镜像语义);重连时仅在首次未成时补拉
+        if (s === "open" && !historyLoaded.current) {
+          historyLoaded.current = true;
+          void loadHistory();
+        }
+      },
     });
     wsRef.current = ws;
     return () => ws.close();
-    // applyMsg/setConn 来自 zustand 稳定引用
+    // applyMsg/setConn/loadHistory 来自 zustand 稳定引用
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

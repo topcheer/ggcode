@@ -32,6 +32,7 @@ type ChatStore = {
   conn: ConnState;
   busy: boolean; // agent 处理中(§ WS busy error)
   lastError: string | null;
+  loadHistory: () => Promise<void>;
   applyMsg: (m: import("@/ws/client").StreamMsg) => void;
   pushOptimistic: (text: string) => void;
   setConn: (s: ConnState) => void;
@@ -56,6 +57,57 @@ export const useChat = create<ChatStore>((set) => ({
   lastError: null,
 
   setConn: (conn) => set({ conn }),
+
+  // TUI session 镜像(原实现语义,已核 server_websocket.go:42-47):
+  // /api/chat/history 返回当前 chatBridge/agent 会话全量,前端镜像它而非独立会话。
+  loadHistory: async () => {
+    try {
+      const res = await fetch("/api/chat/history");
+      if (!res.ok) return;
+      const data = (await res.json()) as Array<{
+        role: Role;
+        content: Array<{
+          type: string;
+          text?: string;
+          tool_name?: string;
+          tool_id?: string;
+          input?: unknown;
+          output?: string;
+          is_error?: boolean;
+        }>;
+      }>;
+      const msgs: UIMessage[] = [];
+      for (const m of data) {
+        if (m.role === "user") {
+          const text = m.content.map((b) => b.text ?? "").join("");
+          msgs.push({ id: nid(), role: "user", text, reasoning: "", tools: [] });
+          continue;
+        }
+        // assistant:文本/思考聚为一个气泡,tool_use+紧随 tool_result 聚为卡片
+        const a: UIMessage = { id: nid(), role: "assistant", text: "", reasoning: "", tools: [] };
+        for (const b of m.content) {
+          if (b.type === "text") a.text += (a.text ? "\n\n" : "") + (b.text ?? "");
+          else if (b.type === "tool_use")
+            a.tools.push({
+              id: b.tool_id ?? nid(), name: b.tool_name ?? "",
+              argsText: typeof b.input === "string" ? b.input : JSON.stringify(b.input ?? {}),
+              done: true, startedAt: 0,
+            });
+          else if (b.type === "tool_result" && a.tools.length > 0) {
+            const t = a.tools[a.tools.length - 1];
+            if (!t.result) {
+              t.result = b.output ?? "";
+              t.isError = b.is_error ?? false;
+            }
+          }
+        }
+        if (a.text || a.reasoning || a.tools.length) msgs.push(a);
+      }
+      set({ messages: msgs });
+    } catch {
+      // 镜像拉取失败静默(WS 增量仍可用)
+    }
+  },
 
   // 乐观 UI(§4.4):用户消息立即上屏
   pushOptimistic: (text) =>
