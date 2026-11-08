@@ -500,12 +500,10 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			}
 			m.chatWriteSystem(nextSystemID(), "⬢ WebUI: "+m.webuiURL)
 			if m.urlOpener != nil {
-				// 仅唤起浏览器打开地址，不暴露 token 片段到系统日志
-				base := m.webuiURL
-				if idx := strings.Index(base, "#"); idx >= 0 {
-					base = base[:idx]
-				}
-				if err := m.urlOpener(base); err != nil {
+				// 打开完整 URL(含 #token= 片段):新开标签页没有 sessionStorage,
+				// 缺 hash 会拿不到 token → WS 握手 401 循环。URL fragment 只在
+				// 浏览器本地消费,不会出现在 HTTP 请求/进程命令行里,无泄露面。
+				if err := m.urlOpener(m.webuiURL); err != nil {
 					m.chatWriteSystem(nextSystemID(), "⚠ Could not open browser: "+err.Error()+" — open the URL above manually.")
 				}
 			}

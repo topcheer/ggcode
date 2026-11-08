@@ -38,6 +38,7 @@ export default function App() {
   // §6.1 二层:活跃子代理流(未完结的在前)
   const streams = useChat((s) => s.subagentStreams);
   const activeStreams = Object.entries(streams).filter(([, s]) => !s.done);
+  const todos = useChat((s) => s.todos);
   // 移动端抽屉(P5-7):窄屏左栏抽屉化
   const [drawerOpen, setDrawerOpen] = useState(false);
   // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
@@ -180,6 +181,31 @@ export default function App() {
         {view === "chat" ? <Chat /> : <Settings onBack={() => setView("chat")} />}
       </main>
       <aside className="hidden w-[380px] shrink-0 flex-col border-l border-border bg-sidebar lg:block" style={paneSpawn || activeStreams.length > 0 ? { width: "380px" } : undefined}>
+        {/* agent loop 运行时 todo 实时面板(todo_write tool_result 推送聚合;零事件自动隐藏) */}
+        {todos.length > 0 && (
+          <div className="max-h-[40%] overflow-auto border-b border-border">
+            <div className="px-4 py-2 text-ui-xs text-foreground-subtlest">
+              任务清单 {todos.filter((t) => t.status === "done").length}/{todos.length}
+            </div>
+            {todos.map((t) => (
+              <div key={t.id} className="flex items-start gap-2 border-t border-border px-4 py-1.5">
+                <span
+                  className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full"
+                  style={{
+                    background:
+                      t.status === "done" ? "var(--color-success)" : t.status === "in_progress" ? "var(--color-trajectory-tool-call)" : "var(--color-foreground-subtlest)",
+                  }}
+                  title={t.status}
+                />
+                <span
+                  className={`text-ui-xs text-wrap-phrase ${t.status === "done" ? "text-foreground-subtlest line-through" : t.status === "in_progress" ? "text-foreground" : "text-foreground-subtle"}`}
+                >
+                  {t.content}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
         {/* §6.1 二层:活跃子代理实时流监视(一等键=SubAgentID;零事件自动隐藏) */}
         {activeStreams.length > 0 && (
           <div className="max-h-[50%] overflow-auto border-b border-border">

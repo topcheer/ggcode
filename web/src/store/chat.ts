@@ -27,6 +27,13 @@ export type ToolInvocation = {
 
 type ConnState = "connecting" | "open" | "closed";
 
+/** todo 面板项(运行时实时聚合,键=todo id) */
+export type TodoItem = {
+  id: string;
+  content: string;
+  status: "pending" | "in_progress" | "done";
+};
+
 /** 子代理实时流(P 二层一等键=SubAgentID,与桌面面板语义一致) */
 export type SubagentStream = {
   id: string;
@@ -43,6 +50,7 @@ type ChatStore = {
   busy: boolean; // agent 处理中(§ WS busy error)
   lastError: string | null;
   subagentStreams: Record<string, SubagentStream>; // §6.1 二层:活跃/完结子代理流
+  todos: TodoItem[]; // agent loop 运行时实时推送聚合(todo_write tool_result 解析)
   loadHistory: () => Promise<void>;
   applyMsg: (m: import("@/ws/client").StreamMsg) => void;
   pushOptimistic: (text: string) => void;
@@ -67,6 +75,7 @@ export const useChat = create<ChatStore>((set) => ({
   busy: false,
   lastError: null,
   subagentStreams: {},
+  todos: [],
 
   setConn: (conn) => set({ conn }),
 
@@ -178,7 +187,26 @@ export const useChat = create<ChatStore>((set) => ({
               break;
             }
           }
-          return { messages: msgs };
+          // todo 面板聚合:todo_write 的结果即最新全量清单(实时推送形态)
+          let todos = st.todos;
+          if (m.name === "todo_write" && !m.is_error) {
+            try {
+              const parsed = JSON.parse(m.result);
+              const arr = Array.isArray(parsed) ? parsed : parsed?.todos;
+              if (Array.isArray(arr)) {
+                todos = arr
+                  .filter((x) => x && typeof x.id === "string" && typeof x.content === "string")
+                  .map((x) => ({
+                    id: x.id,
+                    content: x.content,
+                    status: (x.status === "done" || x.status === "in_progress" ? x.status : "pending") as TodoItem["status"],
+                  }));
+              }
+            } catch {
+              /* 非 JSON 结果保持旧态 */
+            }
+          }
+          return { messages: msgs, todos };
         }
         case "done": {
           const msgs = [...st.messages];

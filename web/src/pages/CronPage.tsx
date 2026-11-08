@@ -37,7 +37,7 @@ export default function CronPage() {
         {jobs.map((j) => (
           <li key={j.id} className="rounded-xl border border-border bg-card p-3">
             <div className="mb-1 flex items-center gap-2">
-              <span className="text-ui-xs rounded-md bg-[var(--color-tag,#2a2a34)] px-2 py-0.5 font-[family-name:var(--font-mono)] text-foreground-subtle">
+              <span className="text-ui-xs rounded-md px-2 py-0.5 font-[family-name:var(--font-mono)]" style={{ background: "var(--color-tag)", color: "var(--color-tag-fg)" }}>
                 {j.cron_expr}
               </span>
               {j.paused && (

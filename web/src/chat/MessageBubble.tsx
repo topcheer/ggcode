@@ -132,6 +132,17 @@ function MarkdownLine({ line }: { line: string }) {
       </p>
     );
   }
+  const quote = line.match(/^\s*>\s?(.*)/);
+  if (quote) {
+    return (
+      <p
+        className="text-wrap-phrase border-l-2 py-0.5 pl-3"
+        style={{ borderColor: "var(--color-quote-border)", background: "var(--color-quote-surface)" }}
+      >
+        {inline(quote[1])}
+      </p>
+    );
+  }
   return <p className="whitespace-pre-wrap">{inline(line)}</p>;
 }
 
@@ -147,7 +158,7 @@ function inline(s: string): React.ReactNode[] {
     const tok = m[0];
     if (tok.startsWith("`")) {
       parts.push(
-        <code key={k++} className="rounded-md bg-[var(--color-tag,#2a2a34)] px-1.5 py-0.5 font-[family-name:var(--font-mono)] text-[0.92em]">
+        <code key={k++} className="rounded-md px-1.5 py-0.5 font-[family-name:var(--font-mono)] text-[0.92em]" style={{ background: "var(--color-tag)", color: "var(--color-tag-fg)" }}>
           {tok.slice(1, -1)}
         </code>,
       );

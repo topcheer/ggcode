@@ -35,7 +35,14 @@ export class ChatWS {
 
   private connect() {
     this.h.onState("connecting");
-    const ws = new WebSocket(this.url);
+    // WS 握手鉴权(auth.go:WebSocket 路由接受 query token;浏览器 WS API 无法自定义
+    // Authorization 头)。token 由 server_static.go authScript 在 #token= 首访时写入
+    // sessionStorage——此处消费,缺失则裸连(服务器未启用鉴权时也可用)
+    const tok = sessionStorage.getItem("ggcode-ws-token");
+    const url =
+      this.url +
+      (tok ? (this.url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(tok) : "");
+    const ws = new WebSocket(url);
     this.ws = ws;
     ws.onopen = () => {
       this.retry = 0;

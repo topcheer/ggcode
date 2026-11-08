@@ -8,6 +8,7 @@ const MAX_RENDER = 200;
 
 export default function MessageList() {
   const messages = useChat((s) => s.messages);
+  const busy = useChat((s) => s.busy);
   const [windowStart, setWindowStart] = useState(0);
   // 超上限时裁剪渲染窗口(保留完整 messages 供导出/回放,仅渲染层裁剪)
   const effectiveStart = Math.max(windowStart, messages.length - MAX_RENDER);
@@ -51,6 +52,18 @@ export default function MessageList() {
         {visible.map((m) => (
           <MessageBubble key={m.id} msg={m} />
         ))}
+        {busy && (
+          <div className="flex items-center gap-1.5 py-2" aria-label="thinking">
+            {[0, 1, 2].map((i) => (
+              <span
+                key={i}
+                className="inline-block h-1.5 w-1.5 rounded-full animate-pulse"
+                style={{ background: "var(--color-foreground-subtle)", animationDelay: `${i * 0.18}s` }}
+              />
+            ))}
+            <span className="text-ui-xs ml-1 text-foreground-subtlest">思考中…</span>
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
     </div>
