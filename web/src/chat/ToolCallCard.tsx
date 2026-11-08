@@ -33,12 +33,7 @@ export default function ToolCallCard({ tool }: { tool: ToolInvocation }) {
             </pre>
           )}
           {tool.result && (
-            <pre
-              className="text-ui-xs max-h-72 overflow-auto p-3 font-[family-name:var(--font-mono)] whitespace-pre-wrap"
-              style={{ color: tool.isError ? "var(--color-destructive-surface-fg)" : "var(--color-foreground-subtle)" }}
-            >
-              {isDiffTool ? tool.result : tool.result}
-            </pre>
+            <DiffAwareResult isDiffTool={isDiffTool} result={tool.result} isError={!!tool.isError} />
           )}
         </div>
       )}
@@ -78,4 +73,41 @@ function safePretty(s: string): string {
   } catch {
     return s;
   }
+}
+
+/** diff 结果逐行渲染(P4-3):识别 unified diff +/- 行上色;非 diff 文本原样 */
+function DiffAwareResult({ isDiffTool, result, isError }: { isDiffTool: boolean; result: string; isError: boolean }) {
+  const looksLikeDiff = isDiffTool && /^(diff --git|@@ -|[+-]{1}[^+-])/m.test(result);
+  if (!looksLikeDiff) {
+    return (
+      <pre
+        className="text-ui-xs max-h-72 overflow-auto p-3 font-[family-name:var(--font-mono)] whitespace-pre-wrap"
+        style={{ color: isError ? "var(--color-destructive-surface-fg)" : "var(--color-foreground-subtle)" }}
+      >
+        {result}
+      </pre>
+    );
+  }
+  return (
+    <pre className="text-ui-xs max-h-72 overflow-auto p-3 font-[family-name:var(--font-mono)] whitespace-pre-wrap">
+      {result.split("\n").map((line, i) => {
+        let bg = "transparent";
+        let fg = "var(--color-foreground-subtle)";
+        if (line.startsWith("+")) {
+          bg = "var(--color-success-surface)";
+          fg = "var(--color-success-surface-fg)";
+        } else if (line.startsWith("-")) {
+          bg = "var(--color-destructive-surface)";
+          fg = "var(--color-destructive-surface-fg)";
+        } else if (line.startsWith("@@")) {
+          fg = "var(--color-info, #4c9bd8)";
+        }
+        return (
+          <span key={i} style={{ background: bg, color: fg, display: "block" }}>
+            {line || " "}
+          </span>
+        );
+      })}
+    </pre>
+  );
 }
