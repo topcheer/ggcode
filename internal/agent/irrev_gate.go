@@ -365,25 +365,44 @@ func irrevSegmentIsReadOnly(seg string) bool {
 			mutating := false
 			for i := 1; i < len(rest); i++ {
 				a := rest[i]
-				if a == "-X" || a == "--method" {
-					if i+1 < len(rest) {
-						m := strings.ToUpper(rest[i+1])
-						if m != "GET" && m != "HEAD" {
-							mutating = true
+				// #5289: pflag accepts equals forms (--method=DELETE,
+				// --field=k=v, --input=f) and glued shorthand values
+				// (-Fk=v, -XDELETE). Previous exact-equality matching
+				// missed every equals form, judging mutating calls
+				// read-only. Normalize each token to name[=value] first.
+				name, val := a, ""
+				hasVal := false
+				if eq := strings.IndexByte(a, '='); eq >= 0 {
+					name, val, hasVal = a[:eq], a[eq+1:], true
+				}
+				switch name {
+				case "-X", "--method":
+					m := val
+					if !hasVal {
+						if i+1 >= len(rest) {
+							continue
 						}
+						m = rest[i+1]
 						i++
 					}
-					continue
-				}
-				if strings.HasPrefix(a, "-X") && len(a) > 2 {
-					m := strings.ToUpper(a[2:])
+					m = strings.ToUpper(m)
 					if m != "GET" && m != "HEAD" {
 						mutating = true
 					}
-					continue
-				}
-				if a == "-f" || a == "--field" || a == "-F" || a == "--field-file" || a == "--input" || a == "--slurp" {
+				case "-f", "--field", "-F", "--field-file", "--input", "--slurp":
+					// conservative: field/body flags imply a write
+					// payload even without -X (values inline or next token)
 					mutating = true
+				default:
+					// glued shorthand values: -XDELETE, -Fk=v, -fk=v
+					if strings.HasPrefix(name, "-X") && len(name) > 2 {
+						m := strings.ToUpper(name[2:])
+						if m != "GET" && m != "HEAD" {
+							mutating = true
+						}
+					} else if (strings.HasPrefix(name, "-F") || strings.HasPrefix(name, "-f")) && len(name) > 2 {
+						mutating = true
+					}
 				}
 			}
 			return !mutating
