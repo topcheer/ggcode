@@ -1021,13 +1021,30 @@ func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression, 
 
 	actualExpr := expression
 	if frame != "" {
+		// #5304: two previous failure modes in this wrapper - (1) new
+		// Function(expression) treats a bare expression as an empty-bodied
+		// statement, so it always returned undefined (silent fake result);
+		// (2) bare `document` inside the wrapper resolved to the MAIN frame,
+		// not the iframe. Fix: run the expression as an indirect eval in the
+		// iframe's own window (bare identifiers resolve to the iframe global
+		// and expression semantics match the main-frame chromedp.Evaluate
+		// path), with a statement-body fallback on SyntaxError.
 		actualExpr = fmt.Sprintf(`(() => {
 			const f = document.querySelector(%q);
 			if (!f) throw new Error("iframe not found: %s");
+			const w = f.contentWindow;
+			if (!w) throw new Error("iframe has no contentWindow: %s");
 			if (!f.contentDocument) throw new Error("cannot access iframe contentDocument (cross-origin?): %s");
-			const fn = new Function(%q);
-			return fn.call(f.contentDocument.defaultView, f.contentDocument);
-		})()`, frame, frame, frame, expression)
+			try {
+				return w.eval(%q);
+			} catch (e) {
+				if (e instanceof SyntaxError) {
+					const fn = new Function(%q);
+					return fn.call(w, f.contentDocument);
+				}
+				throw e;
+			}
+		})()`, frame, frame, frame, frame, expression, expression)
 	}
 
 	result, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](actualExpr))
