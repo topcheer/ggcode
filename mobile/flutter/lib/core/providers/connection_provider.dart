@@ -1470,6 +1470,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     _disposeActiveService();
     _clearUiProjection();
+    final failedSessionId = _sessionId;
     _sessionId = '';
     _lastAppliedEventId = '';
     _lastDurableEventId = '';
@@ -1490,7 +1491,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       await _connectionStore.markAndRemove(failedConnId, error);
     }
     await ref.read(workspaceCacheProvider.notifier).clearReconnectTarget(
-          sessionId: _sessionId,
+          sessionId: failedSessionId,
           workspaceKey: ref.read(workspaceCacheProvider).liveWorkspaceKey ??
               ref.read(workspaceCacheProvider).selectedWorkspaceKey,
         );
