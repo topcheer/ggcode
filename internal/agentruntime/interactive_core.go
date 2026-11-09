@@ -105,6 +105,8 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 
 	_ = registry.Register(tool.NewListMemoryTool(autoMem, projectAutoMem))
 
+	_ = registry.Register(tool.NewMemoryRecallTool(autoMem, projectAutoMem))
+
 	_ = registry.Register(tool.NewRecallExperienceTool(workingDir))
 
 	// Session-recall index: own-session writes + sibling-session read-only
