@@ -149,6 +149,19 @@ func (s *Session) OnConnected(fn func(info RelayConnectedState)) {
 	}
 }
 
+// ConnectedState 已连接状态快照(mobile app 已扫码接入返回非 nil;未连过返回 nil)。
+// 数据源是 OnConnected 回调缓存的 RelayConnectedState——webui share 弹层用它
+// 判定"已扫码连接",据此自动隐藏二维码。
+func (s *Session) ConnectedState() *RelayConnectedState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cachedConnState == nil {
+		return nil
+	}
+	out := *s.cachedConnState
+	return &out
+}
+
 func (s *Session) Send(msg GatewayMessage) error {
 	if s.client == nil {
 		return fmt.Errorf("tunnel session: no relay client")

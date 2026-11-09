@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Chat from "@/pages/Chat";
 import Settings from "@/pages/Settings";
 import CommandPalette, { type PaletteAction } from "@/pages/CommandPalette";
+import ShareModal from "@/pages/ShareModal";
+import TunnelModal from "@/pages/TunnelModal";
 import { useChat } from "@/store/chat";
 import { usePane } from "@/store/pane";
 
@@ -44,6 +46,8 @@ export default function App() {
   // 移动端抽屉(P5-7):窄屏左栏抽屉化
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [paneOpen, setPaneOpen] = useState(false); // 移动端右栏 overlay(lg 以下)
+  const [shareOpen, setShareOpen] = useState(false); // /share 二维码弹层
+  const [tunnelOpen, setTunnelOpen] = useState(false); // /et 公网隧道弹层
   // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
   // 会话列表(左栏,同桌面逻辑:本 workspace 全量,锁定态由 locked_by_pid 标示)
   const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string; locked_by_pid?: number; locked_by_self?: boolean }>>([]);
@@ -212,6 +216,21 @@ export default function App() {
             onClick={() => setView("settings")}
           >
             ⚙ 设置
+          </button>
+          {/* 双隧道入口:📱 mobile 共享(二维码) / ⇄ et 公网隧道(可点 URL) */}
+          <button
+            className="rounded-lg px-3 py-2 text-left text-ui-sm text-foreground-subtle transition-colors hover:bg-hover hover:text-foreground"
+            onClick={() => setShareOpen(true)}
+            title="共享到 Mobile App(扫码)"
+          >
+            📱 共享
+          </button>
+          <button
+            className="rounded-lg px-3 py-2 text-left text-ui-sm text-foreground-subtle transition-colors hover:bg-hover hover:text-foreground"
+            onClick={() => setTunnelOpen(true)}
+            title="et 公网隧道"
+          >
+            ⇄ 隧道
           </button>
         </nav>
         {/* 会话列表(同桌面逻辑:本 workspace 全量;busy 会话锁定不可点) */}
@@ -392,6 +411,8 @@ export default function App() {
       {paletteOpen && (
         <CommandPalette actions={paletteActions} onClose={() => setPaletteOpen(false)} />
       )}
+      {shareOpen && <ShareModal onClose={() => setShareOpen(false)} />}
+      {tunnelOpen && <TunnelModal onClose={() => setTunnelOpen(false)} />}
     </div>
   );
 }
