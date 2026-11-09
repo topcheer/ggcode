@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
@@ -21,7 +22,10 @@ func TestSubAgentPromptMemoryRelevanceWiring(t *testing.T) {
 	}
 
 	ctx := SubAgentPromptContext{
-		WorkingDir:     dir,
+		WorkingDir: dir,
+		// Legacy inlining semantics only hold in full mode; the default
+		// since memory v2 is pointer mode (no bodies, no index).
+		Cfg:            &config.Config{Memory: config.MemoryConfig{PromptInject: "full"}},
 		ProjectAutoMem: am,
 	}
 	prompt := BuildSubAgentSystemPrompt(ctx, "fix the flaky postgres migration test", "")

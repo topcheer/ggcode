@@ -125,7 +125,7 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		prompt += "\n\n" + strings.TrimSpace(sharedWorkspaceAgents)
 	}
 
-	prompt = appendAutoMemory(prompt, globalAutoMem, projectAutoMem, "")
+	prompt = appendAutoMemory(prompt, globalAutoMem, projectAutoMem, "", cfg.MemoryPromptInjectMode())
 
 	namedAgentInfo := buildNamedAgentHint(workingDir)
 	if namedAgentInfo != "" {
@@ -284,7 +284,7 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext, task string) string {
 		}
 	}
 
-	prompt = appendAutoMemory(prompt, ctx.GlobalAutoMem, ctx.ProjectAutoMem, task)
+	prompt = appendAutoMemory(prompt, ctx.GlobalAutoMem, ctx.ProjectAutoMem, task, ctx.Cfg.MemoryPromptInjectMode())
 
 	return prompt
 }
@@ -308,8 +308,18 @@ type memSource struct {
 	indexOnly []string
 }
 
-func appendAutoMemory(prompt string, globalAutoMem, projectAutoMem *memory.AutoMemory, task string) string {
+// memoryRecallPointerSection is the fixed two-line Memory section injected
+// when memory.prompt_inject is "pointer" (the default): no memory bodies or
+// title indexes are injected into the system prompt, only this pointer to
+// the on-demand memory_recall tool. This keeps the prompt stable for
+// KV-cache reuse regardless of how many memories exist.
+const memoryRecallPointerSection = "## Memory\n" +
+	"Durable memories (global + project) are NOT injected here — search them on demand with the memory_recall tool (keyword, scope all|project|global). save_memory persists new patterns; delete_memory archives."
 
+func appendAutoMemory(prompt string, globalAutoMem, projectAutoMem *memory.AutoMemory, task, mode string) string {
+	if mode != "full" {
+		return prompt + "\n\n" + memoryRecallPointerSection
+	}
 	repair := memoryRepairBlock(globalAutoMem, projectAutoMem)
 	if repair != "" {
 		prompt += "\n\n## Memory Repair\n" + repair

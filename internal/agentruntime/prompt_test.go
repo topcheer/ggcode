@@ -180,11 +180,17 @@ func TestBuildSubAgentSystemPrompt_DeterministicToolOrder(t *testing.T) {
 func TestBuildSubAgentSystemPrompt_MemoryFraming(t *testing.T) {
 	withTestHome(t)
 
+	// Legacy injection assertions run with memory.prompt_inject=full
+	// (default since memory v2 is "pointer", which injects no bodies).
 	cfg := &config.Config{Language: "en"}
+	cfg.Memory.PromptInject = "full"
 	reg := tool.NewRegistry()
 	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test", nil, nil)
 
 	autoMem := memory.NewAutoMemory()
+	if err := autoMem.SaveMemory("build-process", "run make verify-ci"); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx := SubAgentPromptContext{
 		Cfg:           cfg,
@@ -193,10 +199,12 @@ func TestBuildSubAgentSystemPrompt_MemoryFraming(t *testing.T) {
 		GlobalAutoMem: autoMem,
 	}
 
-	prompt := BuildSubAgentSystemPrompt(ctx, "task", "")
+	// Empty task: with a task, the relevance gate demotes entries to
+	// index-only and the inline framing header would not render.
+	prompt := BuildSubAgentSystemPrompt(ctx, "", "")
 
 	if strings.Contains(prompt, "## Auto Memory") {
-		if !strings.Contains(prompt, "reference information") {
+		if !strings.Contains(prompt, "Reference data at the same trust level") {
 			t.Error("auto-memory section should contain framing text indicating it's reference data")
 		}
 	}

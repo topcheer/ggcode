@@ -359,6 +359,11 @@ type ImpersonationConfig struct {
 
 // MemoryConfig groups switches for the persistent memory subsystem.
 type MemoryConfig struct {
+	// PromptInject selects how memories enter the system prompt:
+	// "pointer" (default) injects only a fixed two-line recall pointer;
+	// "full" preserves the legacy behavior of inlining entry bodies and
+	// title indexes.
+	PromptInject string `yaml:"prompt_inject,omitempty" json:"prompt_inject,omitempty"`
 	// Curator configures the resident background memory curator.
 	Curator MemoryCuratorConfig `yaml:"curator,omitempty" json:"curator,omitempty"`
 }
@@ -379,6 +384,18 @@ func (c *Config) MemoryCuratorEnabled() bool {
 		return true
 	}
 	return *c.Memory.Curator.Enabled
+}
+
+// MemoryPromptInjectMode returns the system-prompt memory injection mode:
+// "pointer" (default) injects only the fixed two-line recall pointer for
+// the memory_recall tool, while "full" preserves the legacy behavior of
+// inlining entry bodies plus title indexes. Empty or unrecognized values
+// resolve to "pointer".
+func (c *Config) MemoryPromptInjectMode() string {
+	if c == nil || !strings.EqualFold(strings.TrimSpace(c.Memory.PromptInject), "full") {
+		return "pointer"
+	}
+	return "full"
 }
 
 type LSPServerConfig struct {
