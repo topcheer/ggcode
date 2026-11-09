@@ -23,6 +23,9 @@ type AutoMemory struct {
 	mu sync.Mutex
 
 	useOnce sync.Map
+
+	eventScope string
+	eventSink  chan<- ChangeEvent
 }
 
 var writeMu sync.Map
@@ -112,6 +115,7 @@ func (am *AutoMemory) SaveMemoryWithSourceActor(key, content, source, actor stri
 	} else {
 		am.ClearTaint(safe)
 	}
+	am.emitChange("save", safe, source)
 	return nil
 }
 
