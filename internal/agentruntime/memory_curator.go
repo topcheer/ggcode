@@ -71,6 +71,7 @@ type MemoryCurator struct {
 	sweepMu     sync.Mutex
 	sweepQueued []memory.ChangeEvent
 	sweepDone   bool
+	sweepPrimed bool // false until the first chunk is ever collected
 
 	events chan memory.ChangeEvent
 	stopCh chan struct{}
@@ -528,9 +529,10 @@ func (c *MemoryCurator) startupSweep(ctx context.Context, stopCh <-chan struct{}
 func (c *MemoryCurator) nextSweepChunk() ([]memory.ChangeEvent, bool) {
 	c.sweepMu.Lock()
 	defer c.sweepMu.Unlock()
-	if c.sweepDone && len(c.sweepQueued) == 0 {
-		// begin a new pass
+	if !c.sweepPrimed || (c.sweepDone && len(c.sweepQueued) == 0) {
+		// first-ever collection, or a completed pass restarting
 		c.sweepQueued = c.collectSweepKeys()
+		c.sweepPrimed = true
 		c.sweepDone = false
 	}
 	chunk := make([]memory.ChangeEvent, 0, memoryCuratorSweepChunk)
