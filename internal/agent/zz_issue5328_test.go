@@ -24,19 +24,19 @@ import (
 //     is inherently invisible to a single-command lexical scan.
 func TestIssue5328InterpreterHeredocBodiesVisible(t *testing.T) {
 	// bash/sh: the rm line IS a shell command position inside the body -
-	// after the fix it must be seen by firstRmCommandSegment (old #5315
+	// after the fix it must be seen by rmCommandSegments (old #5315
 	// code went blind here).
 	shellCases := []struct{ name, cmd string }{
 		{"bash", "bash <<'EOF'\n" + rmRfLine(t) + " $HOME/important\nEOF"},
 		{"sh", "sh <<EOF\n" + rmRfLine(t) + " /tmp/build\nEOF"},
 	}
 	for _, tc := range shellCases {
-		if seg := firstRmCommandSegment(tc.cmd); seg == "" {
-			t.Errorf("%s: rm inside interpreter heredoc body must stay visible to firstRmCommandSegment (guard must not go blind)", tc.name)
+		if segs := rmCommandSegments(tc.cmd); len(segs) == 0 {
+			t.Errorf("%s: rm inside interpreter heredoc body must stay visible to rmCommandSegments (guard must not go blind)", tc.name)
 		}
 	}
 	// python3: a bare rm mention inside the body is a string literal, not a
-	// shell command position - firstRmCommandSegment correctly does not
+	// shell command position - rmCommandSegments correctly does not
 	// fire. The #5328 contract for interpreter receivers is that the BODY
 	// STAYS VISIBLE to the raw scan (no unconditional strip), so downstream
 	// pattern layers can see it.
@@ -54,8 +54,8 @@ func TestIssue5328TextReceiverHeredocStillStripped(t *testing.T) {
 		">> log.md <<'EOF'\ndocumented " + rm + " behaviour\nEOF",
 	}
 	for _, cmd := range textCases {
-		if seg := firstRmCommandSegment(cmd); seg != "" {
-			t.Errorf("text-receiver heredoc must keep the #5315 FP fix: body must be stripped (got segment %q)", seg)
+		if segs := rmCommandSegments(cmd); len(segs) != 0 {
+			t.Errorf("text-receiver heredoc must keep the #5315 FP fix: body must be stripped (got segments %v)", segs)
 		}
 	}
 }

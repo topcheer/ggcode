@@ -181,22 +181,67 @@ func stripHeredocBodies(cmd string) string {
 	return strings.Join(out, "\n")
 }
 
+// rmCommandWrapperWords are the words that may sit between a chain
+// segment start and rm without demoting rm from command position. The
+// base set reuses heredocPrefixWords (this file's wrapper lexicon) and
+// adds xargs/doas so the agent-side gate is not weaker than the
+// permission layer's rmCmdAnchor, which anchors all of
+// sudo/doas/xargs/nohup/env/nice ahead of rm (internal/permission).
+var rmCommandWrapperWords = func() map[string]bool {
+	m := make(map[string]bool, len(heredocPrefixWords)+2)
+	for w := range heredocPrefixWords {
+		m[w] = true
+	}
+	m["xargs"] = true
+	m["doas"] = true
+	return m
+}()
+
+// normalizeCommandWord reduces a path-invoked binary (/bin/rm, ./rm,
+// /usr/bin/sudo) to its base name and drops surrounding quotes, so
+// whitelist misses cannot hide behind a path prefix. Mirrors the
+// normalization in heredocReceiverKeepsBody.
+func normalizeCommandWord(w string) string {
+	w = strings.Trim(w, "\"'")
+	if i := strings.LastIndexAny(w, `/\`); i >= 0 {
+		w = w[i+1:]
+	}
+	return w
+}
+
 // #5315: rm must appear at a command position - a chain segment start
 // (after ; && || | & or newline) with optional env-prefix assignments
 // (VAR=val ...). Text mentioning rm anywhere else (echo, grep args,
 // comments) is not an invocation.
-func firstRmCommandSegment(cmd string) string {
+//
+// #5342: command-position also survives wrapper prefixes
+// (sudo/nohup/xargs/command/..., path forms normalized, interleaved with
+// env assignments), and EVERY rm segment of the chain is returned, not
+// just the first - `rm file && rm -rf dir` must not hide its recursive
+// force-delete behind the plain leading segment.
+func rmCommandSegments(cmd string) []string {
 	cleaned := stripHeredocBodies(cmd)
+	var segs []string
 	for _, seg := range reChainSep.Split(cleaned, -1) {
 		fields := strings.Fields(strings.TrimSpace(seg))
-		for len(fields) > 0 && strings.Contains(fields[0], "=") && !strings.HasPrefix(fields[0], "-") && !strings.HasPrefix(fields[0], "$") {
-			fields = fields[1:]
+		i := 0
+		for i < len(fields) {
+			if strings.Contains(fields[i], "=") && !strings.HasPrefix(fields[i], "-") && !strings.HasPrefix(fields[i], "$") {
+				i++
+				continue
+			}
+			if rmCommandWrapperWords[normalizeCommandWord(fields[i])] {
+				i++
+				continue
+			}
+			break
 		}
-		if len(fields) > 0 && fields[0] == "rm" {
-			return strings.Join(fields, " ")
+		fields = fields[i:]
+		if len(fields) > 0 && normalizeCommandWord(fields[0]) == "rm" {
+			segs = append(segs, strings.Join(fields, " "))
 		}
 	}
-	return ""
+	return segs
 }
 
 func detectDestructiveInShellCommand(cmd string) []destructivePattern {
@@ -306,14 +351,20 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 
 	// #5315: only an actual rm invocation (command position, heredoc
 	// bodies stripped) triggers the critical rm_rf pattern; text
-	// mentioning the pattern does not.
-	if rmSeg := firstRmCommandSegment(cmd); rmSeg != "" && reRmRf.MatchString(rmSeg) {
-		found = append(found, destructivePattern{
-			name:        "rm_rf",
-			severity:    "critical",
-			description: "rm -rf recursively force-deletes files without confirmation. This is extremely dangerous and can destroy entire project directories.",
-			suggestion:  "Be very specific about paths. Consider moving to a temp directory instead of deleting. Never use rm -rf on root, home, or project root paths.",
-		})
+	// mentioning the pattern does not. #5342: every rm segment of the
+	// chain is checked, so a later `rm -rf` cannot hide behind a leading
+	// plain `rm`, and wrapper-prefixed forms (sudo/nohup/xargs/command ...)
+	// count as invocations too.
+	for _, rmSeg := range rmCommandSegments(cmd) {
+		if reRmRf.MatchString(rmSeg) {
+			found = append(found, destructivePattern{
+				name:        "rm_rf",
+				severity:    "critical",
+				description: "rm -rf recursively force-deletes files without confirmation. This is extremely dangerous and can destroy entire project directories.",
+				suggestion:  "Be very specific about paths. Consider moving to a temp directory instead of deleting. Never use rm -rf on root, home, or project root paths.",
+			})
+			break
+		}
 	}
 
 	return found
