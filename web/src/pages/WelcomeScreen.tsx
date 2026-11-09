@@ -33,11 +33,11 @@ export default function WelcomeScreen(props: Props) {
         >
           <textarea
             className="text-ui-base text-wrap-phrase h-16 w-full resize-none bg-transparent text-foreground placeholder:text-foreground-subtlest focus:outline-none"
-            placeholder={embedded ? "输入任务…(⌘⏎ 发送)" : "输入任务…"}
+            placeholder={embedded ? (typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches ? "输入任务…(回车发送)" : "输入任务…(⌘⏎ 发送)") : "输入任务…"}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
-              if (embedded && e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              if (embedded && e.key === "Enter" && !e.shiftKey && (typeof matchMedia === "undefined" || matchMedia("(pointer: coarse)").matches || e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 submit();
               }
@@ -45,7 +45,7 @@ export default function WelcomeScreen(props: Props) {
           />
           {embedded && (
             <div className="flex items-center justify-between pt-1">
-              <span className="text-ui-xs text-foreground-subtlest">⌘⏎ 发送 · Shift+⏎ 换行</span>
+              <span className="text-ui-xs text-foreground-subtlest">{typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches ? "回车发送" : "⌘⏎ 发送 · Shift+⏎ 换行"}</span>
               <button
                 className="text-ui-sm rounded-lg bg-brand px-4 py-1.5 font-medium text-white transition-opacity disabled:opacity-40"
                 disabled={!value.trim() || busy}
