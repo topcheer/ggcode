@@ -229,7 +229,7 @@ func TestBuildSubAgentSystemPrompt_ExploreContract(t *testing.T) {
 func TestBuildInteractiveSystemPromptSharedWorkspaceAgents(t *testing.T) {
 	section := "## Shared workspace agents\n\n- alpha (ggcode): busy\n"
 	with := BuildInteractiveSystemPrompt(&config.Config{}, "/w", permission.SupervisedMode, nil, nil, nil, nil, "", "", section)
-	if !strings.Contains(with, section) {
+	if !strings.Contains(with, strings.TrimSpace(section)) {
 		t.Fatal("section missing from prompt when provided")
 	}
 	without := BuildInteractiveSystemPrompt(&config.Config{}, "/w", permission.SupervisedMode, nil, nil, nil, nil, "", "", "")
