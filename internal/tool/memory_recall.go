@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -78,46 +79,82 @@ type recallHit struct {
 }
 
 func (t *MemoryRecallTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
+	q, err := parseRecallParams(input)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	scopes, ok := resolveRecallScopes(t, q.scope)
+	if !ok {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid scope %q: must be 'all', 'project', or 'global'", q.scope)}, nil
+	}
+	hits, err := searchRecallScopes(scopes, recallTokens(q.text))
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	if len(hits) == 0 {
+		return Result{Content: fmt.Sprintf("no matches for %q (scope: %s)", q.text, q.scope)}, nil
+	}
+	return Result{Content: renderRecallHits(rankRecallHits(hits, q.limit), q.text, q.scope, q.limit)}, nil
+}
+
+// recallQuery is a validated memory_recall request.
+type recallQuery struct {
+	text  string
+	scope string
+	limit int
+}
+
+// parseRecallParams validates the raw input and applies the defaults
+// (scope all, limit 8 capped at 20). The returned error carries an
+// in-band message for the caller to wrap.
+func parseRecallParams(input json.RawMessage) (recallQuery, error) {
 	var params struct {
 		Query string `json:"query"`
 		Scope string `json:"scope"`
 		Limit int    `json:"limit"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+		return recallQuery{}, fmt.Errorf("invalid input: %v", err)
 	}
-	query := strings.TrimSpace(params.Query)
-	if query == "" {
-		return Result{IsError: true, Content: "query is required"}, nil
+	q := recallQuery{text: strings.TrimSpace(params.Query), scope: params.Scope, limit: params.Limit}
+	if q.text == "" {
+		return recallQuery{}, errors.New("query is required")
 	}
-	if params.Scope == "" {
-		params.Scope = "all"
+	if q.scope == "" {
+		q.scope = "all"
 	}
-	limit := params.Limit
-	if limit <= 0 {
-		limit = recallDefaultLimit
+	if q.limit <= 0 {
+		q.limit = recallDefaultLimit
 	}
-	if limit > recallMaxLimit {
-		limit = recallMaxLimit
+	if q.limit > recallMaxLimit {
+		q.limit = recallMaxLimit
 	}
+	return q, nil
+}
 
-	type scopeMem struct {
-		label string
-		mem   *memory.AutoMemory
-	}
-	var scopes []scopeMem
-	switch params.Scope {
+// recallScope pairs a scope label with its memory store.
+type recallScope struct {
+	label string
+	mem   *memory.AutoMemory
+}
+
+// resolveRecallScopes maps the requested scope name to the tool's stores;
+// ok is false for an unknown scope name.
+func resolveRecallScopes(t *MemoryRecallTool, scope string) ([]recallScope, bool) {
+	switch scope {
 	case "global":
-		scopes = []scopeMem{{"global", t.globalMem}}
+		return []recallScope{{"global", t.globalMem}}, true
 	case "project":
-		scopes = []scopeMem{{"project", t.projectMem}}
+		return []recallScope{{"project", t.projectMem}}, true
 	case "all":
-		scopes = []scopeMem{{"project", t.projectMem}, {"global", t.globalMem}}
+		return []recallScope{{"project", t.projectMem}, {"global", t.globalMem}}, true
 	default:
-		return Result{IsError: true, Content: fmt.Sprintf("invalid scope %q: must be 'all', 'project', or 'global'", params.Scope)}, nil
+		return nil, false
 	}
+}
 
-	tokens := recallTokens(query)
+// searchRecallScopes scans every non-nil scope and returns the scored hits.
+func searchRecallScopes(scopes []recallScope, tokens []string) ([]recallHit, error) {
 	var hits []recallHit
 	for _, s := range scopes {
 		if s.mem == nil {
@@ -125,7 +162,7 @@ func (t *MemoryRecallTool) Execute(ctx context.Context, input json.RawMessage) (
 		}
 		entries, err := s.mem.ListDetailed()
 		if err != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("failed to list %s memory: %v", s.label, err)}, nil
+			return nil, fmt.Errorf("failed to list %s memory: %v", s.label, err)
 		}
 		for _, e := range entries {
 			body, err := s.mem.LoadKey(e.Key)
@@ -143,11 +180,12 @@ func (t *MemoryRecallTool) Execute(ctx context.Context, input json.RawMessage) (
 			hits = append(hits, *hit)
 		}
 	}
+	return hits, nil
+}
 
-	if len(hits) == 0 {
-		return Result{Content: fmt.Sprintf("no matches for %q (scope: %s)", query, params.Scope)}, nil
-	}
-
+// rankRecallHits sorts hits by score (desc), then scope and key (asc), and
+// truncates to limit.
+func rankRecallHits(hits []recallHit, limit int) []recallHit {
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].score != hits[j].score {
 			return hits[i].score > hits[j].score
@@ -160,14 +198,18 @@ func (t *MemoryRecallTool) Execute(ctx context.Context, input json.RawMessage) (
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
+	return hits
+}
 
+// renderRecallHits formats the ranked hits as the tool result body.
+func renderRecallHits(hits []recallHit, query, scope string, limit int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "memory_recall: %d match(es) for %q (scope: %s, limit: %d)\n", len(hits), query, params.Scope, limit)
+	fmt.Fprintf(&b, "memory_recall: %d match(es) for %q (scope: %s, limit: %d)\n", len(hits), query, scope, limit)
 	for _, h := range hits {
 		fmt.Fprintf(&b, "\n[%s] %s (updated %s, uses %d, score %.1f)\n%s\n",
 			h.scope, h.key, h.updated.Format(time.RFC3339), h.uses, h.score, h.snippet)
 	}
-	return Result{Content: strings.TrimSpace(b.String())}, nil
+	return strings.TrimSpace(b.String())
 }
 
 // recallTokens lowercases and whitespace-splits the query string.
