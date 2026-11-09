@@ -1267,6 +1267,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	webuiSrv.SetChatBridge(tuiBridge)
 	repl.SetWebUIBridge(tuiBridge)
 	// 会话切换执行面注入(webui 发起,实际切换由 TUI resume 全链执行)
+	webuiSrv.SetTunnelStatusFn(repl.TunnelStatusSnapshot)
 	webuiSrv.SetCronListFn(func() []webui.CronJobView {
 		jobs := repl.CronJobsSnapshot()
 		out := make([]webui.CronJobView, 0, len(jobs))

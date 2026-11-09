@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,6 +51,44 @@ import (
 	"github.com/topcheer/ggcode/internal/usage"
 	"github.com/topcheer/ggcode/internal/webui"
 )
+
+// TunnelStatusSnapshot 两条隧道的结构化状态(webui 侧栏图标弹层数据源):
+// share=mobile app relay(/share 家族),et=公网 WebUI 隧道(/et 家族)。
+func (m *Model) TunnelStatusSnapshot() map[string]any {
+	out := map[string]any{
+		"share": map[string]any{"active": false, "starting": false, "connected": false},
+		"et":    map[string]any{"active": false, "url": ""},
+	}
+	share, _ := out["share"].(map[string]any)
+	if m.tunnelStarting {
+		share["starting"] = true
+	}
+	if m.tunnelSession != nil {
+		share["active"] = true
+		if info := m.tunnelSession.Info(); info != nil {
+			share["connect_url"] = info.ConnectURL
+			if len(info.QRCodePNG) > 0 {
+				share["qrcode_png_b64"] = base64.StdEncoding.EncodeToString(info.QRCodePNG)
+			}
+		}
+		if cs := m.tunnelSession.ConnectedState(); cs != nil {
+			share["connected"] = true
+		}
+	}
+	et, _ := out["et"].(map[string]any)
+	if m.webuiTunnel != nil {
+		if u := m.webuiTunnel.TunnelURL(); u != "" {
+			et["active"] = true
+			et["url"] = u
+			if m.webuiURL != "" {
+				if idx := strings.Index(m.webuiURL, "#token="); idx >= 0 {
+					et["url"] = u + m.webuiURL[idx:]
+				}
+			}
+		}
+	}
+	return out
+}
 
 type logoMsg struct {
 	Vendor   string

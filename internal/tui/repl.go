@@ -901,6 +901,11 @@ func (r *REPL) SetTaskOutputTool(mgr *subagent.Manager, tools *tool.Registry) {
 	tools.Register(tool.TaskOutputTool{Provider: mgr})
 }
 
+// TunnelStatusSnapshot 当前两条隧道状态快照(webui /api/tunnel/status 数据源;nil 安全)
+func (r *REPL) TunnelStatusSnapshot() map[string]any {
+	return r.model.TunnelStatusSnapshot()
+}
+
 // CronJobsSnapshot 当前会话的任务快照(webui /api/cron/jobs 真相源;nil 安全)
 func (r *REPL) CronJobsSnapshot() []cron.Job {
 	if r.cronScheduler == nil {

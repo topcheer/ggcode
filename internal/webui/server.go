@@ -156,6 +156,7 @@ type Server struct {
 	restartFn       func()
 	sessionSwitchFn func(sessionID string) error
 	cronListFn      func() []CronJobView
+	tunnelStatusFn  func() map[string]any
 	chatCommandFn   func(text string) error
 	chatControlsFn  func() map[string]string
 	queueSnapshotFn func() []string
@@ -338,6 +339,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/sessions/", a(s.handleSessionDetail))
 	s.mux.HandleFunc("/api/workspace/files", a(s.handleWorkspaceFiles))
 	s.mux.HandleFunc("/api/cron/jobs", a(s.handleCronJobs))
+	s.mux.HandleFunc("/api/tunnel/status", a(s.handleTunnelStatus))
 	s.mux.HandleFunc("/api/checkpoints", a(s.handleCheckpoints))
 	s.mux.HandleFunc("/api/chat/ws", a(s.handleChatWS))
 	s.mux.HandleFunc("/api/chat/history", a(s.handleChatHistory))
