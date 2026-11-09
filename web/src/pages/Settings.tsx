@@ -93,7 +93,7 @@ function ConfigPage() {
 
   if (loading) return <CenterNote>加载中…</CenterNote>;
   return (
-    <div className="mx-auto max-w-[860px] p-8">
+    <div className="mx-auto max-w-[860px] px-4 py-6 md:p-8">
       <h2 className="text-ui-lg mb-1 font-semibold">配置</h2>
       <p className="text-ui-sm mb-4 text-foreground-subtle">
         当前配置(通用 JSON 编辑;字段级表单随 P2 迭代细化)
@@ -228,7 +228,7 @@ function GeneralPage() {
   };
 
   return (
-    <div className="mx-auto max-w-[860px] space-y-8 p-8">
+    <div className="mx-auto max-w-[860px] space-y-8 px-4 py-6 md:p-8">
       <section>
         <h2 className="text-ui-lg mb-1 font-semibold">常规</h2>
         <p className="text-ui-sm mb-4 text-foreground-subtle">外观与模型运行时偏好(与聊天界面控制并存)</p>
@@ -255,7 +255,7 @@ function GeneralPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div>
               <div className="text-ui-sm mb-1.5 text-foreground-subtle">模型</div>
               <select
@@ -294,7 +294,7 @@ function GeneralPage() {
             <div className="rounded-xl border border-border bg-card p-4">
               <div className="text-ui-sm mb-2 font-medium">当前端点模型配置</div>
               <div className="text-ui-xs mb-3 text-foreground-subtlest">{active.vendor} · {active.endpoint}</div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <label className="block">
                   <span className="text-ui-xs mb-1 block text-foreground-subtle">Context window</span>
                   <input

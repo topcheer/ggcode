@@ -27,7 +27,7 @@ export default function CommandPalette({
       onClick={onClose}
     >
       <div
-        className="w-[520px] rounded-2xl border border-border bg-popover p-2 shadow-2xl"
+        className="w-[92vw] max-w-[520px] rounded-2xl border border-border bg-popover p-2 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <input

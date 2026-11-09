@@ -43,6 +43,7 @@ export default function App() {
   const [actTab, setActTab] = useState<"todos" | "subs" | "cron">("todos");
   // 移动端抽屉(P5-7):窄屏左栏抽屉化
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [paneOpen, setPaneOpen] = useState(false); // 移动端右栏 overlay(lg 以下)
   // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
   // 会话列表(左栏,同桌面逻辑:本 workspace 全量,锁定态由 locked_by_pid 标示)
   const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string; locked_by_pid?: number }>>([]);
@@ -256,10 +257,18 @@ export default function App() {
             ☰
           </button>
           <span className="text-ui-sm font-semibold">ggcode</span>
+          <button
+            className="ml-auto text-ui-sm rounded-lg px-2 py-1 text-foreground-subtle hover:bg-hover"
+            onClick={() => setPaneOpen(true)}
+            title="活动面板"
+          >
+            ☰ 面板
+          </button>
         </div>
         {view === "chat" ? <Chat /> : <Settings onBack={() => setView("chat")} />}
       </main>
-      <aside className="hidden w-[380px] shrink-0 flex-col border-l border-border bg-sidebar lg:block" style={paneSpawn || activeStreams.length > 0 || todos.length > 0 || cronEvents.length > 0 ? { width: "380px" } : undefined}>
+      {paneOpen && <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setPaneOpen(false)} />}
+      <aside className={`fixed inset-y-0 right-0 z-50 w-[92vw] max-w-[420px] flex-col border-l border-border bg-sidebar transition-transform lg:static lg:z-auto lg:flex lg:w-[380px] lg:max-w-none ${paneOpen ? "flex" : "hidden"}`} style={paneSpawn || activeStreams.length > 0 || todos.length > 0 || cronEvents.length > 0 ? { width: "380px" } : undefined}>
         {/* 活动面板:任务清单/子代理/Cron 三 tab 独立区域(零事件 tab 灰显) */}
         {(todos.length > 0 || activeStreams.length > 0 || cronEvents.length > 0) && (
           <div className="flex min-h-0 flex-col border-b border-border">

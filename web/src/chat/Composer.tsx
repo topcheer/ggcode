@@ -120,7 +120,7 @@ export default function Composer({
       >
         <textarea
           ref={taRef}
-          className="text-ui-base w-full resize-none bg-transparent text-wrap-phrase text-foreground placeholder:text-foreground-subtlest focus:outline-none"
+          className="text-[16px] md:text-ui-base w-full resize-none bg-transparent text-wrap-phrase text-foreground placeholder:text-foreground-subtlest focus:outline-none"
           placeholder="输入消息…(⌘⏎ 发送 / Shift+⏎ 换行)"
           rows={2}
           value={value}
