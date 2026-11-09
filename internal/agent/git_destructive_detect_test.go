@@ -377,3 +377,51 @@ func TestIsCleanForceCommandSeparatorAndGlobalFlags(t *testing.T) {
 		t.Fatal("dry-run must still suppress")
 	}
 }
+
+// TestRmRfHeredocAndProseImmunity pins #5315: rm_rf must fire only on shell
+// segments that actually invoke rm with recursive+force flags, never on
+// heredoc bodies, quoted strings, or documentation prose, while real deletes
+// in every existing flag spelling still fire.
+func TestRmRfHeredocAndProseImmunity(t *testing.T) {
+	negatives := []string{
+		// heredoc bodies containing the token must not fire (#5315 repro set)
+		"cat >> runbook.md <<'EOF'\nwarning: never run rm -rf / without care\nEOF",
+		"cat <<EOF > note.txt\nthe text rm -Rf tmp appears here\nEOF",
+		"cat <<-TAB\n\tdocumented rm --recursive --force behaviour\n\tTAB",
+		// quoted echo / grep strings must not fire
+		`echo "cleanup uses rm -rf /tmp/cache"`,
+		`echo 'run rm -r -f tmp to clean'`,
+		`grep -n "rm -rf" deploy.log`,
+		// documentation prose must not fire
+		"# fix: stop blocking rm -rf in docs\n# see runbook",
+		"printf '%s' 'alias clean=rm -rf tmp'",
+	}
+	for _, cmd := range negatives {
+		for _, p := range detectDestructiveInShellCommand(cmd) {
+			if p.name == "rm_rf" {
+				t.Fatalf("rm_rf false positive on non-rm text: %q", cmd)
+			}
+		}
+	}
+
+	positives := []string{
+		"rm -rf /tmp/build",
+		"rm -Rf tmp",
+		"rm -r -f tmp",
+		"rm --recursive --force tmp",
+		"echo ok && rm -rf tmp", // rm segment in compound command
+		"FOO=1 rm -rf tmp",      // env-prefixed rm still fires
+		"cat >> f <<'EOF'\nrm -rf inside-body\nEOF\nrm -rf real-target", // real rm after heredoc
+	}
+	for _, cmd := range positives {
+		hit := false
+		for _, p := range detectDestructiveInShellCommand(cmd) {
+			if p.name == "rm_rf" {
+				hit = true
+			}
+		}
+		if !hit {
+			t.Fatalf("rm_rf must still fire on real delete: %q", cmd)
+		}
+	}
+}

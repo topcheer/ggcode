@@ -78,6 +78,117 @@ func normalizeGitGlobalFlags(cmd string) string {
 	return strings.Join(lines, "\n")
 }
 
+// reHeredocStart matches a heredoc redirect start: <<[-] DELIM where DELIM
+// is a bare, single-quoted, or double-quoted word.
+var reHeredocStart = regexp.MustCompile(`<<-?\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))`)
+
+// stripHeredocBodies removes heredoc body text (the data lines between a
+// `<<WORD` redirect and its terminator line) from cmd, leaving the command
+// text that actually executes. Unterminated heredocs are stripped to the
+// end: body text is data, never shell commands, so dropping it is the
+// conservative direction for destructive-command detection (#5315).
+func stripHeredocBodies(cmd string) string {
+	if !strings.Contains(cmd, "<<") {
+		return cmd
+	}
+	var b strings.Builder
+	i := 0
+	for i < len(cmd) {
+		j := strings.IndexByte(cmd[i:], '<')
+		if j < 0 {
+			b.WriteString(cmd[i:])
+			break
+		}
+		pos := i + j
+		if !strings.HasPrefix(cmd[pos:], "<<") || !heredocStartAllowedAfter(cmd, pos) {
+			b.WriteByte(cmd[pos])
+			i = pos + 1
+			continue
+		}
+		rest := cmd[pos:]
+		m := reHeredocStart.FindStringSubmatchIndex(rest)
+		if m == nil {
+			b.WriteByte(cmd[pos])
+			i = pos + 1
+			continue
+		}
+		var word string
+		for g := 1; g <= 3; g++ {
+			if m[2*g] >= 0 {
+				word = rest[m[2*g]:m[2*g+1]]
+				break
+			}
+		}
+		dash := len(rest) >= 2 && rest[1] == '-'
+		nl := strings.IndexByte(rest, '\n')
+		if nl < 0 {
+			// heredoc start with no following newline: nothing to strip
+			b.WriteString(rest)
+			break
+		}
+		bodyStart := nl + 1
+		termEnd := len(rest)
+		for k := bodyStart; k <= len(rest); {
+			lineEnd := strings.IndexByte(rest[k:], '\n')
+			var line string
+			if lineEnd < 0 {
+				line = rest[k:]
+			} else {
+				line = rest[k : k+lineEnd]
+			}
+			trimmed := line
+			if dash {
+				trimmed = strings.TrimLeft(trimmed, "\t")
+			}
+			if trimmed == word {
+				if lineEnd < 0 {
+					termEnd = len(rest)
+				} else {
+					termEnd = k + lineEnd + 1
+				}
+				break
+			}
+			if lineEnd < 0 {
+				break
+			}
+			k += lineEnd + 1
+		}
+		b.WriteString(rest[:bodyStart])
+		i = pos + termEnd
+	}
+	return b.String()
+}
+
+// rmLedSegments returns shell segments that actually invoke rm: heredoc
+// bodies are stripped, then the remainder is split on shell separators and
+// only segments whose first field (after env-prefix assignments) is `rm`
+// are kept. Mirrors gitLedSegments grounding from #5217 (#5315).
+func rmLedSegments(cmd string) []string {
+	var out []string
+	for _, seg := range irrevSplitShellSegments(stripHeredocBodies(cmd)) {
+		fields := strings.Fields(strings.TrimSpace(seg))
+		for len(fields) > 0 && isEnvAssignment(fields[0]) {
+			fields = fields[1:]
+		}
+		if len(fields) > 0 && fields[0] == "rm" {
+			out = append(out, strings.Join(fields, " "))
+		}
+	}
+	return out
+}
+
+// rmRfInRmLedSegment reports whether any rm-invoking shell segment carries a
+// recursive+force flag combination. Raw-text matching fired on heredoc
+// bodies, quoted echo/grep arguments, and documented prose (#5315).
+func rmRfInRmLedSegment(cmd string) bool {
+	for _, seg := range rmLedSegments(cmd) {
+		if reRmRf.MatchString(seg) {
+			return true
+		}
+	}
+	return false
+}
+
 func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 	if cmd == "" {
 		return nil
@@ -183,7 +294,7 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		})
 	}
 
-	if reRmRf.MatchString(cmd) {
+	if rmRfInRmLedSegment(cmd) { // #5315: argv-grounded, heredoc/prose immune
 		found = append(found, destructivePattern{
 			name:        "rm_rf",
 			severity:    "critical",
