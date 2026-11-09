@@ -901,6 +901,14 @@ func (r *REPL) SetTaskOutputTool(mgr *subagent.Manager, tools *tool.Registry) {
 	tools.Register(tool.TaskOutputTool{Provider: mgr})
 }
 
+// CronJobsSnapshot 当前会话的任务快照(webui /api/cron/jobs 真相源;nil 安全)
+func (r *REPL) CronJobsSnapshot() []cron.Job {
+	if r.cronScheduler == nil {
+		return nil
+	}
+	return r.cronScheduler.List()
+}
+
 func (r *REPL) SetCronScheduler(s *cron.Scheduler, tools *tool.Registry) {
 	r.cronScheduler = s
 	r.model.SetCronScheduler(s)

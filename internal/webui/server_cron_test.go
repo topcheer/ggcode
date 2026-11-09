@@ -87,3 +87,35 @@ func TestCronJobsReadOnly(t *testing.T) {
 		t.Errorf("expected empty list, got %v", empty)
 	}
 }
+
+// 钉测(fn 注入优先):SetCronListFn 后真相源是活 scheduler 快照,不再扫磁盘
+func TestCronJobsListFnPriority(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// 布景:磁盘上放干扰任务(回落面会扫到,fn 注入后必须被忽略)
+	dir := filepath.Join(home, ".ggcode", "cron-jobs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	diskBlob, _ := json.Marshal(map[string]interface{}{"jobs": []map[string]interface{}{
+		{"id": "disk-1", "cron_expr": "* * * * *", "prompt": "磁盘面干扰项", "recurring": true},
+	}})
+	if err := os.WriteFile(filepath.Join(dir, "20990101-000000-ffffffffffff.json"), diskBlob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewServer(config.DefaultConfig())
+	s.SetSessionStore(nil, t.TempDir())
+	s.SetCronListFn(func() []CronJobView {
+		return []CronJobView{{ID: "live-1", CronExpr: "*/5 * * * *", Prompt: "当前会话任务", Recurring: true}}
+	})
+	rec := httptest.NewRecorder()
+	s.handleCronJobs(rec, httptest.NewRequest("GET", "/api/cron/jobs", nil))
+	var out []map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || out[0]["id"] != "live-1" {
+		t.Fatalf("expected fn source only [live-1], got %v", out)
+	}
+}

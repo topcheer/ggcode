@@ -155,6 +155,7 @@ type Server struct {
 	imActionFn      IMActionFunc
 	restartFn       func()
 	sessionSwitchFn func(sessionID string) error
+	cronListFn      func() []CronJobView
 	chatCommandFn   func(text string) error
 	chatControlsFn  func() map[string]string
 	queueSnapshotFn func() []string
