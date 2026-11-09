@@ -213,6 +213,66 @@ func TestBrowserIntegration_Type(t *testing.T) {
 	}
 }
 
+func TestBrowserIntegration_EvaluateInFrame(t *testing.T) {
+	// Local fixture: this test builds its own DOM and never touches the
+	// network, so only Chrome itself is required (skipIfNoChrome would
+	// wrongly skip when the shared test site is unreachable).
+	if findChromeExecutable() == "" {
+		t.Skip("no Chrome/Chromium/Edge executable available")
+	}
+	b := NewBrowser()
+	defer b.doCloseSession("default", "itest-frame")
+
+	// about:blank is rejected by the navigation scheme gate, so bootstrap the
+	// tab via evaluate (the first evaluate creates the session) and write a
+	// same-origin iframe document with distinctive content directly.
+	setup := runBrowserAction(t, b, "evaluate", map[string]interface{}{
+		"expression": `document.open(); document.write('<html><body>MAIN<button id=mainbtn>main</button>' +
+			'<iframe id=content srcdoc="<html><body>FRAME<a href=\'f1\'>one</a><a href=\'f2\'>two</a></body></html>"></iframe>' +
+			'</body></html>'); document.close(); 'ok'`,
+	})
+	if setup.IsError {
+		t.Fatalf("frame fixture setup failed: %s", setup.Content)
+	}
+
+	// #5304 core: frame mode must return the value of a pure expression
+	// (the schema-documented form), evaluated with expression semantics.
+	result := runBrowserAction(t, b, "evaluate", map[string]interface{}{
+		"expression": "6 * 7",
+		"frame":      "iframe#content",
+	})
+	if result.IsError {
+		t.Fatalf("frame evaluate 6*7 failed: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "42") {
+		t.Errorf("frame evaluate 6*7 should return 42, got: %s", result.Content)
+	}
+
+	// #5304 secondary: a bare `document` in the expression must resolve to
+	// the IFRAME document, not the main frame's.
+	result = runBrowserAction(t, b, "evaluate", map[string]interface{}{
+		"expression": `document.querySelectorAll("a").length`,
+		"frame":      "iframe#content",
+	})
+	if result.IsError {
+		t.Fatalf("frame evaluate link count failed: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "2") {
+		t.Errorf("frame document should see 2 links (iframe doc), got: %s", result.Content)
+	}
+	// The main document has 0 <a> elements - if the wrapper still closed
+	// over the main frame this would return 0 and the check above would fail.
+
+	// #5304: body-style legacy expressions keep working in frame mode.
+	result = runBrowserAction(t, b, "evaluate", map[string]interface{}{
+		"expression": "return document.title",
+		"frame":      "iframe#content",
+	})
+	if result.IsError {
+		t.Fatalf("frame evaluate body-style failed: %s", result.Content)
+	}
+}
+
 func TestBrowserIntegration_Scroll(t *testing.T) {
 	skipIfNoChrome(t)
 	b := NewBrowser()

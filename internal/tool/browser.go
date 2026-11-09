@@ -167,7 +167,7 @@ func (b *Browser) Parameters() json.RawMessage {
 		},
 		"frame": {
 			"type": "string",
-			"description": "CSS selector of an iframe to operate within. When set, evaluate/extract/click/type actions will target elements inside the specified iframe (same-origin only). Example: 'iframe#content'."
+			"description": "CSS selector of an iframe to evaluate JavaScript in (evaluate action only, same-origin only). When set, the expression runs with document/window bound to the iframe's content document. Example: 'iframe#content'. click/type/extract always operate on the top document; use snapshot @eN refs to reach iframe content."
 		},
 		"width": {
 			"type": "integer",
@@ -1010,6 +1010,38 @@ func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector s
 	}, nil
 }
 
+// frameEvalExpressionJS builds the frame-scoped evaluate wrapper for
+// #5304. The iframe lookup runs at call time in the top document; the
+// user's expression is evaluated with pure-EXPRESSION semantics (same as
+// the no-frame path) inside a Function constructor call whose `document`
+// and `window` parameters shadow the main-frame globals with the iframe's
+// own. The Function constructor compiles at RUNTIME, so a body-style
+// expression (legacy `return ...` snippets) that fails the `return (...)`
+// wrap is catchable and falls back to raw-body semantics - early parse
+// errors of an arrow literal would NOT be catchable, which is why the
+// constructor is used here.
+func frameEvalExpressionJS(frameSelector, expression string) string {
+	q, _ := json.Marshal(frameSelector)
+	expr, _ := json.Marshal(expression)
+	return `(() => {
+		const f = document.querySelector(` + string(q) + `);
+		if (!f) throw new Error("iframe not found: ` + frameSelector + `");
+		if (!f.contentDocument) throw new Error("cannot access iframe contentDocument (cross-origin?): ` + frameSelector + `");
+		const w = f.contentDocument.defaultView;
+		let fn;
+		try {
+			fn = new Function("document", "window", "return (" + ` + string(expr) + ` + ")");
+		} catch (e) {
+			try {
+				fn = new Function("document", "window", ` + string(expr) + `);
+			} catch (e2) {
+				throw new Error("frame evaluate: expression failed to parse as expression or body: " + (e && e.message || e));
+			}
+		}
+		return fn.call(w, f.contentDocument, w);
+	})()`
+}
+
 func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression, frame string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1021,13 +1053,18 @@ func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression, 
 
 	actualExpr := expression
 	if frame != "" {
-		actualExpr = fmt.Sprintf(`(() => {
-			const f = document.querySelector(%q);
-			if (!f) throw new Error("iframe not found: %s");
-			if (!f.contentDocument) throw new Error("cannot access iframe contentDocument (cross-origin?): %s");
-			const fn = new Function(%q);
-			return fn.call(f.contentDocument.defaultView, f.contentDocument);
-		})()`, frame, frame, frame, expression)
+		// #5304: frame mode must keep the documented pure-expression
+		// semantics of the no-frame path (Runtime.evaluate on a plain
+		// expression). The old `new Function(expression)` wrapper treated
+		// the expression as a function BODY: its value was discarded as a
+		// statement and every call returned undefined (silent false result),
+		// and a bare `document`/`window` identifier still closed over the
+		// MAIN frame. frameEvalExpressionJS evaluates the expression with
+		// expression semantics and shadows document/window with the
+		// iframe's own document and window, fixing both defects with one
+		// shape; legacy body-style `return ...` inputs keep working via a
+		// catchable Function-constructor fallback.
+		actualExpr = frameEvalExpressionJS(frame, expression)
 	}
 
 	result, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](actualExpr))
