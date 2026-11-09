@@ -350,3 +350,54 @@ func TestBrowserIntegration_Close(t *testing.T) {
 		t.Errorf("close output: %s", result.Content)
 	}
 }
+
+// #5304: evaluate with frame must (a) return the expression's VALUE (the
+// former new Function wrapper always returned undefined) and (b) resolve a
+// bare `document` to the iframe's content document (not the main frame's).
+// Uses a srcdoc iframe so the frame is same-origin on any host page.
+func TestBrowserEvaluateFramePureExpression(t *testing.T) {
+	skipIfNoChrome(t)
+	b := NewBrowser()
+	defer b.doCloseSession("default", "itest")
+
+	page := "data:text/html,<html><body><h1 id='main'>main</h1>" +
+		"<iframe id='f' srcdoc=\"<div id='inside'>frame-content</div>\"></iframe>" +
+		"</body></html>"
+	runBrowserAction(t, b, "navigate", map[string]interface{}{"url": page})
+
+	// (a) pure-expression value survives the frame wrapper.
+	result := runBrowserAction(t, b, "evaluate", map[string]interface{}{
+		"expression": "6 * 7",
+		"frame":      "#f",
+	})
+	if result.IsError {
+		t.Fatalf("evaluate 6*7 in frame failed: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "42") {
+		t.Errorf("frame evaluate 6*7 should return 42, got: %s", result.Content)
+	}
+
+	// (b) bare `document` resolves to the iframe's document, not the main one.
+	result = runBrowserAction(t, b, "evaluate", map[string]interface{}{
+		"expression": "document.getElementById('inside') ? document.getElementById('inside').innerText : document.getElementById('main').innerText",
+		"frame":      "#f",
+	})
+	if result.IsError {
+		t.Fatalf("evaluate shadowed document failed: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "frame-content") {
+		t.Errorf("bare document must resolve to the iframe's document (expected frame-content), got: %s", result.Content)
+	}
+
+	// extract with frame scopes the selector to the iframe's document.
+	result = runBrowserAction(t, b, "extract", map[string]interface{}{
+		"selector": "#inside",
+		"frame":    "#f",
+	})
+	if result.IsError {
+		t.Fatalf("extract in frame failed: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "frame-content") {
+		t.Errorf("frame extract should find #inside in the iframe, got: %s", result.Content)
+	}
+}

@@ -167,7 +167,7 @@ func (b *Browser) Parameters() json.RawMessage {
 		},
 		"frame": {
 			"type": "string",
-			"description": "CSS selector of an iframe to operate within. When set, evaluate/extract/click/type actions will target elements inside the specified iframe (same-origin only). Example: 'iframe#content'."
+			"description": "CSS selector of an iframe to operate within (same-origin only). Supported by evaluate and extract: the expression/selector runs with document/window scoped to the iframe's content document (#5304). click/type do not support frame yet and return an explicit error when set. Example: 'iframe#content'."
 		},
 		"width": {
 			"type": "integer",
@@ -214,6 +214,11 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		if a.Selector == "" {
 			return errResult("selector is required for click action")
 		}
+		if a.Frame != "" {
+			// #5304: frame was silently ignored here before (the schema
+			// promised support it did not have). Fail loudly instead.
+			return errResult("frame is not supported for click yet: use evaluate with frame (el.click() on the shadowed document) or a selector-based click once frame support lands")
+		}
 		sel, ok := b.resolveSelectorArg(a.Profile, a.Session, a.Selector)
 		if !ok {
 			return errResult(fmt.Sprintf("unresolved element ref %q: run the 'snapshot' action first (refs die on navigation)", a.Selector))
@@ -224,6 +229,10 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		if a.Selector == "" {
 			return errResult("selector is required for type action")
 		}
+		if a.Frame != "" {
+			// #5304: same as click - previously silently ignored.
+			return errResult("frame is not supported for type yet: use evaluate with frame (value + input/change events on the shadowed document) or wait for native support")
+		}
 		sel, ok := b.resolveSelectorArg(a.Profile, a.Session, a.Selector)
 		if !ok {
 			return errResult(fmt.Sprintf("unresolved element ref %q: run the 'snapshot' action first (refs die on navigation)", a.Selector))
@@ -231,11 +240,14 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		return b.doType(ctx, a.Profile, a.Session, sel, a.Text, a.WaitFor, a.WaitTimeout, a.Headless)
 	},
 	"extract": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.Frame != "" && a.Selector == "" {
+			return errResult("frame extraction requires a CSS selector (the no-selector full-page branch has no frame scope)")
+		}
 		sel, ok := b.resolveSelectorArg(a.Profile, a.Session, a.Selector)
 		if !ok {
 			return errResult(fmt.Sprintf("unresolved element ref %q: run the 'snapshot' action first (refs die on navigation)", a.Selector))
 		}
-		return b.doExtract(ctx, a.Profile, a.Session, sel, a.Headless)
+		return b.doExtract(ctx, a.Profile, a.Session, sel, a.Frame, a.Headless)
 	},
 	"screenshot": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
 		return b.doScreenshot(ctx, a.Profile, a.Session, a.Selector, a.Headless, a.OutputPath)
@@ -777,7 +789,7 @@ func clickEffectNote(urlBefore, urlAfter, stateBefore, stateAfter string) string
 	if stateAfter != "" && stateAfter != stateProbeFailed && stateBefore != stateProbeFailed && stateAfter != stateBefore {
 		return fmt.Sprintf("\neffect: confirmed (state: %v)", stateAfter)
 	}
-	return "\n⚠ no observable effect: URL unchanged and selector state unchanged — " +
+	return "\n⚠ no observable effect: URL unchanged and selector state unchanged - " +
 		"follow up with action 'extract'/'screenshot' to confirm the click landed before building on it"
 }
 
@@ -840,7 +852,7 @@ func (b *Browser) doType(ctx context.Context, profile, session, selector, text, 
 	return Result{Content: fmt.Sprintf("Typed into %s: %q", selector, text)}, nil
 }
 
-func (b *Browser) doExtract(ctx context.Context, profile, session, selector string, headless *bool) (Result, error) {
+func (b *Browser) doExtract(ctx context.Context, profile, session, selector, frame string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
@@ -860,11 +872,18 @@ func (b *Browser) doExtract(ctx context.Context, profile, session, selector stri
 					value: el.value || '',
 					id: el.id || '',
 					className: el.className || '',
-				}));
-			})()`, selector)
+			}));
+		})()`, selector)
+		if frame != "" {
+			// #5304: scope the selector to the iframe's content document
+			// via the same shadowing wrapper evaluate uses.
+			js = frameScopeJS(frame, js)
+		}
 
-		if err := chromedp.Do(timeoutCtx, chromedp.WaitReady(chromedp.CSS("body"))); err != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("wait failed: %v", err)}, nil
+		if frame == "" {
+			if err := chromedp.Do(timeoutCtx, chromedp.WaitReady(chromedp.CSS("body"))); err != nil {
+				return Result{IsError: true, Content: fmt.Sprintf("wait failed: %v", err)}, nil
+			}
 		}
 		var evalErr error
 		results, evalErr = chromedp.Run(timeoutCtx, chromedp.Evaluate[[]map[string]string](js))
@@ -1010,6 +1029,28 @@ func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector s
 	}, nil
 }
 
+// frameScopeJS builds JavaScript that resolves the iframe selected by
+// frame and evaluates expression with document/window shadowed to the
+// frame's (#5304). The expression is evaluated as a PURE EXPRESSION -
+// matching the no-frame semantics of chromedp.Evaluate - so its value is
+// the wrapper's return value. The former implementation wrapped the
+// expression in `new Function(expression)` and called it as a function
+// BODY: statement-evaluated, value discarded, undefined always returned
+// (silent false results), and a bare `document` identifier still closed
+// over the main frame's document instead of the iframe's.
+func frameScopeJS(frame, expression string) string {
+	return fmt.Sprintf(`(() => {
+		const f = document.querySelector(%q);
+		if (!f) throw new Error("iframe not found: %s");
+		if (!f.contentDocument) throw new Error("cannot access iframe contentDocument (cross-origin?): %s");
+		const d = f.contentDocument;
+		const w = d.defaultView;
+		return ((document, window) => (
+			%s
+		))(d, w);
+	})()`, frame, frame, frame, expression)
+}
+
 func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression, frame string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
@@ -1021,13 +1062,7 @@ func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression, 
 
 	actualExpr := expression
 	if frame != "" {
-		actualExpr = fmt.Sprintf(`(() => {
-			const f = document.querySelector(%q);
-			if (!f) throw new Error("iframe not found: %s");
-			if (!f.contentDocument) throw new Error("cannot access iframe contentDocument (cross-origin?): %s");
-			const fn = new Function(%q);
-			return fn.call(f.contentDocument.defaultView, f.contentDocument);
-		})()`, frame, frame, frame, expression)
+		actualExpr = frameScopeJS(frame, expression)
 	}
 
 	result, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](actualExpr))
@@ -1495,7 +1530,7 @@ func (b *Browser) doUpload(ctx context.Context, profile, session, selector, file
 	countExpr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);return e&&e.files?e.files.length:-1;})()`, selector)
 	fileCount, countErr := chromedp.Run(timeoutCtx, chromedp.Evaluate[int](countExpr))
 	if countErr == nil && fileCount == 0 {
-		return Result{IsError: true, Content: fmt.Sprintf("upload had no effect: %s reports 0 selected files (controlled input cleared it?) — retry via a visible file chooser or verify the selector", selector)}, nil
+		return Result{IsError: true, Content: fmt.Sprintf("upload had no effect: %s reports 0 selected files (controlled input cleared it?) - retry via a visible file chooser or verify the selector", selector)}, nil
 	}
 	countNote := ""
 	if fileCount > 0 {
