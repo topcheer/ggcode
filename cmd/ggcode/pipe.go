@@ -145,7 +145,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 
 	buildCurrentSystemPrompt := func() string {
 		gitStatus := detectGitStatus(workingDir)
-		systemPrompt := agentruntime.BuildInteractiveSystemPrompt(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, "")
+		systemPrompt := agentruntime.BuildInteractiveSystemPrompt(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, "", "")
 		if hint := memory.BuildProjectMemoryHint(projectMemFiles, workingDir); hint != "" {
 			systemPrompt += "\n\n" + hint
 		}

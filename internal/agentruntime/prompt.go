@@ -24,8 +24,9 @@ func BuildInteractiveSystemPrompt(
 	projectAutoMem *memory.AutoMemory,
 	gitStatus string,
 	remoteAgentsInfo string,
+	sharedWorkspaceAgents string,
 ) string {
-	prompt, _ := BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, globalAutoMem, projectAutoMem, gitStatus, remoteAgentsInfo)
+	prompt, _ := BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, globalAutoMem, projectAutoMem, gitStatus, remoteAgentsInfo, sharedWorkspaceAgents)
 	return prompt
 }
 
@@ -39,6 +40,7 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 	projectAutoMem *memory.AutoMemory,
 	gitStatus string,
 	remoteAgentsInfo string,
+	sharedWorkspaceAgents string,
 ) (string, []string) {
 	toolNames := sortedToolNames(registry)
 	customCmdNames := make([]string, 0)
@@ -114,6 +116,13 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 	}
 	if strings.TrimSpace(remoteAgentsInfo) != "" {
 		prompt += "\n\n## Remote Agents\n" + strings.TrimSpace(remoteAgentsInfo)
+	}
+
+	// #5339 (shared-workspace agents): rendered as its own pre-formatted
+	// section so the caller (lanchat formatter) owns determinism — a stable
+	// byte layout keeps the KV-cache prefix valid across prompt rebuilds.
+	if strings.TrimSpace(sharedWorkspaceAgents) != "" {
+		prompt += "\n\n" + strings.TrimSpace(sharedWorkspaceAgents)
 	}
 
 	prompt = appendAutoMemory(prompt, globalAutoMem, projectAutoMem, "")

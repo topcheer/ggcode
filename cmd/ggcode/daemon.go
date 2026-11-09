@@ -275,7 +275,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				remoteAgentsInfo = a2a.FormatRemoteAgents(instances, nil)
 			}
 		}
-		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, remoteAgentsInfo)
+		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, remoteAgentsInfo, "")
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 
