@@ -384,6 +384,32 @@ im:
 
 IM adapters (QQ, Telegram, Discord, Slack, DingTalk, Feishu, etc.) are configured at runtime via the TUI or daemon. See [IM Integration](./im-integration.md) for details.
 
+## Memory
+
+Memory v2: durable memories (global + project) are no longer injected into
+the system prompt. The prompt carries only a fixed two-line pointer to the
+`memory_recall` tool, which searches memories on demand by keyword (scope
+`all` | `project` | `global`). This keeps the prompt byte-stable regardless
+of store size and stops the KV-cache drift caused by injecting hundreds of
+memory titles.
+
+```yaml
+memory:
+  prompt_inject: pointer  # pointer (default) | full (legacy: inline bodies + title index)
+  curator:
+    enabled: true         # resident background curator (default true)
+    model: ""             # curator LLM; empty = current provider default model
+```
+
+- `prompt_inject: full` restores the pre-v2 behavior verbatim (inlined entry
+  bodies plus the title index) as a rollback escape hatch.
+- The curator watches `save_memory`/`delete_memory` events, batches them
+  behind a 45s debounce, and runs one headless LLM pass that tags/normalizes
+  titles, merges near-duplicates, and archives stale temporal facts
+  ("has completed ... do NOT ..." style one-time events) - at most 12
+  actions per batch, executed through the same store APIs the memory tools
+  use. Any LLM failure silently abandons the batch; nothing is retried.
+
 ## Environment Variables
 
 | Variable | Description |
