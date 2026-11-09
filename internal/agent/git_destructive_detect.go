@@ -43,6 +43,7 @@ var (
 	reGitRebase          = regexp.MustCompile(`\bgit\s+rebase\b`)
 	reGitFilterBranch    = regexp.MustCompile(`\bgit\s+(filter-branch|filter-repo)\b`)
 	reRmRf               = regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rR][a-zA-Z]*f\b|-[a-zA-Z]*f[a-zA-Z]*[rR]\b|-[rR]f\b|-[rR]\s+-f\b|-f\s+-[rR]\b|--recursive\s+--force\b|--force\s+--recursive\b|--recursive\s+-f\b|-f\s+--recursive\b)`)
+	reHeredocStart       = regexp.MustCompile(`<<-?[ \t]*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?[ \t]*(#.*)?$`)
 )
 
 func normalizeGitGlobalFlags(cmd string) string {
@@ -76,6 +77,49 @@ func normalizeGitGlobalFlags(cmd string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// #5315: heredoc bodies are free-text payload (observability ledger
+// appends, log snippets, echo of documented patterns) - the raw-string
+// rm scan must not see them. Drop every line between a <<[-]WORD
+// redirect and its closing WORD line.
+func stripHeredocBodies(cmd string) string {
+	lines := strings.Split(cmd, "\n")
+	out := make([]string, 0, len(lines))
+	inHeredoc := false
+	terminator := ""
+	for _, line := range lines {
+		if inHeredoc {
+			if strings.TrimSpace(line) == terminator {
+				inHeredoc = false
+			}
+			continue
+		}
+		out = append(out, line)
+		if m := reHeredocStart.FindStringSubmatch(line); m != nil {
+			inHeredoc = true
+			terminator = m[1]
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// #5315: rm must appear at a command position - a chain segment start
+// (after ; && || | & or newline) with optional env-prefix assignments
+// (VAR=val ...). Text mentioning rm anywhere else (echo, grep args,
+// comments) is not an invocation.
+func firstRmCommandSegment(cmd string) string {
+	cleaned := stripHeredocBodies(cmd)
+	for _, seg := range reChainSep.Split(cleaned, -1) {
+		fields := strings.Fields(strings.TrimSpace(seg))
+		for len(fields) > 0 && strings.Contains(fields[0], "=") && !strings.HasPrefix(fields[0], "-") && !strings.HasPrefix(fields[0], "$") {
+			fields = fields[1:]
+		}
+		if len(fields) > 0 && fields[0] == "rm" {
+			return strings.Join(fields, " ")
+		}
+	}
+	return ""
 }
 
 func detectDestructiveInShellCommand(cmd string) []destructivePattern {
@@ -183,7 +227,10 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		})
 	}
 
-	if reRmRf.MatchString(cmd) {
+	// #5315: only an actual rm invocation (command position, heredoc
+	// bodies stripped) triggers the critical rm_rf pattern; text
+	// mentioning the pattern does not.
+	if rmSeg := firstRmCommandSegment(cmd); rmSeg != "" && reRmRf.MatchString(rmSeg) {
 		found = append(found, destructivePattern{
 			name:        "rm_rf",
 			severity:    "critical",
