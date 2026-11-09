@@ -65,23 +65,15 @@ export default function App() {
     setThemeState(next);
   };
 
-  // 字号档循环(P5-5):调整 text-ui-* 基准,持久化 localStorage
-  const FONT_SIZES = ["12px", "13px", "14px", "16px"] as const;
-  const [fontSize, setFontSizeState] = useState<string>(() => localStorage.getItem("ggcode-font-size") || "14px");
+  // 字号档(P5-5):初始应用持久化值;调档 UI 在设置→常规(GeneralPage)
   useEffect(() => {
-    document.documentElement.style.fontSize = fontSize;
-  }, [fontSize]);
-  const cycleFontSize = () => {
-    const idx = FONT_SIZES.indexOf(fontSize as (typeof FONT_SIZES)[number]);
-    const next = FONT_SIZES[(idx + 1) % FONT_SIZES.length];
-    localStorage.setItem("ggcode-font-size", next);
-    setFontSizeState(next);
-  };
+    document.documentElement.style.fontSize = localStorage.getItem("ggcode-font-size") || "14px";
+  }, []);
 
   const paletteActions: PaletteAction[] = [
     { id: "go-chat", label: "打开会话", hint: "视图", run: () => setView("chat") },
     { id: "go-settings", label: "打开设置", hint: "视图", run: () => setView("settings") },
-    { id: "theme", label: `切换主题 (当前:${THEME_LABEL[theme]})`, hint: "dark→light→system", run: cycleTheme },
+    { id: "theme", label: `切换主题 (当前:${THEME_LABEL[currentTheme()]})`, hint: "亦在 设置→常规", run: cycleTheme },
     { id: "new-chat", label: "新建会话(清空当前聊天视图)", hint: "⌘N", run: resetChat },
     // 历史会话切换(P4-2):点击后回 chat 视图并重拉该 session 镜像
     ...sessions.slice(0, 8).map((s) => ({
@@ -194,20 +186,6 @@ export default function App() {
             onClick={() => setView("settings")}
           >
             ⚙ 设置
-          </button>
-          <button
-            className="rounded-lg px-3 py-2 text-left text-ui-sm text-foreground-subtle transition-colors hover:bg-hover hover:text-foreground"
-            onClick={cycleTheme}
-            title="切换主题 (dark → light → system)"
-          >
-            主题: {THEME_LABEL[theme]}
-          </button>
-          <button
-            className="rounded-lg px-3 py-2 text-left text-ui-sm text-foreground-subtle transition-colors hover:bg-hover hover:text-foreground"
-            onClick={cycleFontSize}
-            title="字号 (12 → 13 → 14 → 16)"
-          >
-            字号: {fontSize.replace("px", "")}
           </button>
         </nav>
         {/* 会话列表(同桌面逻辑:本 workspace 全量;busy 会话锁定不可点) */}
