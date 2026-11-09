@@ -1130,7 +1130,9 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   }) async {
     await initialize();
     if (!ref.mounted) return;
-    final targetSessionId = sessionId ?? state.selectedSessionId;
+    final normalizedSessionId =
+        (sessionId == null || sessionId.isEmpty) ? null : sessionId;
+    final targetSessionId = normalizedSessionId ?? state.selectedSessionId;
     final targetWorkspaceKey =
         workspaceKey ?? state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
     final sessions = Map<String, CachedSessionRecord>.from(state.sessions);
