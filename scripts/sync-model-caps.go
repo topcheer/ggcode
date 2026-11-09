@@ -219,6 +219,63 @@ var builtinEndpointFallback = map[string][]string{
 	"anthropic": {"https://api.anthropic.com"},
 }
 
+// #5332: local correction layer for known-upstream mislabels. The weekly
+// models.dev sync correctly drift-guards nothing beyond the generated
+// tests, so bad rows (e.g. o3-mini vision=true) reach the table and trip
+// Verify generated code. Overrides are applied AFTER collection and are
+// auditable: every entry carries a reason and the upstream date checked.
+// Remove an entry once models.dev fixes the row upstream.
+type capabilityOverride struct {
+	SupportsVision *bool
+	Reason         string
+	UpstreamCheck  string // date the upstream row was last verified bad
+}
+
+// capabilityOverrides keys are lowercased entry IDs (both bare and
+// provider-qualified forms are honored by applyCapabilityOverrides).
+var capabilityOverrides = map[string]capabilityOverride{
+	"o3-mini": {
+		SupportsVision: boolPtr(false),
+		Reason:         "text-only model; models.dev mirrors an upstream vision mislabel",
+		UpstreamCheck:  "2026-11-09 (#5332 sync run 42602486566)",
+	},
+	"openai/o3-mini": {
+		SupportsVision: boolPtr(false),
+		Reason:         "text-only model; models.dev mirrors an upstream vision mislabel",
+		UpstreamCheck:  "2026-11-09 (#5332 sync run 42602486566)",
+	},
+	"openai/o3-mini-high": {
+		SupportsVision: boolPtr(false),
+		Reason:         "text-only model; models.dev mirrors an upstream vision mislabel",
+		UpstreamCheck:  "2026-11-09 (#5332 sync run 42602486566)",
+	},
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// applyCapabilityOverrides patches collected entries with locally
+// verified corrections before code generation.
+func applyCapabilityOverrides(entries []modelEntry) []modelEntry {
+	for i := range entries {
+		id := strings.ToLower(strings.TrimSpace(entries[i].ID))
+		if ov, ok := capabilityOverrides[id]; ok {
+			if ov.SupportsVision != nil {
+				entries[i].SupportsVision = *ov.SupportsVision
+			}
+			continue
+		}
+		// provider-qualified fallback: "openai/o3-mini" style rows
+		if idx := strings.LastIndex(id, "/"); idx >= 0 {
+			if ov, ok := capabilityOverrides[id[idx+1:]]; ok {
+				if ov.SupportsVision != nil {
+					entries[i].SupportsVision = *ov.SupportsVision
+				}
+			}
+		}
+	}
+	return entries
+}
+
 func main() {
 	dryRun := flag.Bool("dry-run", false, "Print to stdout instead of writing file")
 	forceShrink := flag.Bool("force", false, "Allow >20%% entry-count shrinkage (checked against the existing output file)")
@@ -238,6 +295,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, "\nFinal total models: %d\n\n", len(allEntries))
 
 	allEntries = append(allEntries, localModelExtras...)
+	allEntries = applyCapabilityOverrides(allEntries)
 
 	code := generateGoCode(allEntries, sections)
 	vdCode := generateVendorDefaults(providers)
