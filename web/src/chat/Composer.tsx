@@ -19,6 +19,8 @@ export default function Composer({
   const busy = useChat((s) => s.busy);
   const conn = useChat((s) => s.conn);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // 触屏设备(pointer: coarse):无组合键,Enter 直发(桌面保持 ⌘⏎ 发送/Shift+⏎ 换行)
+  const isTouch = typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
   const fileRef = useRef<HTMLInputElement>(null);
   const [mention, setMention] = useState<{ query: string; at: number; rect: DOMRect | null } | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -121,7 +123,7 @@ export default function Composer({
         <textarea
           ref={taRef}
           className="text-[16px] md:text-ui-base w-full resize-none bg-transparent text-wrap-phrase text-foreground placeholder:text-foreground-subtlest focus:outline-none"
-          placeholder="输入消息…(⌘⏎ 发送 / Shift+⏎ 换行)"
+          placeholder={isTouch ? "输入消息…(回车发送)" : "输入消息…(⌘⏎ 发送 / Shift+⏎ 换行)"}
           rows={2}
           value={value}
           onPaste={onPaste}
@@ -139,7 +141,7 @@ export default function Composer({
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            if (e.key === "Enter" && !e.shiftKey && (isTouch || e.metaKey || e.ctrlKey)) {
               e.preventDefault();
               submit();
             }
@@ -194,7 +196,7 @@ export default function Composer({
         )}
         <div className="flex items-center justify-between pt-1">
           <span className="text-ui-xs text-foreground-subtlest">
-            {recording ? "🔴 录音中…" : conn !== "open" ? "离线中,消息将在重连后补发" : busy ? "生成中…(等待完成)" : "⌘⏎ 发送"}
+            {recording ? "🔴 录音中…" : conn !== "open" ? "离线中,消息将在重连后补发" : busy ? "生成中…(等待完成)" : isTouch ? "回车发送" : "⌘⏎ 发送"}
           </span>
           <div className="flex items-center gap-1.5">
             <input

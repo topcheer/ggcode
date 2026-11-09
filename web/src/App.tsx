@@ -46,7 +46,7 @@ export default function App() {
   const [paneOpen, setPaneOpen] = useState(false); // 移动端右栏 overlay(lg 以下)
   // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
   // 会话列表(左栏,同桌面逻辑:本 workspace 全量,锁定态由 locked_by_pid 标示)
-  const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string; locked_by_pid?: number }>>([]);
+  const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string; locked_by_pid?: number; locked_by_self?: boolean }>>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>("");
   const [switching, setSwitching] = useState(false);
 
@@ -219,7 +219,8 @@ export default function App() {
           <div className="text-ui-xs px-3 py-1.5 text-foreground-subtlest">会话</div>
           {sessions.map((s) => {
             const current = s.id === currentSessionId;
-            const locked = !!s.locked_by_pid;
+            // locked_by_self=锁定者是本实例自己(自己打开的会话),不算“被锁”
+            const locked = !!s.locked_by_pid && !s.locked_by_self;
             return (
               <button
                 key={s.id}
@@ -257,8 +258,16 @@ export default function App() {
             ☰
           </button>
           <span className="text-ui-sm font-semibold">ggcode</span>
+          {/* 移动端 ⌘K 等价入口(pointer: coarse 无组合键,点按唤起命令面板) */}
           <button
-            className="ml-auto text-ui-sm rounded-lg px-2 py-1 text-foreground-subtle hover:bg-hover"
+            className="text-ui-sm ml-auto rounded-lg px-2 py-1 text-foreground-subtle hover:bg-hover md:hidden"
+            onClick={() => setPaletteOpen(true)}
+            title="命令面板"
+          >
+            ⌘
+          </button>
+          <button
+            className="text-ui-sm rounded-lg px-2 py-1 text-foreground-subtle hover:bg-hover"
             onClick={() => setPaneOpen(true)}
             title="活动面板"
           >

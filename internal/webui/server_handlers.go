@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -1085,7 +1086,9 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		Model     string `json:"model,omitempty"`
 		// 锁定态:他实例持有 flock(会话正被另一 TUI/desktop 实例使用)——
 		// 探测用 non-blocking flock 试锁后立即释放,不产生副作用
-		LockedByPID int `json:"locked_by_pid,omitempty"`
+		// locked_by_self:锁定者就是本实例(自己打开的会话),非“被他人锁”
+		LockedByPID  int  `json:"locked_by_pid,omitempty"`
+		LockedBySelf bool `json:"locked_by_self,omitempty"`
 	}
 	type workspaceGroup struct {
 		Workspace string           `json:"workspace"`
@@ -1118,16 +1121,18 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			groupOrder = append(groupOrder, ws)
 		}
 		g := groupMap[ws]
+		probe := sessionProbeLockHolderPID(ses.ID)
 		g.Sessions = append(g.Sessions, sessionSummary{
-			ID:          ses.ID,
-			Title:       ses.Title,
-			CreatedAt:   ses.CreatedAt.Format(time.RFC3339),
-			UpdatedAt:   ses.UpdatedAt.Format(time.RFC3339),
-			MsgCount:    len(ses.Messages),
-			Vendor:      ses.Vendor,
-			Endpoint:    ses.Endpoint,
-			Model:       ses.Model,
-			LockedByPID: sessionProbeLockHolderPID(ses.ID),
+			ID:           ses.ID,
+			Title:        ses.Title,
+			CreatedAt:    ses.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:    ses.UpdatedAt.Format(time.RFC3339),
+			MsgCount:     len(ses.Messages),
+			Vendor:       ses.Vendor,
+			Endpoint:     ses.Endpoint,
+			Model:        ses.Model,
+			LockedByPID:  probe,
+			LockedBySelf: probe != 0 && probe == os.Getpid(),
 		})
 		g.Count++
 	}
