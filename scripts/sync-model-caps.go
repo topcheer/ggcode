@@ -96,6 +96,15 @@ var localModelExtras = []modelEntry{
 	{ID: "glm-4v-plus", ContextWindow: 128000, MaxOutputTokens: 128000, SupportsVision: true, SourceProvider: "zhipuai"},
 }
 
+// visionOverrides - #5332 sanitize layer. Upstream models.dev data has
+// repeatedly mislabeled these text-only models as vision-capable (the
+// #5320 drift-guard pin fires on every sync re-introducing the label).
+// Each entry cites why the local correction beats upstream.
+var visionOverrides = map[string]bool{
+	"openai/o3-mini":      false, // text-only (OpenAI docs; #5320 calibration pin)
+	"openai/o3-mini-high": false, // text-only (OpenAI docs; #5320 calibration pin)
+}
+
 var desiredProviders = map[string]string{
 	"302ai":                    "302.AI",
 	"aihubmix":                 "AIHubMix",
@@ -312,12 +321,19 @@ func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections
 			if m.ContextWindow <= 0 {
 				continue
 			}
+			id := strings.ToLower(strings.TrimSpace(m.ID))
 			e := modelEntry{
-				ID:              strings.ToLower(strings.TrimSpace(m.ID)),
+				ID:              id,
 				ContextWindow:   m.ContextWindow,
-				MaxOutputTokens: clampMaxOutputTokens(strings.ToLower(strings.TrimSpace(m.ID)), m.DefaultMaxTokens),
+				MaxOutputTokens: clampMaxOutputTokens(id, m.DefaultMaxTokens),
 				SupportsVision:  m.SupportsAttachments,
 				SourceProvider:  provider.ID,
+			}
+			// #5332: sanitize layer - known upstream mislabels are corrected
+			// before generation. The drift-guard pins are ground truth; the
+			// sync pipeline must not regress them.
+			if keep, known := visionOverrides[id]; known {
+				e.SupportsVision = keep
 			}
 			sectionEntries = append(sectionEntries, e)
 		}
