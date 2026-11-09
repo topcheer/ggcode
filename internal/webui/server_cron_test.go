@@ -1,9 +1,7 @@
 package webui
 
 import (
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -12,29 +10,40 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
+// 钉测契约(#cron-display-fix):真实存储是 ~/.ggcode/cron-jobs/<timestamp-id>.json
+// 每任务一文件、{"jobs":[...]} 包裹(internal/cron Scheduler 布局)。
+// handler 扫描目录聚合全部任务;HOME 隔离而非 workspace 键过滤。
 func TestCronJobsReadOnly(t *testing.T) {
-	ws := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	// 布景:按 workspace hash 分桶写一个 jobs 文件(复刻 cron.MigrateWorkspaceJobs 布局)
-	h := sha256.Sum256([]byte(ws))
 	dir := filepath.Join(home, ".ggcode", "cron-jobs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// 布景:复刻 scheduler 真实布局——两个任务文件,wrapped 形态
 	jobs := []map[string]interface{}{
 		{"id": "j1", "cron_expr": "*/20 * * * *", "prompt": "巡检", "recurring": true},
 		{"id": "j2", "cron_expr": "0 9 * * *", "prompt": "日报", "recurring": false, "paused": true},
 	}
-	blob, _ := json.Marshal(jobs)
-	if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%x", h)+".json"), blob, 0o644); err != nil {
+	blob, _ := json.Marshal(map[string]interface{}{"jobs": jobs})
+	if err := os.WriteFile(filepath.Join(dir, "20260623-212644-f183fed82fddf847.json"), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	solo, _ := json.Marshal(map[string]interface{}{"jobs": []map[string]interface{}{
+		{"id": "j0", "cron_expr": "@hourly", "prompt": "单任务文件", "recurring": true},
+	}})
+	if err := os.WriteFile(filepath.Join(dir, "20260701-090000-0123456789abcdef.json"), solo, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 噪音:.flock 与非 json 不应被聚合
+	if err := os.WriteFile(filepath.Join(dir, "20260623-212644-f183fed82fddf847.json.flock"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
-	s.SetSessionStore(nil, ws)
+	s.SetSessionStore(nil, t.TempDir())
 
 	req := httptest.NewRequest("GET", "/api/cron/jobs", nil)
 	rec := httptest.NewRecorder()
@@ -46,25 +55,33 @@ func TestCronJobsReadOnly(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(out) != 2 {
-		t.Fatalf("expected 2 jobs, got %d: %v", len(out), out)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 jobs across 2 files, got %d: %v", len(out), out)
 	}
-	if out[0]["cron_expr"] != "*/20 * * * *" {
-		t.Errorf("cron_expr = %v", out[0]["cron_expr"])
+	// 排序按 ID: j0 < j1 < j2
+	if out[0]["id"] != "j0" || out[1]["id"] != "j1" || out[2]["id"] != "j2" {
+		t.Errorf("id sort wrong: %v", out)
+	}
+	if out[2]["cron_expr"] != "0 9 * * *" {
+		t.Errorf("cron_expr = %v", out[2]["cron_expr"])
+	}
+	if out[2]["paused"] != true {
+		t.Errorf("paused flag lost: %v", out[2])
 	}
 
-	// 无分桶文件:空数组而非错误
+	// 无 cron-jobs 目录:空数组而非错误
+	t.Setenv("HOME", t.TempDir())
 	s2 := NewServer(config.DefaultConfig())
 	s2.SetSessionStore(nil, t.TempDir())
 	req2 := httptest.NewRequest("GET", "/api/cron/jobs", nil)
 	rec2 := httptest.NewRecorder()
 	s2.handleCronJobs(rec2, req2)
 	if rec2.Code != 200 {
-		t.Fatalf("missing-bucket status = %d", rec2.Code)
+		t.Fatalf("missing-dir status = %d", rec2.Code)
 	}
 	var empty []map[string]interface{}
 	if err := json.Unmarshal(rec2.Body.Bytes(), &empty); err != nil {
-		t.Fatalf("missing-bucket body not a JSON list: %s", rec2.Body.String())
+		t.Fatalf("missing-dir body not a JSON list: %s", rec2.Body.String())
 	}
 	if len(empty) != 0 {
 		t.Errorf("expected empty list, got %v", empty)
