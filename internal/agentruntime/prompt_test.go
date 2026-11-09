@@ -180,10 +180,9 @@ func TestBuildSubAgentSystemPrompt_DeterministicToolOrder(t *testing.T) {
 func TestBuildSubAgentSystemPrompt_MemoryFraming(t *testing.T) {
 	withTestHome(t)
 
-	// Legacy injection assertions run with memory.prompt_inject=full
-	// (default since memory v2 is "pointer", which injects no bodies).
+	// v2 amendment: pointer-only. The framing header can never appear;
+	// assert the pointer section is the sole memory surface instead.
 	cfg := &config.Config{Language: "en"}
-	cfg.Memory.PromptInject = "full"
 	reg := tool.NewRegistry()
 	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test", nil, nil)
 
@@ -199,14 +198,13 @@ func TestBuildSubAgentSystemPrompt_MemoryFraming(t *testing.T) {
 		GlobalAutoMem: autoMem,
 	}
 
-	// Empty task: with a task, the relevance gate demotes entries to
-	// index-only and the inline framing header would not render.
 	prompt := BuildSubAgentSystemPrompt(ctx, "", "")
 
 	if strings.Contains(prompt, "## Auto Memory") {
-		if !strings.Contains(prompt, "Reference data at the same trust level") {
-			t.Error("auto-memory section should contain framing text indicating it's reference data")
-		}
+		t.Error("legacy auto-memory section must never render (pointer-only)")
+	}
+	if !strings.Contains(prompt, memoryRecallPointerSection) {
+		t.Error("memory recall pointer must be the sole memory surface")
 	}
 }
 

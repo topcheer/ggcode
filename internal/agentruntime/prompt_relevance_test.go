@@ -8,7 +8,11 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-func TestSubAgentPromptMemoryRelevanceWiring(t *testing.T) {
+// v2 amendment: pointer-only injection. Relevance wiring no longer has a
+// prompt surface — the store is searched on demand via memory_recall. This
+// pin guards that NEITHER related NOR unrelated memory bodies/keys leak
+// into the sub-agent prompt, regardless of task relevance.
+func TestSubAgentPromptMemoryNeverInjected(t *testing.T) {
 	dir := t.TempDir()
 	am := memory.NewProjectAutoMemory(dir)
 	if am == nil {
@@ -22,22 +26,23 @@ func TestSubAgentPromptMemoryRelevanceWiring(t *testing.T) {
 	}
 
 	ctx := SubAgentPromptContext{
-		WorkingDir: dir,
-		// Legacy inlining semantics only hold in full mode; the default
-		// since memory v2 is pointer mode (no bodies, no index).
-		Cfg:            &config.Config{Memory: config.MemoryConfig{PromptInject: "full"}},
+		WorkingDir:     dir,
+		Cfg:            &config.Config{},
 		ProjectAutoMem: am,
 	}
 	prompt := BuildSubAgentSystemPrompt(ctx, "fix the flaky postgres migration test", "")
 
-	if !strings.Contains(prompt, "postgres-migration-impl") {
-		t.Fatal("related memory must be present in the sub-agent prompt")
+	if !strings.Contains(prompt, memoryRecallPointerSection) {
+		t.Fatal("memory recall pointer must be present")
 	}
-
-	if strings.Contains(prompt, "docker push registry.example") {
-		t.Fatal("unrelated memory body must not be inlined into the sub-agent prompt")
-	}
-	if !strings.Contains(prompt, "docker-deploy-impl") {
-		t.Fatal("unrelated memory key must remain in the index for read_file retrieval")
+	for _, leak := range []string{
+		"postgres-migration-impl",      // related key: still must not inject
+		"docker-deploy-impl",           // unrelated key
+		"docker push registry.example", // any body
+		"## Auto Memory",               // legacy section header
+	} {
+		if strings.Contains(prompt, leak) {
+			t.Fatalf("memory must not leak into the prompt (pointer-only): %q", leak)
+		}
 	}
 }

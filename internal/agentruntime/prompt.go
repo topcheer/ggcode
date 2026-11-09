@@ -125,7 +125,7 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		prompt += "\n\n" + strings.TrimSpace(sharedWorkspaceAgents)
 	}
 
-	prompt = appendAutoMemory(prompt, globalAutoMem, projectAutoMem, "", cfg.MemoryPromptInjectMode())
+	prompt = appendAutoMemory(prompt, globalAutoMem, projectAutoMem, "")
 
 	namedAgentInfo := buildNamedAgentHint(workingDir)
 	if namedAgentInfo != "" {
@@ -284,7 +284,7 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext, task string) string {
 		}
 	}
 
-	prompt = appendAutoMemory(prompt, ctx.GlobalAutoMem, ctx.ProjectAutoMem, task, ctx.Cfg.MemoryPromptInjectMode())
+	prompt = appendAutoMemory(prompt, ctx.GlobalAutoMem, ctx.ProjectAutoMem, task)
 
 	return prompt
 }
@@ -308,43 +308,18 @@ type memSource struct {
 	indexOnly []string
 }
 
-// memoryRecallPointerSection is the fixed two-line Memory section injected
-// when memory.prompt_inject is "pointer" (the default): no memory bodies or
-// title indexes are injected into the system prompt, only this pointer to
-// the on-demand memory_recall tool. This keeps the prompt stable for
-// KV-cache reuse regardless of how many memories exist.
+// memoryRecallPointerSection is the fixed two-line Memory section — the
+// ONLY memory surface in the system prompt: no memory bodies or title
+// indexes are ever injected, only this pointer to the on-demand
+// memory_recall tool. This keeps the prompt stable for KV-cache reuse
+// regardless of how many memories exist. (v2 amendment: pointer-only; the
+// legacy inline/index injection mode is intentionally removed.)
 const memoryRecallPointerSection = "## Memory\n" +
 	"Durable memories (global + project) are NOT injected here — search them on demand with the memory_recall tool (keyword, scope all|project|global). save_memory persists new patterns; delete_memory archives."
 
-func appendAutoMemory(prompt string, globalAutoMem, projectAutoMem *memory.AutoMemory, task, mode string) string {
-	if mode != "full" {
-		return prompt + "\n\n" + memoryRecallPointerSection
-	}
-	repair := memoryRepairBlock(globalAutoMem, projectAutoMem)
-	if repair != "" {
-		prompt += "\n\n## Memory Repair\n" + repair
-	}
-	sources := collectMemSources(globalAutoMem, projectAutoMem, task)
-	if len(sources) == 0 {
-		return prompt
-	}
-
-	prompt += "\n\n## Auto Memory\n"
-
-	inlineText := renderInlineMemories(sources)
-	indexText := renderIndexMemories(sources)
-
-	if inlineText != "" {
-		prompt += inlineText
-	}
-	if indexText != "" {
-		if inlineText != "" {
-			prompt += "\n"
-		}
-		prompt += indexText
-	}
-
-	return strings.TrimSpace(prompt)
+func appendAutoMemory(prompt string, globalAutoMem, projectAutoMem *memory.AutoMemory, task string) string {
+	_, _, _ = globalAutoMem, projectAutoMem, task
+	return prompt + "\n\n" + memoryRecallPointerSection
 }
 
 func memoryRepairBlock(globalAutoMem, projectAutoMem *memory.AutoMemory) string {

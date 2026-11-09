@@ -21,10 +21,21 @@ const memoryCuratorSource = "memory-curator"
 
 // Defaults for the resident memory curator.
 const (
-	memoryCuratorDebounce  = 45 * time.Second
-	memoryCuratorTimeout   = 90 * time.Second
-	memoryCuratorMaxAction = 12
-	memoryCuratorSinkCap   = 64
+	memoryCuratorDebounce = 45 * time.Second
+	memoryCuratorTimeout  = 90 * time.Second
+	// maxPassActions caps actions per LLM pass only (not per batch): a
+	// large batch runs multiple passes until every pending key is settled
+	// (v2 amendment: fixed per-batch caps starve large backlogs).
+	memoryCuratorMaxPassActions = 12
+	// sweep chunking: startup backlog sweep processes keys in blocks of
+	// 40 with a persisted cursor so interrupted sweeps resume, under a
+	// per-sweep time budget.
+	memoryCuratorSweepChunk = 40
+	// consecutiveFailures trips a 10-minute circuit breaker so a broken
+	// provider cannot spin the loop.
+	memoryCuratorBreakerAfter   = 3
+	memoryCuratorBreakerCooloff = 10 * time.Minute
+	memoryCuratorSinkCap        = 64
 )
 
 // MemoryCuratorOptions configures a MemoryCurator. Zero values fall back to
@@ -51,7 +62,15 @@ type MemoryCurator struct {
 	prov       provider.Provider
 	debounce   time.Duration
 	timeout    time.Duration
-	maxActions int
+	maxActions int // per-pass cap; batches loop until settled
+
+	failStreak   int       // consecutive failed passes
+	breakerUntil time.Time // loop/sweep quiesce until this instant when tripped
+
+	// sweep state (process-local cursor; guarded by sweepMu)
+	sweepMu     sync.Mutex
+	sweepQueued []memory.ChangeEvent
+	sweepDone   bool
 
 	events chan memory.ChangeEvent
 	stopCh chan struct{}
@@ -71,7 +90,7 @@ func NewMemoryCurator(globalMem, projectMem *memory.AutoMemory, prov provider.Pr
 		opts.Timeout = memoryCuratorTimeout
 	}
 	if opts.MaxActions <= 0 {
-		opts.MaxActions = memoryCuratorMaxAction
+		opts.MaxActions = memoryCuratorMaxPassActions
 	}
 	return &MemoryCurator{
 		globalMem:  globalMem,
@@ -102,6 +121,10 @@ func (c *MemoryCurator) Start(ctx context.Context) {
 		c.projectMem.SetEventSink("project", c.events)
 	}
 	stopCh := c.stopCh
+	// Startup sweep: one pass over the ENTIRE backlog (both scopes) in
+	// chunks with a persisted cursor, so stores with hundreds of entries
+	// converge instead of only ever curating new deltas (v2 amendment).
+	safego.Go("memorycurator.sweep", func() { c.startupSweep(ctx, stopCh) })
 	safego.Go("memorycurator.loop", func() { c.loop(ctx, stopCh) })
 	debug.Log("memory", "curator started (debounce %s, timeout %s, max %d actions)", c.debounce, c.timeout, c.maxActions)
 }
@@ -174,6 +197,12 @@ func (c *MemoryCurator) loop(ctx context.Context, stopCh <-chan struct{}) {
 			if len(pending) == 0 {
 				continue
 			}
+			if until := time.Now(); until.Before(c.breakerUntil) {
+				// breaker open: hold the batch until the cooloff expires
+				if !sleepUntilCtx(ctx, stopCh, c.breakerUntil.Sub(until)) {
+					return
+				}
+			}
 			batch := make([]memory.ChangeEvent, 0, len(pending))
 			for _, ev := range pending {
 				batch = append(batch, ev)
@@ -185,7 +214,7 @@ func (c *MemoryCurator) loop(ctx context.Context, stopCh <-chan struct{}) {
 				}
 				return batch[i].Key < batch[j].Key
 			})
-			c.curateBatch(ctx, batch)
+			c.curateBatchLoop(ctx, batch)
 		}
 	}
 }
@@ -204,16 +233,50 @@ type curatorVerdict struct {
 	Actions []curatorAction `json:"actions"`
 }
 
-// curateBatch runs one headless curation pass for the batch: build the
-// prompt (list view + changed entries), make a single LLM Chat call, parse
-// the JSON action list, and execute at most maxActions of them through the
-// store APIs. Any failure aborts the batch without retry.
-func (c *MemoryCurator) curateBatch(ctx context.Context, batch []memory.ChangeEvent) {
+// curateBatchLoop settles a batch with as many passes as needed: each
+// pass feeds the still-pending keys (plus the list view) to one headless
+// LLM call and applies its actions; keys that received an action (applied
+// or superseded-by-save) drop out, and the loop repeats until no keys
+// remain or a pass proposes no actions. Consecutive failures trip the
+// breaker (cooloff); a pass with zero actions leaves the rest for the
+// next batch to avoid spinning on keys the LLM deliberately ignores.
+func (c *MemoryCurator) curateBatchLoop(ctx context.Context, batch []memory.ChangeEvent) {
 	defer func() {
 		if r := recover(); r != nil {
 			debug.Log("memory", "curator batch panicked (abandoned): %v", r)
 		}
 	}()
+	pending := batch
+	totalApplied := 0
+	for pass := 0; len(pending) > 0; pass++ {
+		applied, remaining, failed := c.curatePass(ctx, pending)
+		totalApplied += applied
+		if failed {
+			c.failStreak++
+			if c.failStreak >= memoryCuratorBreakerAfter {
+				c.breakerUntil = time.Now().Add(memoryCuratorBreakerCooloff)
+				debug.Log("memory", "curator breaker OPEN for %s after %d consecutive failures", memoryCuratorBreakerCooloff, c.failStreak)
+			}
+			debug.Log("memory", "curator pass failed, %d key(s) deferred: %v", len(pending), "see above")
+			return
+		}
+		c.failStreak = 0
+		if applied == 0 {
+			// LLM chose to act on nothing: respect the judgement, defer
+			// the rest rather than re-asking forever.
+			debug.Log("memory", "curator pass proposed no actions; %d key(s) deferred", len(remaining))
+			return
+		}
+		pending = remaining
+	}
+	debug.Log("memory", "curator batch settled: %d key(s), %d action(s) applied", len(batch), totalApplied)
+}
+
+// curatePass runs ONE headless curation pass over keys: build the prompt
+// (list view + entry contents), one LLM Chat call, parse the strict JSON
+// action list, execute at most maxActions of them through the store APIs.
+// It returns (applied, stillPending, failed).
+func (c *MemoryCurator) curatePass(ctx context.Context, batch []memory.ChangeEvent) (applied int, remaining []memory.ChangeEvent, failed bool) {
 	bctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -223,15 +286,16 @@ func (c *MemoryCurator) curateBatch(ctx context.Context, batch []memory.ChangeEv
 		Content: []provider.ContentBlock{provider.TextBlock(prompt)},
 	}}, nil)
 	if err != nil {
-		debug.Log("memory", "curator LLM call failed, batch abandoned (%d keys): %v", len(batch), err)
-		return
+		debug.Log("memory", "curator LLM call failed, pass abandoned (%d keys): %v", len(batch), err)
+		return 0, batch, true
 	}
 	verdict, err := parseCuratorVerdict(resp.Message.Content)
 	if err != nil {
-		debug.Log("memory", "curator verdict unparsable, batch abandoned (%d keys): %v", len(batch), err)
-		return
+		debug.Log("memory", "curator verdict unparsable, pass abandoned (%d keys): %v", len(batch), err)
+		return 0, batch, true
 	}
-	applied, skipped := 0, 0
+	actedKeys := make(map[string]bool, len(verdict.Actions))
+	skipped := 0
 	for _, act := range verdict.Actions {
 		if applied >= c.maxActions {
 			skipped++
@@ -239,11 +303,18 @@ func (c *MemoryCurator) curateBatch(ctx context.Context, batch []memory.ChangeEv
 		}
 		if c.applyAction(act) {
 			applied++
+			actedKeys[act.Scope+"/"+act.Key] = true
 		} else {
 			skipped++
 		}
 	}
-	debug.Log("memory", "curator batch done: %d key(s), %d action(s) applied, %d skipped", len(batch), applied, skipped)
+	for _, ev := range batch {
+		if !actedKeys[ev.Scope+"/"+ev.Key] {
+			remaining = append(remaining, ev)
+		}
+	}
+	debug.Log("memory", "curator pass done: %d key(s), %d action(s) applied, %d skipped, %d deferred", len(batch), applied, skipped, len(remaining))
+	return applied, remaining, false
 }
 
 // applyAction executes one action through the same store APIs the memory
@@ -388,4 +459,128 @@ func parseCuratorVerdict(blocks []provider.ContentBlock) (*curatorVerdict, error
 		return nil, fmt.Errorf("invalid action JSON: %w", err)
 	}
 	return &verdict, nil
+}
+
+// --- startup / periodic sweep (v2 amendment) ---
+
+// memoryCuratorSweepBudget bounds one sweep pass; a pass that hits the
+// budget stops at a chunk boundary and resumes from the in-memory cursor.
+const (
+	memoryCuratorSweepBudget = 10 * time.Minute
+	memoryCuratorSweepEvery  = 6 * time.Hour
+	memoryCuratorSweepResume = 10 * time.Minute
+)
+
+// startupSweep walks the ENTIRE backlog (both scopes, key-sorted, in
+// chunks of memoryCuratorSweepChunk) and runs one curation pass per chunk,
+// so stores with hundreds of legacy entries converge instead of only ever
+// curating new deltas. The cursor is process-local: an interrupted pass
+// resumes after memoryCuratorSweepResume; a completed pass restarts from
+// the beginning after memoryCuratorSweepEvery (maintenance re-pass, since
+// merge/merge-again judgements can change as entries evolve).
+func (c *MemoryCurator) startupSweep(ctx context.Context, stopCh <-chan struct{}) {
+	deadline := time.Now().Add(memoryCuratorSweepBudget)
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if until := time.Now(); until.Before(c.breakerUntil) {
+			if !sleepUntilCtx(ctx, stopCh, c.breakerUntil.Sub(until)) {
+				return
+			}
+			deadline = time.Now().Add(memoryCuratorSweepBudget)
+			continue
+		}
+		chunk, more := c.nextSweepChunk()
+		if len(chunk) == 0 {
+			if !more {
+				// Full pass complete: maintenance re-pass later.
+				if !sleepUntilCtx(ctx, stopCh, memoryCuratorSweepEvery) {
+					return
+				}
+			} else {
+				// Budget exhausted mid-pass: resume shortly at cursor.
+				if !sleepUntilCtx(ctx, stopCh, memoryCuratorSweepResume) {
+					return
+				}
+			}
+			deadline = time.Now().Add(memoryCuratorSweepBudget)
+			continue
+		}
+		c.curateBatchLoop(ctx, chunk)
+		if time.Now().After(deadline) {
+			// Stop at the chunk boundary; cursor already advanced.
+			if !sleepUntilCtx(ctx, stopCh, memoryCuratorSweepResume) {
+				return
+			}
+			deadline = time.Now().Add(memoryCuratorSweepBudget)
+		}
+	}
+}
+
+// nextSweepChunk returns the next unprocessed chunk of synthetic events
+// (key-sorted, both scopes) and whether the pass has more chunks pending.
+// It advances the cursor past the returned chunk.
+func (c *MemoryCurator) nextSweepChunk() ([]memory.ChangeEvent, bool) {
+	c.sweepMu.Lock()
+	defer c.sweepMu.Unlock()
+	if c.sweepDone && len(c.sweepQueued) == 0 {
+		// begin a new pass
+		c.sweepQueued = c.collectSweepKeys()
+		c.sweepDone = false
+	}
+	chunk := make([]memory.ChangeEvent, 0, memoryCuratorSweepChunk)
+	for len(c.sweepQueued) > 0 && len(chunk) < memoryCuratorSweepChunk {
+		chunk = append(chunk, c.sweepQueued[0])
+		c.sweepQueued = c.sweepQueued[1:]
+	}
+	if len(c.sweepQueued) == 0 {
+		c.sweepDone = true
+	}
+	return chunk, !c.sweepDone
+}
+
+func (c *MemoryCurator) collectSweepKeys() []memory.ChangeEvent {
+	var out []memory.ChangeEvent
+	appendScope := func(scope string, mem *memory.AutoMemory) {
+		if mem == nil {
+			return
+		}
+		entries, err := mem.ListDetailed()
+		if err != nil {
+			debug.Log("memory", "curator sweep: %s list failed: %v", scope, err)
+			return
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].Key < entries[j].Key })
+		for _, e := range entries {
+			out = append(out, memory.ChangeEvent{Scope: scope, Op: "sweep", Key: e.Key})
+		}
+	}
+	appendScope("project", c.projectMem)
+	appendScope("global", c.globalMem)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Scope != out[j].Scope {
+			return out[i].Scope < out[j].Scope
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out
+}
+
+// sleepUntilCtx sleeps d, aborting early (false) on stop/ctx cancellation.
+func sleepUntilCtx(ctx context.Context, stopCh <-chan struct{}, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-stopCh:
+		return false
+	case <-ctx.Done():
+		return false
+	}
 }
