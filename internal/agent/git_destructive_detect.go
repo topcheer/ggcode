@@ -79,19 +79,44 @@ func normalizeGitGlobalFlags(cmd string) string {
 	return strings.Join(lines, "\n")
 }
 
-// #5315: heredoc bodies are free-text payload (observability ledger
-// appends, log snippets, echo of documented patterns) - the raw-string
-// rm scan must not see them. Drop every line between a <<[-]WORD
-// redirect and its closing WORD line.
-// #5328: only TEXT receivers are stripped. For interpreter receivers
-// (bash/sh/python3 ...) the heredoc body is executed code, equivalent
-// to `bash -c`, so the body must stay visible to the rm scan; stripping
-// it turned the rm_rf critical guard blind to recursive force-deletes
-// inside interpreter heredocs.
+// heredocTextReceivers lists commands whose heredoc payload is inert DATA
+// (file content, filtered text) rather than executed code. Only these get
+// their bodies stripped from the rm scan.
+var heredocTextReceivers = map[string]bool{
+	"cat": true, "tee": true, "wc": true, "md5sum": true, "sha1sum": true,
+	"sha256sum": true, "head": true, "tail": true, "less": true, "more": true,
+	"grep": true, "egrep": true, "fgrep": true, "echo": true, "printf": true,
+	"sort": true, "uniq": true,
+}
+
+// heredocPrefixWords are command wrappers that precede the real receiver
+// (sudo/env/time/... bash). They are skipped when locating the receiver
+// word; env-style VAR=val assignments before the command are skipped the
+// same way.
+var heredocPrefixWords = map[string]bool{
+	"sudo": true, "env": true, "time": true, "nice": true, "nohup": true,
+	"command": true, "builtin": true,
+}
+
+// heredocReceiverKeepsBody reports whether the heredoc body introduced on
+// this start line must stay visible to the destructive-command scan.
+//
+// #5315 stripped heredoc bodies unconditionally, which muted real `rm -rf`
+// invocations executed by interpreter heredocs (#5328). The fail-safe
+// default is now KEEP (#5329 review): a body is treated as inert text
+// (stripped) only when the receiver is a known text consumer
+// (cat/tee/grep/... — see heredocTextReceivers) or the line is a bare
+// output redirection. Everything else — interpreters (bash/sh/python3/...),
+// path forms (/bin/bash), wrapped forms (sudo/env/time ... bash), container
+// execs (docker exec ... sh), and ANY unrecognized command — keeps its
+// body in the scanned text. Rationale: an unclassified receiver that
+// executes the body is precisely the silent-bypass case; we accept
+// #5315-style false positives on unrecognized text receivers rather than
+// false negatives on unrecognized executors.
 func heredocReceiverKeepsBody(line string) bool {
 	stripped := strings.TrimSpace(line)
-	// Pure redirection target (e.g. `>> ledger.md <<EOF` without cat) is
-	// a text receiver: the heredoc becomes file content.
+	// Line starts with `<<`: bare stdin redirection with no command word —
+	// payload is data, keep stripping.
 	if m := reHeredocStart.FindStringIndex(stripped); m != nil && m[0] == 0 {
 		return false
 	}
@@ -99,13 +124,40 @@ func heredocReceiverKeepsBody(line string) bool {
 	if len(fields) == 0 {
 		return false
 	}
-	cmd := fields[0]
-	switch cmd {
-	case "bash", "sh", "zsh", "ksh", "dash", "python", "python3", "perl",
-		"ruby", "lua", "node", "nodejs", "php", "awk", "sed", "eval", "source", ".":
-		return true
+	// Leading output redirection (`>> file <<EOF`) without a command word:
+	// payload becomes file content — data.
+	if f := strings.Trim(fields[0], "\"'"); strings.HasPrefix(f, ">") {
+		return false
 	}
-	return false
+	receiver := heredocReceiverWord(fields)
+	if receiver == "" {
+		return false
+	}
+	// Normalize path forms (`/bin/bash`, `./tool`) to their base name so
+	// whitelist misses cannot hide behind a path prefix.
+	if i := strings.LastIndexAny(receiver, `/\`); i >= 0 {
+		receiver = receiver[i+1:]
+	}
+	return !heredocTextReceivers[receiver]
+}
+
+// heredocReceiverWord walks the fields of a heredoc start line and returns
+// the first word that can be the receiver: leading VAR=val assignments and
+// wrapper words (sudo/env/time/...) are skipped. Walking stops at the first
+// non-wrapper token, so flag-carrying forms like `sudo -u x bash` yield
+// "-u" — not a text receiver, so the body is kept (fail-safe direction).
+func heredocReceiverWord(fields []string) string {
+	for _, f := range fields {
+		f = strings.Trim(f, "\"'")
+		if strings.Contains(f, "=") && !strings.HasPrefix(f, "-") && !strings.HasPrefix(f, "$") {
+			continue
+		}
+		if heredocPrefixWords[f] {
+			continue
+		}
+		return f
+	}
+	return ""
 }
 
 func stripHeredocBodies(cmd string) string {
