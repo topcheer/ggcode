@@ -228,11 +228,11 @@ func TestBuildSubAgentSystemPrompt_ExploreContract(t *testing.T) {
 // provided and omitted entirely when empty (zero drift for solo runs).
 func TestBuildInteractiveSystemPromptSharedWorkspaceAgents(t *testing.T) {
 	section := "## Shared workspace agents\n\n- alpha (ggcode): busy\n"
-	with := BuildInteractiveSystemPrompt(nil, "/w", permission.SupervisedMode, nil, nil, nil, nil, "", "", section)
+	with := BuildInteractiveSystemPrompt(&config.Config{}, "/w", permission.SupervisedMode, nil, nil, nil, nil, "", "", section)
 	if !strings.Contains(with, section) {
 		t.Fatal("section missing from prompt when provided")
 	}
-	without := BuildInteractiveSystemPrompt(nil, "/w", permission.SupervisedMode, nil, nil, nil, nil, "", "", "")
+	without := BuildInteractiveSystemPrompt(&config.Config{}, "/w", permission.SupervisedMode, nil, nil, nil, nil, "", "", "")
 	if strings.Contains(without, "Shared workspace agents") {
 		t.Fatal("section must be omitted when empty")
 	}
