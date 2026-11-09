@@ -707,7 +707,6 @@ idle:
 # batches save/delete events (45s debounce) and runs a headless LLM pass
 # that tags, merges near-duplicates, and archives stale temporal facts.
 memory:
-  prompt_inject: pointer  # pointer (default) | full (legacy inline + index injection)
   curator:
     enabled: true         # resident background curator (default true)
     model: ""             # curator LLM; empty = current provider default model

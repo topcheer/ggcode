@@ -395,20 +395,21 @@ memory titles.
 
 ```yaml
 memory:
-  prompt_inject: pointer  # pointer (default) | full (legacy: inline bodies + title index)
   curator:
     enabled: true         # resident background curator (default true)
     model: ""             # curator LLM; empty = current provider default model
 ```
 
-- `prompt_inject: full` restores the pre-v2 behavior verbatim (inlined entry
-  bodies plus the title index) as a rollback escape hatch.
 - The curator watches `save_memory`/`delete_memory` events, batches them
-  behind a 45s debounce, and runs one headless LLM pass that tags/normalizes
-  titles, merges near-duplicates, and archives stale temporal facts
-  ("has completed ... do NOT ..." style one-time events) - at most 12
-  actions per batch, executed through the same store APIs the memory tools
-  use. Any LLM failure silently abandons the batch; nothing is retried.
+  behind a 45s debounce, and runs headless LLM passes that tag/normalize
+  titles, merge near-duplicates, and archive stale temporal facts
+  ("has completed ... do NOT ..." style one-time events). Batches loop
+  pass-by-pass until every pending key is settled, executed through the
+  same store APIs the memory tools use. A startup sweep walks the entire
+  backlog in 40-key chunks (10-minute budget, resumable cursor, repeated
+  every 6h), so large stores converge instead of only curating new
+  deltas. Consecutive failures trip a 10-minute breaker; nothing is
+  retried on its own.
 
 ## Environment Variables
 
