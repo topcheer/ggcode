@@ -144,7 +144,7 @@ func (m Model) etTunnelOn() tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), "⬢ Opening et tunnel via free plan (random subdomain, ~seconds)。付费定制域名: /et setup <子域名> <token>")
 	}
 	return func() tea.Msg {
-		tunnelURL, started, terr := m.webuiTunnel.StartTunnelOpts(localAddr, cfg.Subdomain, cfg.Token, cfg.Server)
+		tunnelURL, started, terr := m.webuiTunnel.StartTunnelOpts(localAddr, cfg.Subdomain, cfg.Token)
 		debug.Log("tui", "et tunnel ready: %s started=%v err=%v", tunnelURL, started, terr)
 		return etTunnelReadyMsg{url: tunnelURL, suffix: suffix, err: terr, started: started}
 	}

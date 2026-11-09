@@ -108,7 +108,6 @@ type EndpointConfig struct {
 type ETunnelConfig struct {
 	Subdomain string `yaml:"subdomain,omitempty" json:"subdomain,omitempty"` // 付费计划自定义子域名
 	Token     string `yaml:"token,omitempty" json:"token,omitempty"`         // 付费计划 API key
-	Server    string `yaml:"server,omitempty" json:"server,omitempty"`       // 服务端覆盖(默认 wss://t.ggcode.uk/tunnel)
 }
 
 type VendorConfig struct {

@@ -2,7 +2,6 @@ package webui
 
 import (
 	"context"
-	"os"
 	"sync"
 
 	etunnel "github.com/topcheer/etunnel/sdk"
@@ -20,18 +19,10 @@ type TunnelCtl struct {
 	url    string
 }
 
-// TunnelServer 默认隧道服务端(live deployment);ETUNNEL_SERVER 环境变量可覆盖
-func TunnelServer() string {
-	if s := os.Getenv("ETUNNEL_SERVER"); s != "" {
-		return s
-	}
-	return "wss://t.ggcode.uk/tunnel"
-}
-
 // StartTunnelOpts 激活隧道(幂等:已激活直接返回现 URL)。
 // localAddr 是 WebUI 实际监听地址(127.0.0.1:port);返回公网 https URL。
-// subdomain/token 非空时走付费计划(自定义子域名);server 空则用默认服务端。
-func (c *TunnelCtl) StartTunnelOpts(localAddr, subdomain, token, server string) (string, bool, error) {
+// subdomain/token 非空时走付费计划(自定义子域名);服务端用 SDK 内置默认。
+func (c *TunnelCtl) StartTunnelOpts(localAddr, subdomain, token string) (string, bool, error) {
 	c.mu.Lock()
 	if c.tunnel != nil {
 		u := c.url
@@ -42,11 +33,7 @@ func (c *TunnelCtl) StartTunnelOpts(localAddr, subdomain, token, server string) 
 	c.cancel = cancel
 	c.mu.Unlock()
 
-	if server == "" {
-		server = TunnelServer()
-	}
 	opts := etunnel.Options{
-		Server:    server,
 		LocalAddr: localAddr,
 		Subdomain: subdomain,
 		Token:     token,
