@@ -35,7 +35,10 @@ func normalizeApplyPatchArgs(toolName string, m map[string]any) map[string]any {
 		return m
 	}
 	op := m["operation"].(map[string]any)
-	out := make(map[string]any, len(m)+3)
+	// #5327 CodeQL: capacity hints must not be an arithmetic expression over
+	// untrusted lengths (len(m)+k can overflow); a bare len(m) keeps the same
+	// allocation behaviour without the flagged size computation.
+	out := make(map[string]any, len(m))
 	for k, v := range m {
 		out[k] = v
 	}
