@@ -300,6 +300,22 @@ var upstreamVisionOverrides = map[string]bool{
 	"openai/o3-mini-high": false,
 }
 
+// visionOverrideFor resolves the override for an entry, tolerating BOTH
+// upstream ID shapes models.dev has used: bare ("o3-mini", sourceProvider
+// ="openai") and provider-prefixed ("openai/o3-mini", where concatenating
+// the provider again would produce "openai/openai/o3-mini" and miss).
+// The bare form is tried as the entry ID itself so prefixed entries hit
+// the table key directly.
+func visionOverrideFor(sourceProvider, id string) (bool, bool) {
+	if v, ok := upstreamVisionOverrides[sourceProvider+"/"+id]; ok {
+		return v, true
+	}
+	if v, ok := upstreamVisionOverrides[id]; ok {
+		return v, true
+	}
+	return false, false
+}
+
 func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections []string, allEntries []modelEntry) {
 
 	pids := make([]string, 0, len(desiredProviders))
@@ -338,7 +354,7 @@ func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections
 			// #5332: apply local correction layer after the upstream read so
 			// known-bad models.dev rows cannot re-enter the generated table
 			// (the drift-guard pins stay untouched and authoritative).
-			if fixed, ok := upstreamVisionOverrides[e.SourceProvider+"/"+e.ID]; ok {
+			if fixed, ok := visionOverrideFor(e.SourceProvider, e.ID); ok {
 				if e.SupportsVision != fixed {
 					fmt.Fprintf(os.Stderr, "  override: %s/%s SupportsVision %v -> %v (#5332 local fix)\n", e.SourceProvider, e.ID, e.SupportsVision, fixed)
 				}
@@ -548,6 +564,19 @@ type modelCapability struct {
 	}
 
 	entries = dedupEntries(entries)
+
+	// #5332 final enforcement: dedup ranks vision=true sources ABOVE
+	// false ones (v && !bestVision at the comparison), so a reseller row
+	// tagged vision=true can out-rank the corrected provider row and
+	// reintroduce the mislabel. The correction table wins over every
+	// post-dedup winner — this is the single point where the generated
+	// table's final vision values are pinned.
+	for i := range entries {
+		if fixed, ok := visionOverrideFor(entries[i].SourceProvider, entries[i].ID); ok && entries[i].SupportsVision != fixed {
+			fmt.Fprintf(os.Stderr, "  override(final): %s SupportsVision %v -> %v (#5332 local fix beats dedup pick)\n", entries[i].ID, entries[i].SupportsVision, fixed)
+			entries[i].SupportsVision = fixed
+		}
+	}
 
 	// Output entries grouped loosely — just output sorted with comments
 
