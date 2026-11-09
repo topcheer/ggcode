@@ -284,6 +284,22 @@ func clampMaxOutputTokens(model string, maxOut int) int {
 	return maxOut
 }
 
+// upstreamVisionOverrides pins capability fields where models.dev data is
+// known-wrong (#5332). Entries are keyed "provider/model-id" (both lowercase)
+// and applied right after the upstream fetch, BEFORE any code generation, so
+// the drift-guard fact pins stay the source of truth rather than chasing
+// upstream regressions.
+//
+// openai/o3-mini and openai/o3-mini-high: text-only models; models.dev
+// intermittently re-tags them SupportsVision=true (observed 2026-11-09, run
+// 42602486566). First flagged and pinned text-only by the manual calibration
+// batch #5320; the weekly sync kept failing the drift-guard until this
+// local correction layer existed.
+var upstreamVisionOverrides = map[string]bool{
+	"openai/o3-mini":      false,
+	"openai/o3-mini-high": false,
+}
+
 func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections []string, allEntries []modelEntry) {
 
 	pids := make([]string, 0, len(desiredProviders))
@@ -318,6 +334,15 @@ func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections
 				MaxOutputTokens: clampMaxOutputTokens(strings.ToLower(strings.TrimSpace(m.ID)), m.DefaultMaxTokens),
 				SupportsVision:  m.SupportsAttachments,
 				SourceProvider:  provider.ID,
+			}
+			// #5332: apply local correction layer after the upstream read so
+			// known-bad models.dev rows cannot re-enter the generated table
+			// (the drift-guard pins stay untouched and authoritative).
+			if fixed, ok := upstreamVisionOverrides[e.SourceProvider+"/"+e.ID]; ok {
+				if e.SupportsVision != fixed {
+					fmt.Fprintf(os.Stderr, "  override: %s/%s SupportsVision %v -> %v (#5332 local fix)\n", e.SourceProvider, e.ID, e.SupportsVision, fixed)
+				}
+				e.SupportsVision = fixed
 			}
 			sectionEntries = append(sectionEntries, e)
 		}
