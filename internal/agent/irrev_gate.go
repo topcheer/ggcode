@@ -303,6 +303,19 @@ func irrevSplitShellSegments(cmd string) []string {
 	return segs
 }
 
+// #5339: shell control keywords that open compound statements. A bare
+// keyword segment ("do", "done", "{", ...) is transparent (read-only);
+// a keyword-leading segment with a body command is classified by the
+// body command instead (#5339).
+func irrevIsShellControlKeyword(tok string) bool {
+	switch tok {
+	case "for", "do", "done", "while", "until", "{", "}",
+		"if", "then", "fi", "elif", "else", "case", "esac", "in":
+		return true
+	}
+	return false
+}
+
 func irrevSegmentIsReadOnly(seg string) bool {
 	seg = strings.TrimSpace(seg)
 	if seg == "" {
@@ -329,10 +342,29 @@ func irrevSegmentIsReadOnly(seg string) bool {
 	// transparent - the loop BODY is already split into its own segments and
 	// classified there, so `for n in 1 2; do gh api ...; done` patrols no
 	// longer gate on the keyword segments while a mutating body still does.
-	switch bin {
-	case "for", "do", "done", "while", "until", "{", "}",
-		"if", "then", "fi", "elif", "else", "case", "esac", "in":
-		return true
+	// #5339: transparent only for BARE keyword segments. A segment like
+	// `do rm -rf x` (same-line body, no separators between keyword and
+	// command) previously returned true unconditionally and the mutating
+	// body escaped classification entirely. Strip leading control keywords
+	// and fall through to normal classification of what remains.
+	if irrevIsShellControlKeyword(fields[0]) {
+		if len(rest) == 0 {
+			return true
+		}
+		for len(fields) > 0 && irrevIsShellControlKeyword(fields[0]) {
+			fields = fields[1:]
+		}
+		if len(fields) == 0 {
+			return true
+		}
+		joined := strings.Join(fields, " ")
+		// Value list ("for n in 1 2" -> "n 1 2") or test condition
+		// ("if [ -d x ]") - structural forms, not command bodies.
+		if strings.Contains(joined, " in ") || fields[0] == "[" {
+			return true
+		}
+		bin = fields[0]
+		rest = fields[1:]
 	}
 	switch bin {
 	case "git":
