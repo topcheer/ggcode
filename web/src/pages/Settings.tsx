@@ -174,15 +174,12 @@ function GeneralPage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((cfg: any) => {
         if (!cfg) return;
-        const list: string[] = [];
-        for (const v of Object.values<any>(cfg?.vendors ?? {})) {
-          for (const e of Object.values<any>(v?.endpoints ?? {})) for (const m of (e as any)?.models ?? []) list.push(m);
-        }
-        setModels([...new Set(list)]);
         const vendor = cfg?.vendor, endpoint = cfg?.endpoint;
+        // 模型列表仅当前 endpoint 可用模型(与聊天头部同契约;切 provider 在供应商页)
+        const ep = vendor && endpoint ? cfg?.vendors?.[vendor]?.endpoints?.[endpoint] : null;
+        setModels([...(ep?.models ?? [])]);
         if (vendor && endpoint) {
           setActive({ vendor, endpoint });
-          const ep = cfg?.vendors?.[vendor]?.endpoints?.[endpoint];
           if (ep) {
             setCw(ep.context_window ? String(ep.context_window) : "");
             setMt(ep.max_tokens ? String(ep.max_tokens) : "");
