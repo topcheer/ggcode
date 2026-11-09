@@ -122,10 +122,14 @@ func TestMemoryCurator_SweepChunksBacklog(t *testing.T) {
 	if len(rest) != 5 || more2 {
 		t.Fatalf("second chunk = %d keys, more=%v; want 5, false", len(rest), more2)
 	}
-	// A completed pass restarts from scratch (maintenance re-pass).
-	chunk3, more3 := cur.nextSweepChunk()
-	if len(chunk3) != memoryCuratorSweepChunk || !more3 {
-		t.Fatalf("post-completion re-pass did not restart: %d keys, more=%v", len(chunk3), more3)
+	// A completed pass signals with an empty chunk first (caller sleeps),
+	// then the NEXT call restarts from scratch (maintenance re-pass).
+	if chunk3, more3 := cur.nextSweepChunk(); len(chunk3) != 0 || more3 {
+		t.Fatalf("completion signal expected empty chunk: %d keys, more=%v", len(chunk3), more3)
+	}
+	chunk4, more4 := cur.nextSweepChunk()
+	if len(chunk4) != memoryCuratorSweepChunk || !more4 {
+		t.Fatalf("post-completion re-pass did not restart: %d keys, more=%v", len(chunk4), more4)
 	}
 }
 
