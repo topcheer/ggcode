@@ -213,6 +213,11 @@ func TestDestructiveDiscardFormsAndVariants(t *testing.T) {
 		{"rm -Rf tmp", "rm_rf"},
 		{"rm -r -f tmp", "rm_rf"},
 		{"rm --recursive --force tmp", "rm_rf"},
+		{"sudo rm -rf tmp", "rm_rf"},
+		{"nohup rm -rf tmp", "rm_rf"},
+		{"xargs rm -rf", "rm_rf"},
+		{"timeout 30 rm -rf tmp", "rm_rf"},
+		{"sudo -u root rm -rf tmp", "rm_rf"},
 	}
 	for _, h := range hit {
 		pats := detectDestructiveInShellCommand(h.cmd)

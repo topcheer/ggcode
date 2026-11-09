@@ -185,12 +185,62 @@ func stripHeredocBodies(cmd string) string {
 // (after ; && || | & or newline) with optional env-prefix assignments
 // (VAR=val ...). Text mentioning rm anywhere else (echo, grep args,
 // comments) is not an invocation.
+//
+// #5342: wrapper prefixes (sudo/nohup/xargs/env/timeout ...) hide the rm
+// word behind a leading token, so the fields[0]=="rm" check missed
+// invocations like "sudo rm -rf x" - the gate went blind exactly when
+// privilege or batching was involved. Strip known wrapper words (same
+// family as heredocPrefixWords plus xargs/timeout exec-style launchers)
+// after env-prefix assignments before matching.
+var rmWrapperWords = map[string]bool{
+	"sudo": true, "nohup": true, "env": true, "nice": true, "time": true,
+	"command": true, "builtin": true, "xargs": true, "timeout": true,
+	"stdbuf": true, "setsid": true,
+}
+
+// isNumericToken reports whether s is a pure number (timeout 30 style
+// wrapper arguments).
+func isNumericToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func firstRmCommandSegment(cmd string) string {
 	cleaned := stripHeredocBodies(cmd)
 	for _, seg := range reChainSep.Split(cleaned, -1) {
 		fields := strings.Fields(strings.TrimSpace(seg))
 		for len(fields) > 0 && strings.Contains(fields[0], "=") && !strings.HasPrefix(fields[0], "-") && !strings.HasPrefix(fields[0], "$") {
 			fields = fields[1:]
+		}
+		// #5342: strip wrapper words AND their arguments (sudo -u root,
+		// timeout 30, xargs -0 ...) until the head word is reached. A
+		// wrapper flag, a flag's VALUE (sudo -u root), or a numeric
+		// argument (timeout 30) only appears after a wrapper word, so
+		// non-wrapper commands (echo/git/...) break out here and keep
+		// their tokens intact (#5315 negative pins stay safe).
+		seenWrapper := false
+		prevWasFlag := false
+		for len(fields) > 0 {
+			h := fields[0]
+			if rmWrapperWords[h] {
+				seenWrapper = true
+				prevWasFlag = false
+				fields = fields[1:]
+				continue
+			}
+			if seenWrapper && (strings.HasPrefix(h, "-") || isNumericToken(h) || prevWasFlag) {
+				prevWasFlag = strings.HasPrefix(h, "-") && !isNumericToken(h)
+				fields = fields[1:]
+				continue
+			}
+			break
 		}
 		if len(fields) > 0 && fields[0] == "rm" {
 			return strings.Join(fields, " ")
