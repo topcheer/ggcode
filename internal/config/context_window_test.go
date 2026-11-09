@@ -107,6 +107,10 @@ func TestInferVisionSupportCapabilityTableOnly(t *testing.T) {
 		{"claude-3-5-haiku", "anthropic", true},
 		{"deepseek-chat", "openai", false},
 		{"glm-5.3", "openai", false},
+		// o3-mini is text-only per OpenAI docs (Image: Not supported);
+		// guards against a regen re-adding the wrong vision flag.
+		// https://developers.openai.com/api/docs/models/o3-mini
+		{"openai/o3-mini", "openai", false},
 
 		{"my-claude-proxy", "openai", false},
 		{"custom-gpt-gateway", "openai", false},
