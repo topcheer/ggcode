@@ -837,8 +837,16 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     return () => { cancelled = true }
   }, [sessionId])
 
+  // #5308: 草稿归属守卫——切换会话后的首次保存运行必须跳过，
+  // 否则同次 commit 内 A 先以旧闭包 input 覆写新会话的 draft 键
+  const draftSessionRef = useRef<string | undefined>(undefined)
   useEffect(() => {
     if (!sessionId || !input) return
+    if (draftSessionRef.current !== sessionId) {
+      // 刚切换进来：input 还是旧会话残留，不得写入 draft:<新会话>
+      draftSessionRef.current = sessionId
+      return
+    }
     try { sessionStorage.setItem(`draft:${sessionId}`, input) } catch {}
   }, [input, sessionId])
   useEffect(() => {
@@ -847,6 +855,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       const draft = sessionStorage.getItem(`draft:${sessionId}`)
       setInput(draft ?? '')
     } catch { setInput('') }
+    // #5308: 恢复完成后草稿归属即本会话，此后保存正常守门
+    draftSessionRef.current = sessionId
   }, [sessionId])
 
   useEffect(() => {
