@@ -610,8 +610,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	defer agentruntime.StopGlobalSectionCollector()
 
 	buildCurrentSystemPrompt := func() (string, []string) {
-
-		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, detectGitStatus(workingDir), "")
+		// #5339: same-workspace active agents snapshot. lanchatHub is a
+		// closure variable assigned later in startup; the first build may
+		// see nil (empty section, no drift), later rebuilds pick it up.
+		sharedAgents := ""
+		if lanchatHub != nil {
+			sharedAgents = lanchat.FormatWorkspaceAgents(lanchatHub.Participants(), workingDir, lanchatHub.NodeID())
+		}
+		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, detectGitStatus(workingDir), "", sharedAgents)
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 	trace.Mark(fmt.Sprintf("build initial system prompt skills=%d bytes=%d", len(promptSkillRefs), len(systemPrompt)))

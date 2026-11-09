@@ -2840,7 +2840,7 @@ func buildWailsSystemPrompt(cfg *config.Config, workingDir string, mode permissi
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
-	return agentruntime.BuildInteractiveSystemPrompt(cfg, workingDir, mode, nil, commandMgr, globalAutoMem, projectAutoMem, "", "")
+	return agentruntime.BuildInteractiveSystemPrompt(cfg, workingDir, mode, nil, commandMgr, globalAutoMem, projectAutoMem, "", "", "")
 }
 
 func (b *ChatBridge) recordSessionUsage(usage provider.TokenUsage, source string) {
