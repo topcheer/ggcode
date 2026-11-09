@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -224,11 +225,23 @@ func FormatRemoteAgents(instances []InstanceInfo, meta map[string]RemoteAgentMet
 	if len(instances) == 0 {
 		return ""
 	}
+	// Deterministic rendering: the async discovery cache preserves network
+	// discovery order, which varies between refreshes. Sort a copy by
+	// display name then ID so identical instance sets always render
+	// byte-identical text (prompt-cache stability).
+	ordered := append([]InstanceInfo(nil), instances...)
+	sort.Slice(ordered, func(i, j int) bool {
+		ni, nj := filepath.Base(ordered[i].Workspace), filepath.Base(ordered[j].Workspace)
+		if ni != nj {
+			return ni < nj
+		}
+		return ordered[i].ID < ordered[j].ID
+	})
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("The following %d ggcode instance(s) are online in other workspaces:\n", len(instances)))
-	for _, inst := range instances {
+	sb.WriteString(fmt.Sprintf("The following %d ggcode instance(s) are online in other workspaces:\n", len(ordered)))
+	for _, inst := range ordered {
 		name := filepath.Base(inst.Workspace)
-		line := fmt.Sprintf("- %s (%s) — %s", name, inst.Workspace, inst.Status)
+		line := fmt.Sprintf("- %s (%s) - %s", name, inst.Workspace, inst.Status)
 		if m, ok := meta[inst.ID]; ok {
 			var extras []string
 			if m.Team != "" && m.Team != "dev-team" {
