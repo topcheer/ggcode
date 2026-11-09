@@ -196,11 +196,12 @@ func extractEditPaths(toolName string, args json.RawMessage, includeFileOps bool
 	if json.Unmarshal(args, &m) != nil {
 		return nil
 	}
+	m = normalizeApplyPatchArgs(toolName, m) // #5321: nested {"operation":{...}} must not bypass guards
 	if includeFileOps && toolName == "file_ops" {
 		return extractFileOpsPaths(m)
 	}
 	switch toolName {
-	case "apply_patch": // #5244: args carry a top-level path
+	case "apply_patch": // #5244 top-level path; #5321 nested form normalized above
 		return extractSinglePath(m, "path")
 	case "edit_file":
 		return extractSinglePath(m, "file_path", "path")
@@ -332,6 +333,7 @@ func extractCreateFilePaths(toolName string, args json.RawMessage) []string {
 	if json.Unmarshal(args, &m) != nil {
 		return nil
 	}
+	m = normalizeApplyPatchArgs(toolName, m) // #5321: nested apply_patch create_file must register too
 	switch toolName {
 	case "write_file":
 		if p, ok := m["path"].(string); ok {

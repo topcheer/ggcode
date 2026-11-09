@@ -237,6 +237,7 @@ func extractPathsFromToolCall(toolName string, rawArgs json.RawMessage, s *RunSt
 	if err := json.Unmarshal(rawArgs, &args); err != nil {
 		return
 	}
+	args = normalizeApplyPatchArgs(toolName, args) // #5321: nested apply_patch edits count as run edits
 	switch toolName {
 	case "write_file", "edit_file", "multi_edit_file":
 
@@ -252,6 +253,10 @@ func extractPathsFromToolCall(toolName string, rawArgs json.RawMessage, s *RunSt
 		}
 		if t, ok := args["content"].(string); ok {
 			s.recordEditContent(t)
+		}
+	case "apply_patch": // #5321: normalized above; run stats see the edit path
+		if path, ok := args["path"].(string); ok {
+			s.recordFileEdit(path)
 		}
 	case "multi_file_edit", "multi_file_write":
 

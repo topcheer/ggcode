@@ -1099,6 +1099,7 @@ func extractEditedPaths(tc provider.ToolCallDelta) []string {
 	if json.Unmarshal(tc.Arguments, &args) != nil {
 		return nil
 	}
+	args = normalizeApplyPatchArgs(tc.Name, args) // #5321: nested apply_patch edits feed index/churn tracking
 	var paths []string
 	switch tc.Name {
 	case "write_file", "edit_file", "multi_edit_file", "lsp_rename":
@@ -1118,6 +1119,10 @@ func extractEditedPaths(tc provider.ToolCallDelta) []string {
 					}
 				}
 			}
+		}
+	case "apply_patch": // #5321: normalized above; nested form feeds index/churn like the rest
+		if p, ok := args["path"].(string); ok {
+			paths = append(paths, p)
 		}
 	case "batch_replace":
 
