@@ -339,6 +339,7 @@ type Config struct {
 	FilePath            string                     `yaml:"-" json:"-"`
 	ProtectedPaths      []string                   `yaml:"protected_paths,omitempty" json:"protected_paths,omitempty"`
 	Sandbox             SandboxConfig              `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
+	Memory              MemoryConfig               `yaml:"memory,omitempty" json:"memory,omitempty"`
 	FirstRun            bool                       `yaml:"-" json:"-"`
 	instanceDir         string                     `yaml:"-" json:"-"`
 	instancePath        string                     `yaml:"-" json:"-"`
@@ -354,6 +355,30 @@ type ImpersonationConfig struct {
 	Preset        string            `yaml:"preset,omitempty"`
 	CustomVersion string            `yaml:"custom_version,omitempty"`
 	CustomHeaders map[string]string `yaml:"custom_headers,omitempty"`
+}
+
+// MemoryConfig groups switches for the persistent memory subsystem.
+type MemoryConfig struct {
+	// Curator configures the resident background memory curator.
+	Curator MemoryCuratorConfig `yaml:"curator,omitempty" json:"curator,omitempty"`
+}
+
+// MemoryCuratorConfig configures the resident memory curator agent.
+type MemoryCuratorConfig struct {
+	// Enabled turns the curator on or off; it defaults to true (nil).
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Model selects the LLM the curator uses; empty means the current
+	// provider default model.
+	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+}
+
+// MemoryCuratorEnabled reports whether the memory curator should start.
+// It defaults to true for a nil config or a nil Enabled pointer.
+func (c *Config) MemoryCuratorEnabled() bool {
+	if c == nil || c.Memory.Curator.Enabled == nil {
+		return true
+	}
+	return *c.Memory.Curator.Enabled
 }
 
 type LSPServerConfig struct {

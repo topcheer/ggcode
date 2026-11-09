@@ -192,6 +192,7 @@ func (am *AutoMemory) DeleteMemory(key string) error {
 	}
 
 	am.ForgetUsage(safe)
+	am.emitChange("delete", safe, "delete_memory")
 	return nil
 }
 

@@ -23,6 +23,9 @@ type AutoMemory struct {
 	mu sync.Mutex
 
 	useOnce sync.Map
+
+	eventScope string
+	eventSink  chan<- ChangeEvent
 }
 
 var writeMu sync.Map
@@ -112,6 +115,7 @@ func (am *AutoMemory) SaveMemoryWithSourceActor(key, content, source, actor stri
 	} else {
 		am.ClearTaint(safe)
 	}
+	am.emitChange("save", safe, source)
 	return nil
 }
 
@@ -238,6 +242,9 @@ type MemoryEntryInfo struct {
 	Uses      int
 	LastUsed  time.Time
 	Preview   string
+	// UpdatedAt is the entry file's modification time, i.e. when the entry
+	// content was last written.
+	UpdatedAt time.Time
 }
 
 func (am *AutoMemory) ListDetailed() ([]MemoryEntryInfo, error) {
@@ -250,6 +257,7 @@ func (am *AutoMemory) ListDetailed() ([]MemoryEntryInfo, error) {
 		info := MemoryEntryInfo{Key: m.Key, Uses: m.Uses, LastUsed: m.LastUsedAt}
 		if st, err := os.Stat(filepath.Join(am.dir, m.Key+".md")); err == nil {
 			info.SizeBytes = st.Size()
+			info.UpdatedAt = st.ModTime()
 		}
 		if data, err := os.ReadFile(filepath.Join(am.dir, m.Key+".md")); err == nil {
 			info.Preview = previewLine(string(data), 160)

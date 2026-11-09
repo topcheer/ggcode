@@ -701,6 +701,16 @@ idle:
   after_min: 10          # idle window before maintenance fires (default 10)
   precompact_ratio: 0.6  # only pre-compact when usage is at/above this (default 0.6)
 
+# Memory v2: memories are NOT injected into the system prompt anymore -
+# the prompt only carries a pointer to the memory_recall tool (on-demand
+# keyword search over global+project memories). The resident curator
+# batches save/delete events (45s debounce) and runs a headless LLM pass
+# that tags, merges near-duplicates, and archives stale temporal facts.
+memory:
+  curator:
+    enabled: true         # resident background curator (default true)
+    model: ""             # curator LLM; empty = current provider default model
+
 hooks:
   # Before user message reaches the LLM - sync, can block.
   on_user_message:

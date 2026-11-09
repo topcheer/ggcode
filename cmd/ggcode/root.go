@@ -678,6 +678,31 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	agentruntime.RegisterCompactContextTool(registry, ag)
 	agentruntime.RegisterRecallCompactedTool(registry, ag)
 	core.SetConfigAgent(ag)
+
+	// Memory v2: resident memory curator. It watches memory save/delete
+	// events and runs a debounced headless curation pass (tag, merge,
+	// archive stale temporal facts) through the same store APIs the
+	// memory tools use. Gated by memory.curator.enabled (default on).
+	if cfg.MemoryCuratorEnabled() {
+		curatorProv := prov
+		if m := strings.TrimSpace(cfg.Memory.Curator.Model); m != "" && m != cfg.Model {
+			// ResolveProvider reads cfg.Model; Config embeds a lock so it
+			// must not be copied - swap the field, resolve, restore.
+			origModel := cfg.Model
+			cfg.Model = m
+			p2, _, perr := ResolveProvider(cfg)
+			cfg.Model = origModel
+			if perr == nil {
+				curatorProv = p2
+			} else {
+				debug.Log("root", "memory curator model override failed (%v); using default provider", perr)
+			}
+		}
+		memoryCurator := agentruntime.NewMemoryCurator(autoMem, projectAutoMem, curatorProv, agentruntime.MemoryCuratorOptions{})
+		memoryCurator.Start(context.Background())
+		defer memoryCurator.Stop()
+		trace.Mark("start memory curator")
+	}
 	refreshAgentSystemPrompt := func() {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
 

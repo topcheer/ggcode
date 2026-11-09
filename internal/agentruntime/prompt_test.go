@@ -180,11 +180,16 @@ func TestBuildSubAgentSystemPrompt_DeterministicToolOrder(t *testing.T) {
 func TestBuildSubAgentSystemPrompt_MemoryFraming(t *testing.T) {
 	withTestHome(t)
 
+	// v2 amendment: pointer-only. The framing header can never appear;
+	// assert the pointer section is the sole memory surface instead.
 	cfg := &config.Config{Language: "en"}
 	reg := tool.NewRegistry()
 	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test", nil, nil)
 
 	autoMem := memory.NewAutoMemory()
+	if err := autoMem.SaveMemory("build-process", "run make verify-ci"); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx := SubAgentPromptContext{
 		Cfg:           cfg,
@@ -193,12 +198,13 @@ func TestBuildSubAgentSystemPrompt_MemoryFraming(t *testing.T) {
 		GlobalAutoMem: autoMem,
 	}
 
-	prompt := BuildSubAgentSystemPrompt(ctx, "task", "")
+	prompt := BuildSubAgentSystemPrompt(ctx, "", "")
 
 	if strings.Contains(prompt, "## Auto Memory") {
-		if !strings.Contains(prompt, "reference information") {
-			t.Error("auto-memory section should contain framing text indicating it's reference data")
-		}
+		t.Error("legacy auto-memory section must never render (pointer-only)")
+	}
+	if !strings.Contains(prompt, memoryRecallPointerSection) {
+		t.Error("memory recall pointer must be the sole memory surface")
 	}
 }
 
