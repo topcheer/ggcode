@@ -12,6 +12,16 @@ import (
 // guard silent for recursive force-deletes inside interpreter heredocs,
 // while text receivers (cat/tee/wc, plain redirection) keep the intended
 // FP fix.
+//
+// Known edge cases deliberately OUT OF SCOPE here (documented per #5329
+// review rather than silently missed):
+//   - `cat <<EOF | bash` -- a TEXT receiver consumes the body but pipes it
+//     to an interpreter; the body is stripped as text and the piped bash
+//     execution is not tracked. Same family: `cat file | bash` without any
+//     heredoc. Detecting pipeline consumers requires command-graph parsing,
+//     which this guard does not attempt.
+//   - Multi-stage indirection (body writes a script, later command runs it)
+//     is inherently invisible to a single-command lexical scan.
 func TestIssue5328InterpreterHeredocBodiesVisible(t *testing.T) {
 	// bash/sh: the rm line IS a shell command position inside the body -
 	// after the fix it must be seen by firstRmCommandSegment (old #5315
@@ -47,6 +57,36 @@ func TestIssue5328TextReceiverHeredocStillStripped(t *testing.T) {
 		if seg := firstRmCommandSegment(cmd); seg != "" {
 			t.Errorf("text-receiver heredoc must keep the #5315 FP fix: body must be stripped (got segment %q)", seg)
 		}
+	}
+}
+
+func TestIssue5329ReceiverClassificationFailSafe(t *testing.T) {
+	// Control group from the #5329 NO-GO review: path forms, wrapper
+	// prefixes, container execs, and unknown receivers must all KEEP the
+	// body (default = fail-safe keep). Previously the classifier matched an
+	// interpreter whitelist and stripped everything else -- inverting the
+	// required default.
+	fireCases := []struct{ name, start string }{
+		{"path form /bin/bash", "/bin/bash <<'EOF'"},
+		{"path form ./tool", "./mytool <<'EOF'"},
+		{"sudo bash", "sudo bash <<'EOF'"},
+		{"env bash", "env bash <<EOF"},
+		{"time sh", "time sh <<EOF"},
+		{"docker exec sh", "docker exec -i mycontainer sh <<'EOF'"},
+		{"unknown command", "mytool <<EOF"},
+		{"VAR=val prefixed", "FOO=1 bash <<EOF"},
+	}
+	for _, tc := range fireCases {
+		cmd := tc.start + "\n" + rmRfLine(t) + " $HOME/data\nEOF"
+		if !strings.Contains(stripHeredocBodies(cmd), "rm -rf") {
+			t.Errorf("%s: body must be KEPT in scanned text (fail-safe default), got stripped", tc.name)
+		}
+	}
+	// sudo -u flag form: classifier yields "-u" (not a text receiver), so
+	// the body stays visible -- fail-safe direction, pinned explicitly.
+	flagged := "sudo -u deploy bash <<'EOF'\n" + rmRfLine(t) + " /srv\nEOF"
+	if !strings.Contains(stripHeredocBodies(flagged), "rm -rf") {
+		t.Error("sudo -u ... bash: flag form must keep body (receiver resolution falls to non-text token)")
 	}
 }
 
