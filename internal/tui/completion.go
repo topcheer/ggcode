@@ -301,7 +301,7 @@ var SlashCommands = []string{
 	"/inspector", "/image", "/mode", "/allow", "/export", "/bug", "/config", "/reflect", "/rules",
 	"/chat", "/nick", "/init", "/exit", "/quit",
 	"/compact", "/todo", "/status", "/stats", "/knight", "/tmux", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
-	"/diff", "/hooks", "/cost", "/usage", "/commit", "/review", "/copy", "/context", "/debug", "/webui",
+	"/diff", "/hooks", "/cost", "/usage", "/commit", "/review", "/copy", "/context", "/debug", "/webui", "/et",
 	"/retry",
 	"/edit",
 	"/regenerate", "/regen", "/branch", "/fork", "/branches", "/branch-switch", "/rewind",
@@ -320,6 +320,7 @@ var SlashCommands = []string{
 var SlashCommandDescriptions = map[string]string{
 	"/help":            "Show help message",
 	"/webui":           "Show WebUI URL and open it in the browser",
+	"/et":              "etunnel 隧道: /et on|off|show|setup <子域名> <token>",
 	"/retry":           "Retry last submission after error",
 	"/edit":            "Edit and resend last submission",
 	"/?":               "Show help message",
@@ -430,6 +431,7 @@ var SlashCommandDescriptions = map[string]string{
 
 var SlashCommandPlaceholders = map[string]string{
 	"/model":         "<model-name>",
+	"/et":            "<on|off|show|setup <subdomain> <token>>",
 	"/provider":      "<vendor> [endpoint]",
 	"/impersonate":   "<cli-tool>",
 	"/inspector":     "<sessions|checkpoints|memory|plugins|config|status>",

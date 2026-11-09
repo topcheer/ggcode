@@ -28,9 +28,10 @@ func TunnelServer() string {
 	return "wss://t.ggcode.uk/tunnel"
 }
 
-// StartTunnel 激活隧道(幂等:已激活直接返回现 URL)。
+// StartTunnelOpts 激活隧道(幂等:已激活直接返回现 URL)。
 // localAddr 是 WebUI 实际监听地址(127.0.0.1:port);返回公网 https URL。
-func (c *TunnelCtl) StartTunnel(localAddr string) (string, bool, error) {
+// subdomain/token 非空时走付费计划(自定义子域名);server 空则用默认服务端。
+func (c *TunnelCtl) StartTunnelOpts(localAddr, subdomain, token, server string) (string, bool, error) {
 	c.mu.Lock()
 	if c.tunnel != nil {
 		u := c.url
@@ -41,12 +42,18 @@ func (c *TunnelCtl) StartTunnel(localAddr string) (string, bool, error) {
 	c.cancel = cancel
 	c.mu.Unlock()
 
-	t, err := etunnel.Connect(ctx, etunnel.Options{
-		Server:    TunnelServer(),
+	if server == "" {
+		server = TunnelServer()
+	}
+	opts := etunnel.Options{
+		Server:    server,
 		LocalAddr: localAddr,
+		Subdomain: subdomain,
+		Token:     token,
 		Client:    "ggcode-webui/1.0",
 		OnLog:     func(format string, args ...any) { debug.Log("webui", "tunnel: "+format, args...) },
-	})
+	}
+	t, err := etunnel.Connect(ctx, opts)
 	if err != nil {
 		c.mu.Lock()
 		c.cancel = nil

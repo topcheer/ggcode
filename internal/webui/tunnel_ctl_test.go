@@ -27,7 +27,7 @@ func TestTunnelCtlOfflineBranches(t *testing.T) {
 	// 确定性错误路径:server 指向本机端口 1(无监听必拒连),StartTunnel 必返错,
 	// 断言失败后状态复位可重试——不依赖外部网络状态,无 skip 分支
 	t.Setenv("ETUNNEL_SERVER", "wss://127.0.0.1:1/tunnel")
-	if _, started, err := c.StartTunnel("127.0.0.1:1"); err == nil {
+	if _, started, err := c.StartTunnelOpts("127.0.0.1:1", "", "", ""); err == nil {
 		t.Fatalf("dial to port 1 unexpectedly succeeded (started=%v)", started)
 	}
 	if c.TunnelURL() != "" {
