@@ -80,7 +80,7 @@ func TestMemoryCurator_AppliesValidActions(t *testing.T) {
 	fake := &fakeCuratorProvider{response: `{"actions":[` +
 		`{"op":"save","scope":"project","key":"build-process","content":"Tags: build\nUse make verify-ci before pushing","reason":"add tags line"},` +
 		`{"op":"delete","scope":"project","key":"stale-release-note","reason":"one-time completed event"}]}`}
-	cur := NewMemoryCurator(global, project, fake, MemoryCuratorOptions{Debounce: 30 * time.Millisecond})
+	cur := NewMemoryCurator(global, project, fake, MemoryCuratorOptions{Debounce: 30 * time.Millisecond, DisableSweep: true})
 	cur.Start(context.Background())
 	defer cur.Stop()
 
@@ -104,7 +104,7 @@ func TestMemoryCurator_BatchesEventsIntoOneCall(t *testing.T) {
 	withTestHome(t)
 	project := memory.NewProjectAutoMemory(t.TempDir())
 	fake := &fakeCuratorProvider{response: `{"actions":[]}`}
-	cur := NewMemoryCurator(nil, project, fake, MemoryCuratorOptions{Debounce: 150 * time.Millisecond})
+	cur := NewMemoryCurator(nil, project, fake, MemoryCuratorOptions{Debounce: 150 * time.Millisecond, DisableSweep: true})
 	cur.Start(context.Background())
 	defer cur.Stop()
 
@@ -132,7 +132,7 @@ func TestMemoryCurator_FailingProviderAbandonsBatchHarmlessly(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &fakeCuratorProvider{err: errors.New("llm down")}
-	cur := NewMemoryCurator(nil, project, fake, MemoryCuratorOptions{Debounce: 30 * time.Millisecond})
+	cur := NewMemoryCurator(nil, project, fake, MemoryCuratorOptions{Debounce: 30 * time.Millisecond, DisableSweep: true})
 	cur.Start(context.Background())
 	defer cur.Stop()
 
@@ -167,7 +167,7 @@ func TestMemoryCurator_IgnoresOwnEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &fakeCuratorProvider{response: `{"actions":[{"op":"save","scope":"project","key":"build-process","content":"Tags: build\nUse make verify-ci"}]}`}
-	cur := NewMemoryCurator(nil, project, fake, MemoryCuratorOptions{Debounce: 30 * time.Millisecond})
+	cur := NewMemoryCurator(nil, project, fake, MemoryCuratorOptions{Debounce: 30 * time.Millisecond, DisableSweep: true})
 	cur.Start(context.Background())
 	defer cur.Stop()
 

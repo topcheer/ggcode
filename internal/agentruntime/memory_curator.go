@@ -45,8 +45,12 @@ type MemoryCuratorOptions struct {
 	Debounce time.Duration
 	// Timeout bounds a single curation batch (LLM call + action execution).
 	Timeout time.Duration
-	// MaxActions caps how many LLM-proposed actions are executed per batch.
+	// MaxActions caps how many LLM-proposed actions are executed per pass;
+	// batches loop passes until every key is settled.
 	MaxActions int
+	// DisableSweep skips the startup/backlog sweep goroutine (tests that
+	// count LLM calls deterministically). Production keeps it enabled.
+	DisableSweep bool
 }
 
 // MemoryCurator is a resident background agent that watches memory
@@ -66,11 +70,13 @@ type MemoryCurator struct {
 
 	failStreak   int       // consecutive failed passes
 	breakerUntil time.Time // loop/sweep quiesce until this instant when tripped
+	disableSweep bool      // tests: skip the startup sweep goroutine
 
 	// sweep state (process-local cursor; guarded by sweepMu)
 	sweepMu     sync.Mutex
 	sweepQueued []memory.ChangeEvent
 	sweepDone   bool
+	sweepPrimed bool // false until the first chunk is ever collected
 
 	events chan memory.ChangeEvent
 	stopCh chan struct{}
@@ -93,12 +99,13 @@ func NewMemoryCurator(globalMem, projectMem *memory.AutoMemory, prov provider.Pr
 		opts.MaxActions = memoryCuratorMaxPassActions
 	}
 	return &MemoryCurator{
-		globalMem:  globalMem,
-		projectMem: projectMem,
-		prov:       prov,
-		debounce:   opts.Debounce,
-		timeout:    opts.Timeout,
-		maxActions: opts.MaxActions,
+		globalMem:    globalMem,
+		projectMem:   projectMem,
+		prov:         prov,
+		debounce:     opts.Debounce,
+		timeout:      opts.Timeout,
+		maxActions:   opts.MaxActions,
+		disableSweep: opts.DisableSweep,
 	}
 }
 
@@ -121,10 +128,16 @@ func (c *MemoryCurator) Start(ctx context.Context) {
 		c.projectMem.SetEventSink("project", c.events)
 	}
 	stopCh := c.stopCh
-	// Startup sweep: one pass over the ENTIRE backlog (both scopes) in
-	// chunks with a persisted cursor, so stores with hundreds of entries
-	// converge instead of only ever curating new deltas (v2 amendment).
-	safego.Go("memorycurator.sweep", func() { c.startupSweep(ctx, stopCh) })
+	// Start holds c.mu for the whole function (deferred unlock); read the
+	// sweep flag directly instead of re-locking (the mutex is not
+	// reentrant - locking again here deadlocked the first Start).
+	sweepDisabled := c.disableSweep
+	if !sweepDisabled {
+		// Startup sweep: one pass over the ENTIRE backlog (both scopes) in
+		// chunks with a persisted cursor, so stores with hundreds of entries
+		// converge instead of only ever curating new deltas (v2 amendment).
+		safego.Go("memorycurator.sweep", func() { c.startupSweep(ctx, stopCh) })
+	}
 	safego.Go("memorycurator.loop", func() { c.loop(ctx, stopCh) })
 	debug.Log("memory", "curator started (debounce %s, timeout %s, max %d actions)", c.debounce, c.timeout, c.maxActions)
 }
@@ -265,6 +278,12 @@ func (c *MemoryCurator) curateBatchLoop(ctx context.Context, batch []memory.Chan
 			// LLM chose to act on nothing: respect the judgement, defer
 			// the rest rather than re-asking forever.
 			debug.Log("memory", "curator pass proposed no actions; %d key(s) deferred", len(remaining))
+			return
+		}
+		if len(remaining) >= len(pending) {
+			// no progress (actions targeted keys outside the batch, or the
+			// provider repeats itself): defer instead of spinning.
+			debug.Log("memory", "curator pass made no progress; %d key(s) deferred", len(remaining))
 			return
 		}
 		pending = remaining
@@ -524,14 +543,25 @@ func (c *MemoryCurator) startupSweep(ctx context.Context, stopCh <-chan struct{}
 
 // nextSweepChunk returns the next unprocessed chunk of synthetic events
 // (key-sorted, both scopes) and whether the pass has more chunks pending.
-// It advances the cursor past the returned chunk.
+// It advances the cursor past the returned chunk. A COMPLETED pass
+// returns a single (nil, false) completion signal; the caller must then
+// sleep the maintenance interval; the next call re-collects fresh.
 func (c *MemoryCurator) nextSweepChunk() ([]memory.ChangeEvent, bool) {
 	c.sweepMu.Lock()
 	defer c.sweepMu.Unlock()
-	if c.sweepDone && len(c.sweepQueued) == 0 {
-		// begin a new pass
+	if !c.sweepPrimed {
 		c.sweepQueued = c.collectSweepKeys()
+		c.sweepPrimed = true
 		c.sweepDone = false
+	}
+	if len(c.sweepQueued) == 0 {
+		if c.sweepDone {
+			// already signalled completion: re-arm so the next call
+			// collects a fresh pass
+			c.sweepDone = false
+			c.sweepPrimed = false
+		}
+		return nil, false
 	}
 	chunk := make([]memory.ChangeEvent, 0, memoryCuratorSweepChunk)
 	for len(c.sweepQueued) > 0 && len(chunk) < memoryCuratorSweepChunk {
