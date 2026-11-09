@@ -12,10 +12,10 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/charmbracelet/x/term v0.2.2
-	github.com/chromedp/cdproto v0.159.0
-	github.com/chromedp/chromedp v0.21.1
+	github.com/chromedp/cdproto v0.159.2
+	github.com/chromedp/chromedp v0.23.0
 	github.com/creack/pty/v2 v2.0.1
-	github.com/dop251/goja v0.0.0-20261031103838-cf2ff0ec0b31
+	github.com/dop251/goja v0.0.0-20261108153707-d8dfb4d8b999
 	github.com/eekstunt/telegramify-markdown-go v0.2.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -32,16 +32,16 @@ require (
 	github.com/pion/logging v0.2.4
 	github.com/pion/webrtc/v4 v4.2.26
 	github.com/sashabaranov/go-openai v1.43.0
-	github.com/saucelabs/forwarder v1.6.3
+	github.com/saucelabs/forwarder v1.6.4
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/topcheer/ggcode-acp-go v0.1.6
 	github.com/topcheer/mdns v1.3.0
 	github.com/young2j/oxmltotext v1.0.3
 	github.com/yuin/goldmark v1.8.7
 	go.mau.fi/util v0.11.0
-	go.mau.fi/whatsmeow v0.0.0-20261031222104-5d4657a5c29e
+	go.mau.fi/whatsmeow v0.0.0-20261107160454-79dc2a8c33df
 	golang.org/x/crypto v0.58.0
 	golang.org/x/image v0.47.0
 	golang.org/x/mod v0.42.0
@@ -54,7 +54,7 @@ require (
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	maunium.net/go/mautrix v0.32.0
-	modernc.org/sqlite v1.61.1
+	modernc.org/sqlite v1.62.0
 )
 
 require (
@@ -173,7 +173,8 @@ require (
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/api v0.310.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261026165753-2ffab32bce7e // indirect
-	modernc.org/libc v1.79.1 // indirect
+	gopkg.in/yaml.v2 v2.4.0 // indirect
+	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
