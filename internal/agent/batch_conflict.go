@@ -73,6 +73,7 @@ func extractFilePathsForConflict(tc provider.ToolCallDelta) []string {
 	if json.Unmarshal(tc.Arguments, &args) != nil {
 		return nil
 	}
+	args = normalizeApplyPatchArgs(tc.Name, args) // #5321: nested apply_patch joins conflict detection
 
 	var paths []string
 	appendStr := func(key string) {

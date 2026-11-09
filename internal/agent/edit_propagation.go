@@ -126,6 +126,8 @@ func (s *editPropagationState) reset() {
 func propagationExtractPaths(args string) []string {
 	var paths []string
 
+	args = string(normalizeApplyPatchRawArgs("apply_patch", json.RawMessage(args))) // #5321: nested form propagates too
+
 	paths = append(paths, propagationExtractField(args, "file_path")...)
 
 	paths = append(paths, propagationExtractField(args, "path")...)
