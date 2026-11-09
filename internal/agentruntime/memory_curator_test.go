@@ -188,6 +188,11 @@ func TestMemoryCurator_IgnoresOwnEvents(t *testing.T) {
 }
 
 func TestMemoryCurator_MaxActionsCap(t *testing.T) {
+	// v2 semantics: MaxActions caps ONE pass, not the batch. Keys beyond
+	// the per-pass cap are deferred to the next pass and settle there -
+	// driven directly through curateBatchLoop so no debounce timing is
+	// involved (the old Start()-based form flapped depending on whether
+	// pass 2 landed inside the wait window).
 	withTestHome(t)
 	project := memory.NewProjectAutoMemory(t.TempDir())
 	for _, key := range []string{"stale-a", "stale-b"} {
@@ -195,26 +200,26 @@ func TestMemoryCurator_MaxActionsCap(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	fake := &fakeCuratorProvider{response: `{"actions":[` +
-		`{"op":"delete","scope":"project","key":"stale-a"},` +
-		`{"op":"delete","scope":"project","key":"stale-b"}]}`}
-	cur := NewMemoryCurator(nil, project, fake, MemoryCuratorOptions{Debounce: 30 * time.Millisecond, MaxActions: 1})
-	cur.Start(context.Background())
-	defer cur.Stop()
-
-	if err := project.SaveMemory("stale-a", "Release 1 has completed"); err != nil {
-		t.Fatal(err)
+	del := func(keys ...string) string {
+		acts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			acts = append(acts, `{"op":"delete","scope":"project","key":"`+k+`","reason":"stale"}`)
+		}
+		return `{"actions":[` + strings.Join(acts, ",") + `]}`
 	}
-	if !curatorWaitFor(t, 5*time.Second, func() bool {
-		a, _ := project.LoadKey("stale-a")
-		return a == ""
-	}) {
-		t.Fatal("first capped action never applied")
+	scripted := &scriptedCuratorProvider{responses: []string{del("stale-a"), del("stale-b")}}
+	cur := NewMemoryCurator(nil, project, scripted, MemoryCuratorOptions{MaxActions: 1})
+	cur.curateBatchLoop(context.Background(), []memory.ChangeEvent{
+		{Scope: "project", Op: "save", Key: "stale-a"},
+		{Scope: "project", Op: "save", Key: "stale-b"},
+	})
+	for _, k := range []string{"stale-a", "stale-b"} {
+		if v, _ := project.LoadKey(k); v != "" {
+			t.Fatalf("key %s not settled (per-pass cap must defer, not drop)", k)
+		}
 	}
-	// Second action exceeded the cap of 1 and must remain live.
-	b, _ := project.LoadKey("stale-b")
-	if b == "" {
-		t.Fatal("action beyond MaxActions was executed")
+	if scripted.callCount() != 2 {
+		t.Fatalf("expected exactly 2 passes (cap 1 per pass), got %d", scripted.callCount())
 	}
 }
 
