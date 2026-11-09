@@ -83,6 +83,31 @@ func normalizeGitGlobalFlags(cmd string) string {
 // appends, log snippets, echo of documented patterns) - the raw-string
 // rm scan must not see them. Drop every line between a <<[-]WORD
 // redirect and its closing WORD line.
+// #5328: only TEXT receivers are stripped. For interpreter receivers
+// (bash/sh/python3 ...) the heredoc body is executed code, equivalent
+// to `bash -c`, so the body must stay visible to the rm scan; stripping
+// it turned the rm_rf critical guard blind to recursive force-deletes
+// inside interpreter heredocs.
+func heredocReceiverKeepsBody(line string) bool {
+	stripped := strings.TrimSpace(line)
+	// Pure redirection target (e.g. `>> ledger.md <<EOF` without cat) is
+	// a text receiver: the heredoc becomes file content.
+	if m := reHeredocStart.FindStringIndex(stripped); m != nil && m[0] == 0 {
+		return false
+	}
+	fields := strings.Fields(stripped)
+	if len(fields) == 0 {
+		return false
+	}
+	cmd := fields[0]
+	switch cmd {
+	case "bash", "sh", "zsh", "ksh", "dash", "python", "python3", "perl",
+		"ruby", "lua", "node", "nodejs", "php", "awk", "sed", "eval", "source", ".":
+		return true
+	}
+	return false
+}
+
 func stripHeredocBodies(cmd string) string {
 	lines := strings.Split(cmd, "\n")
 	out := make([]string, 0, len(lines))
@@ -96,7 +121,7 @@ func stripHeredocBodies(cmd string) string {
 			continue
 		}
 		out = append(out, line)
-		if m := reHeredocStart.FindStringSubmatch(line); m != nil {
+		if m := reHeredocStart.FindStringSubmatch(line); m != nil && !heredocReceiverKeepsBody(line) {
 			inHeredoc = true
 			terminator = m[1]
 		}
