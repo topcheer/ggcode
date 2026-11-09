@@ -192,10 +192,15 @@ func stripHeredocBodies(cmd string) string {
 // privilege or batching was involved. Strip known wrapper words (same
 // family as heredocPrefixWords plus xargs/timeout exec-style launchers)
 // after env-prefix assignments before matching.
+// #5342 increment (#5345): doas joins the table (permission layer's
+// rmCmdAnchor precedent), and wrapper/command-position words are
+// normalized to their final path component before lookup so path forms
+// (`/usr/bin/sudo rm -rf`, `sudo /bin/rm -rf`) cannot hide behind the
+// prefix - same normalization philosophy as heredocReceiverKeepsBody.
 var rmWrapperWords = map[string]bool{
 	"sudo": true, "nohup": true, "env": true, "nice": true, "time": true,
 	"command": true, "builtin": true, "xargs": true, "timeout": true,
-	"stdbuf": true, "setsid": true,
+	"stdbuf": true, "setsid": true, "doas": true,
 }
 
 // isNumericToken reports whether s is a pure number (timeout 30 style
@@ -212,6 +217,17 @@ func isNumericToken(s string) bool {
 	return true
 }
 
+// commandWordBase normalizes a path-form token (/usr/bin/sudo, ./rm,
+// C:\tools\rm) to its final component so wrapper-table lookups and the
+// command-position rm check see the command NAME, not its location
+// (#5342 increment, #5345 path-form classes).
+func commandWordBase(tok string) string {
+	if i := strings.LastIndexAny(tok, `/\`); i >= 0 {
+		return tok[i+1:]
+	}
+	return tok
+}
+
 func firstRmCommandSegment(cmd string) string {
 	cleaned := stripHeredocBodies(cmd)
 	for _, seg := range reChainSep.Split(cleaned, -1) {
@@ -225,10 +241,13 @@ func firstRmCommandSegment(cmd string) string {
 		// argument (timeout 30) only appears after a wrapper word, so
 		// non-wrapper commands (echo/git/...) break out here and keep
 		// their tokens intact (#5315 negative pins stay safe).
+		// #5342 increment (#5345): wrapper words and the head word are
+		// both normalized to their final path component first, so
+		// /usr/bin/sudo and /bin/rm classify like their base names.
 		seenWrapper := false
 		prevWasFlag := false
 		for len(fields) > 0 {
-			h := fields[0]
+			h := commandWordBase(fields[0])
 			if rmWrapperWords[h] {
 				seenWrapper = true
 				prevWasFlag = false
@@ -242,8 +261,19 @@ func firstRmCommandSegment(cmd string) string {
 			}
 			break
 		}
-		if len(fields) > 0 && fields[0] == "rm" {
-			return strings.Join(fields, " ")
+		if len(fields) > 0 && commandWordBase(fields[0]) == "rm" {
+			seg2 := strings.Join(fields, " ")
+			// #5342 increment (carrier core): a plain rm segment is not
+			// the answer. `rm x && rm -rf d` previously returned "rm x"
+			// from the FIRST rm segment and the caller's reRmRf check
+			// then went blind on the recursive segment; keep scanning
+			// and return only the first segment that actually carries
+			// recursive force flags. Advisory semantics stay one rm_rf
+			// per command (pinned in zz_issue5342_increment_test.go).
+			if reRmRf.MatchString(seg2) {
+				return seg2
+			}
+			continue
 		}
 	}
 	return ""
