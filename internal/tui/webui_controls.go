@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/permission"
 )
 
 // commandRequestMsg 让外部(webui 聊天面板三能力:切模型/选 effort/切 mode)
@@ -33,12 +34,22 @@ func (r *REPL) SubmitCommand(text string) error {
 
 // ChatControlsSnapshot 返回聊天面板三能力当前值(模型/权限模式/推理力度)。
 // 只读快照,与 RequestSessionSwitch 同锁面。
+// 真值源纪律:r.model 是 bubbletea 值语义的启动拷贝,运行期 /mode 经
+// ConfigPolicy 指针切换不会回写它的 m.mode 字段——mode 必须读 policy,
+// reasoning_effort 必须读 REPL 直达的 r.agent(旧拷贝 m.agent 恒 nil)。
 func (r *REPL) ChatControlsSnapshot() map[string]string {
 	r.currentSessionMu.RLock()
 	defer r.currentSessionMu.RUnlock()
 	m := r.model
-	snap := map[string]string{"mode": m.mode.String()}
-	if m.agent != nil {
+	snap := map[string]string{}
+	mode := m.mode
+	if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
+		mode = cp.CurrentMode()
+	}
+	snap["mode"] = mode.String()
+	if r.agent != nil {
+		snap["reasoning_effort"] = r.agent.ReasoningEffort()
+	} else if m.agent != nil {
 		snap["reasoning_effort"] = m.agent.ReasoningEffort()
 	}
 	if m.config != nil {

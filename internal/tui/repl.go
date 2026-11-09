@@ -588,6 +588,11 @@ func (r *REPL) SetWebUIReadyAddr(addr, token string) {
 	r.webuiToken = token
 }
 
+// SetWebUITunnelCtl 注入 /webui tunnel 控制器(webuiSrv 侧 TunnelCtl 单例)
+func (r *REPL) SetWebUITunnelCtl(ctl *webui.TunnelCtl) {
+	r.model.webuiTunnel = ctl
+}
+
 func (r *REPL) SetInitialSessionID(sessionID, mode string) {
 	r.currentSessionMu.Lock()
 	r.initialSessionID = sessionID
@@ -894,6 +899,14 @@ func (r *REPL) SetTaskManager(mgr *task.Manager, tools *tool.Registry) {
 
 func (r *REPL) SetTaskOutputTool(mgr *subagent.Manager, tools *tool.Registry) {
 	tools.Register(tool.TaskOutputTool{Provider: mgr})
+}
+
+// CronJobsSnapshot 当前会话的任务快照(webui /api/cron/jobs 真相源;nil 安全)
+func (r *REPL) CronJobsSnapshot() []cron.Job {
+	if r.cronScheduler == nil {
+		return nil
+	}
+	return r.cronScheduler.List()
 }
 
 func (r *REPL) SetCronScheduler(s *cron.Scheduler, tools *tool.Registry) {

@@ -555,7 +555,7 @@ func TestChatWSBridgeSimple(t *testing.T) {
 	ws.WriteJSON(map[string]string{"type": "user_message", "text": "hi"})
 
 	var ack map[string]interface{}
-	ws.ReadJSON(&ack)
+	skipQueueSnapshot(t, ws, &ack)
 	if ack["type"] != "user_ack" {
 		t.Fatalf("expected user_ack, got %v", ack["type"])
 	}
@@ -571,7 +571,7 @@ func TestChatWSBridgeSimple(t *testing.T) {
 	}()
 
 	var msg1 map[string]interface{}
-	ws.ReadJSON(&msg1)
+	skipQueueSnapshot(t, ws, &msg1)
 	if msg1["type"] != "text_delta" || msg1["text"] != "Hello " {
 		t.Errorf("expected text_delta 'Hello ', got %v", msg1)
 	}
@@ -619,7 +619,7 @@ func TestChatWSBridgeBroadcast(t *testing.T) {
 
 	ws1.WriteJSON(map[string]string{"type": "user_message", "text": "hello"})
 	var ack1 map[string]interface{}
-	ws1.ReadJSON(&ack1)
+	skipQueueSnapshot(t, ws1, &ack1)
 	if ack1["type"] != "user_ack" {
 		t.Fatalf("ws1 should get user_ack, got %v", ack1["type"])
 	}
@@ -645,7 +645,7 @@ func TestChatWSBridgeBroadcast(t *testing.T) {
 
 	var r2 map[string]interface{}
 	ws2.SetReadDeadline(time.Now().Add(2 * time.Second))
-	ws2.ReadJSON(&r2)
+	skipQueueSnapshot(t, ws2, &r2)
 	if r2["type"] != "text_delta" || r2["text"] != "response" {
 		t.Errorf("ws2 should get text_delta (broadcast), got %v", r2)
 	}
@@ -669,7 +669,7 @@ func TestChatWSBridgeInvalidMessage(t *testing.T) {
 
 	ws.WriteJSON(map[string]string{"type": "invalid", "text": "hello"})
 	var msg map[string]interface{}
-	ws.ReadJSON(&msg)
+	skipQueueSnapshot(t, ws, &msg)
 	if msg["type"] != "error" {
 		t.Errorf("expected error, got %v", msg["type"])
 	}
@@ -693,7 +693,7 @@ func TestChatWSBridgeEmptyText(t *testing.T) {
 
 	ws.WriteJSON(map[string]string{"type": "user_message", "text": ""})
 	var msg map[string]interface{}
-	ws.ReadJSON(&msg)
+	skipQueueSnapshot(t, ws, &msg)
 	if msg["type"] != "error" {
 		t.Errorf("expected error for empty text, got %v", msg["type"])
 	}
@@ -722,7 +722,7 @@ func TestChatWSBridgeWithImage(t *testing.T) {
 	})
 
 	var ack map[string]interface{}
-	ws.ReadJSON(&ack)
+	skipQueueSnapshot(t, ws, &ack)
 	if ack["type"] != "user_ack" {
 		t.Fatalf("expected user_ack, got %v", ack["type"])
 	}
@@ -762,7 +762,7 @@ func TestChatWSBridgeWithFile(t *testing.T) {
 	})
 
 	var ack map[string]interface{}
-	ws.ReadJSON(&ack)
+	skipQueueSnapshot(t, ws, &ack)
 	if ack["type"] != "user_ack" {
 		t.Fatalf("expected user_ack, got %v", ack["type"])
 	}

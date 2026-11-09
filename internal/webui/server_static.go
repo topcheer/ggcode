@@ -25,7 +25,7 @@ const authScript = `<script>
 	};
 	var OrigWS=window.WebSocket;
 	window.WebSocket=function(url,protocols){
-		if(url.indexOf('?')===-1)url+='?token='+t;else url+='&token='+t;
+		if(url.indexOf('token=')===-1)url+=(url.indexOf('?')===-1?'?':'&')+'token='+t;
 		if(protocols)return new OrigWS(url,protocols);
 		return new OrigWS(url);
 	};

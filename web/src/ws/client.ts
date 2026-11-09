@@ -15,7 +15,9 @@ export type StreamMsg =
   | { type: "user_ack"; text: string }
   // 二层契约(§6.1 实时流):后端 emit 后前端自动激活;零事件=完全降级不变
   | { type: "subagent_delta"; id: string; kind: "text" | "reasoning"; text: string }
-  | { type: "subagent_done"; id: string; result: string; is_error: boolean };
+  | { type: "subagent_done"; id: string; result: string; is_error: boolean }
+  // 插入消息队列三事件(append/dequeue/clear)+连接时 list 快照——镜像 TUI 排队区
+  | { type: "queue"; event: "append" | "dequeue" | "clear" | "list"; text?: string; items?: string[]; count?: number };
 
 type Handlers = {
   onMsg: (m: StreamMsg) => void;

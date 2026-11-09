@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Chat from "@/pages/Chat";
 import Settings from "@/pages/Settings";
 import CommandPalette, { type PaletteAction } from "@/pages/CommandPalette";
@@ -39,11 +39,13 @@ export default function App() {
   const streams = useChat((s) => s.subagentStreams);
   const activeStreams = Object.entries(streams).filter(([, s]) => !s.done);
   const todos = useChat((s) => s.todos);
+  const cronEvents = useChat((s) => s.cronEvents);
+  const [actTab, setActTab] = useState<"todos" | "subs" | "cron">("todos");
   // 移动端抽屉(P5-7):窄屏左栏抽屉化
   const [drawerOpen, setDrawerOpen] = useState(false);
   // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
-  // 会话列表(左栏,同桌面逻辑:本 workspace 全量,锁定态由 busy/current 标示)
-  const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string }>>([]);
+  // 会话列表(左栏,同桌面逻辑:本 workspace 全量,锁定态由 locked_by_pid 标示)
+  const [sessions, setSessions] = useState<Array<{ id: string; title?: string; updated_at?: string; locked_by_pid?: number }>>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>("");
   const [switching, setSwitching] = useState(false);
 
@@ -102,9 +104,20 @@ export default function App() {
       .then((r) => (r.ok ? r.json() : { groups: [] }))
       .then((d) => {
         const groups = Array.isArray(d?.groups) ? d.groups : [];
-        const flat = groups.flatMap((g: { sessions: Array<{ id: string; title?: string; updated_at?: string }> }) => g.sessions || []);
-        setSessions(flat);
-        const cur = groups.find((g: { current?: boolean }) => g.current);
+        // 只显示当前 workspace 的会话(同桌面逻辑;后端 groups 已标记 current,
+        // 缺标记时回退 current_workspace 匹配)
+        const cur =
+          groups.find((g: { current?: boolean }) => g.current) ??
+          groups.find((g: { workspace?: string }) => g.workspace === d?.current_workspace);
+        const rows = [...(cur?.sessions ?? [])];
+        // 锁定的会话排到最后(活会话优先,锁定态不打断浏览)
+        rows.sort((a: { locked_by_pid?: number; updated_at?: string }, b: { locked_by_pid?: number; updated_at?: string }) => {
+          const la = a.locked_by_pid ? 1 : 0;
+          const lb = b.locked_by_pid ? 1 : 0;
+          if (la !== lb) return la - lb;
+          return (b.updated_at ?? "").localeCompare(a.updated_at ?? "");
+        });
+        setSessions(rows);
         if (cur?.sessions?.length) setCurrentSessionId(cur.sessions[0].id);
       })
       .catch(() => {});
@@ -116,6 +129,7 @@ export default function App() {
   }, [loadSessions]);
 
   // 切换请求:busy(锁定)时后端返回 409,前端以禁用态呈现锁定
+  const switchTimerRef = useRef<number | undefined>(undefined);
   const switchSession = useCallback(
     (id: string) => {
       if (id === currentSessionId || switching) return;
@@ -128,9 +142,20 @@ export default function App() {
         .then((r) => {
           if (r.ok) {
             setCurrentSessionId(id);
-            // 后端切换经 program msg 队列异步落地:800ms+2.5s 双保险重拉聊天历史
-            setTimeout(() => useChat.getState().loadHistory(), 800);
-            setTimeout(() => useChat.getState().loadHistory(), 2500);
+            // 后端切换经 program msg 队列异步落地:800ms+2.5s 双保险重拉
+            // 聊天历史与队列快照(A→B 快切时清旧定时器,避免脏触发)
+            window.clearTimeout(switchTimerRef.current);
+            const recheck = (delay: number) => {
+              switchTimerRef.current = window.setTimeout(() => {
+                useChat.getState().loadHistory();
+                fetch("/api/chat/queue")
+                  .then((r2) => (r2.ok ? r2.json() : { items: [] }))
+                  .then((d) => useChat.getState().syncQueue(d.items ?? []))
+                  .catch(() => {});
+              }, delay);
+            };
+            recheck(800);
+            recheck(2500);
           }
           loadSessions();
         })
@@ -193,22 +218,25 @@ export default function App() {
           <div className="text-ui-xs px-3 py-1.5 text-foreground-subtlest">会话</div>
           {sessions.map((s) => {
             const current = s.id === currentSessionId;
+            const locked = !!s.locked_by_pid;
             return (
               <button
                 key={s.id}
-                disabled={current || switching}
-                title={current ? "当前会话" : switching ? "切换中…" : "切换到此会话"}
+                disabled={current || switching || locked}
+                title={current ? "当前会话" : locked ? `被另一实例锁定 (PID ${s.locked_by_pid})` : switching ? "切换中…" : "切换到此会话"}
                 className={
                   "w-full truncate rounded-lg px-3 py-1.5 text-left text-ui-xs transition-colors " +
                   (current
                     ? "bg-selected font-medium text-foreground"
-                    : switching
-                      ? "cursor-wait text-foreground-subtlest"
-                      : "text-foreground-subtle hover:bg-hover hover:text-foreground")
+                    : locked
+                      ? "cursor-not-allowed text-foreground-subtlest opacity-60"
+                      : switching
+                        ? "cursor-wait text-foreground-subtlest"
+                        : "text-foreground-subtle hover:bg-hover hover:text-foreground")
                 }
                 onClick={() => switchSession(s.id)}
               >
-                {s.title || s.id.slice(0, 16)}
+                {locked ? "🔒 " : ""}{s.title || s.id.slice(0, 16)}
               </button>
             );
           })}
@@ -231,51 +259,92 @@ export default function App() {
         </div>
         {view === "chat" ? <Chat /> : <Settings onBack={() => setView("chat")} />}
       </main>
-      <aside className="hidden w-[380px] shrink-0 flex-col border-l border-border bg-sidebar lg:block" style={paneSpawn || activeStreams.length > 0 ? { width: "380px" } : undefined}>
-        {/* agent loop 运行时 todo 实时面板(todo_write tool_result 推送聚合;零事件自动隐藏) */}
-        {todos.length > 0 && (
-          <div className="max-h-[40%] overflow-auto border-b border-border">
-            <div className="px-4 py-2 text-ui-xs text-foreground-subtlest">
-              任务清单 {todos.filter((t) => t.status === "done").length}/{todos.length}
-            </div>
-            {todos.map((t) => (
-              <div key={t.id} className="flex items-start gap-2 border-t border-border px-4 py-1.5">
-                <span
-                  className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full"
-                  style={{
-                    background:
-                      t.status === "done" ? "var(--color-success)" : t.status === "in_progress" ? "var(--color-trajectory-tool-call)" : "var(--color-foreground-subtlest)",
-                  }}
-                  title={t.status}
-                />
-                <span
-                  className={`text-ui-xs text-wrap-phrase ${t.status === "done" ? "text-foreground-subtlest line-through" : t.status === "in_progress" ? "text-foreground" : "text-foreground-subtle"}`}
+      <aside className="hidden w-[380px] shrink-0 flex-col border-l border-border bg-sidebar lg:block" style={paneSpawn || activeStreams.length > 0 || todos.length > 0 || cronEvents.length > 0 ? { width: "380px" } : undefined}>
+        {/* 活动面板:任务清单/子代理/Cron 三 tab 独立区域(零事件 tab 灰显) */}
+        {(todos.length > 0 || activeStreams.length > 0 || cronEvents.length > 0) && (
+          <div className="flex min-h-0 flex-col border-b border-border">
+            <div className="text-ui-xs flex shrink-0 border-b border-border">
+              {([
+                { id: "todos", label: `任务 ${todos.length}`, on: todos.length > 0 },
+                { id: "subs", label: `子代理 ${activeStreams.length}`, on: activeStreams.length > 0 },
+                { id: "cron", label: `Cron ${cronEvents.length}`, on: cronEvents.length > 0 },
+              ] as const).map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setActTab(t.id)}
+                  className={`flex-1 border-b-2 px-2 py-2 transition-colors ${
+                    actTab === t.id ? "border-brand text-foreground" : t.on ? "border-transparent text-foreground-subtle hover:text-foreground" : "border-transparent text-foreground-subtlest"
+                  }`}
                 >
-                  {t.content}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-        {/* §6.1 二层:活跃子代理实时流监视(一等键=SubAgentID;零事件自动隐藏) */}
-        {activeStreams.length > 0 && (
-          <div className="max-h-[50%] overflow-auto border-b border-border">
-            <div className="px-4 py-2 text-ui-xs text-foreground-subtlest">子代理实时流</div>
-            {activeStreams.map(([id, s]) => (
-              <div key={id} className="border-t border-border px-4 py-2">
-                <div className="mb-1 flex items-center gap-2">
-                  <span
-                    className="inline-block h-2 w-2 rounded-full"
-                    style={{ background: s.done ? (s.isError ? "var(--color-destructive)" : "var(--color-success)") : "var(--color-trajectory-tool-call)" }}
-                  />
-                  <span className="text-ui-xs font-[family-name:var(--font-mono)] text-foreground-subtle">{id.slice(0, 12)}</span>
-                  <span className="text-ui-xs ml-auto text-foreground-subtlest">{s.done ? (s.isError ? "失败" : "完成") : "运行中"}</span>
-                </div>
-                <pre className="text-ui-xs max-h-32 overflow-auto font-[family-name:var(--font-mono)] whitespace-pre-wrap text-foreground-subtle">
-                  {s.text || s.reasoning || "…"}
-                </pre>
-              </div>
-            ))}
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto">
+              {actTab === "todos" && (
+                todos.length === 0 ? (
+                  <div className="px-4 py-3 text-ui-xs text-foreground-subtlest">暂无任务清单(agent 运行 todo_write 时出现)</div>
+                ) : (
+                  <>
+                    <div className="px-4 py-2 text-ui-xs text-foreground-subtlest">
+                      进度 {todos.filter((t) => t.status === "done").length}/{todos.length}
+                    </div>
+                    {todos.map((t) => (
+                      <div key={t.id} className="flex items-start gap-2 border-t border-border px-4 py-1.5">
+                        <span
+                          className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full"
+                          style={{
+                            background:
+                              t.status === "done" ? "var(--color-success)" : t.status === "in_progress" ? "var(--color-trajectory-tool-call)" : "var(--color-foreground-subtlest)",
+                          }}
+                          title={t.status}
+                        />
+                        <span
+                          className={`text-ui-xs text-wrap-phrase ${t.status === "done" ? "text-foreground-subtlest line-through" : t.status === "in_progress" ? "text-foreground" : "text-foreground-subtle"}`}
+                        >
+                          {t.content}
+                        </span>
+                      </div>
+                    ))}
+                  </>
+                )
+              )}
+              {actTab === "subs" && (
+                activeStreams.length === 0 ? (
+                  <div className="px-4 py-3 text-ui-xs text-foreground-subtlest">无活跃子代理(spawn_agent 运行时实时流在此)</div>
+                ) : (
+                  activeStreams.map(([id, s]) => (
+                    <div key={id} className="border-t border-border px-4 py-2 first:border-t-0">
+                      <div className="mb-1 flex items-center gap-2">
+                        <span
+                          className="inline-block h-2 w-2 rounded-full"
+                          style={{ background: s.done ? (s.isError ? "var(--color-destructive)" : "var(--color-success)") : "var(--color-trajectory-tool-call)" }}
+                        />
+                        <span className="text-ui-xs font-[family-name:var(--font-mono)] text-foreground-subtle">{id.slice(0, 12)}</span>
+                        <span className="text-ui-xs ml-auto text-foreground-subtlest">{s.done ? (s.isError ? "失败" : "完成") : "运行中"}</span>
+                      </div>
+                      <pre className="text-ui-xs max-h-32 overflow-auto font-[family-name:var(--font-mono)] whitespace-pre-wrap text-foreground-subtle">
+                        {s.text || s.reasoning || "…"}
+                      </pre>
+                    </div>
+                  ))
+                )
+              )}
+              {actTab === "cron" && (
+                cronEvents.length === 0 ? (
+                  <div className="px-4 py-3 text-ui-xs text-foreground-subtlest">暂无 Cron 触发事件(定时任务到点时在此归集)</div>
+                ) : (
+                  cronEvents.map((e, i) => (
+                    <div key={`${i}-${e.at}`} className="flex items-start gap-2 border-t border-border px-4 py-1.5 first:border-t-0">
+                      <span className="mt-0.5 inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: "var(--color-trajectory-tool-call)" }} />
+                      <span className="text-ui-xs font-[family-name:var(--font-mono)] text-foreground-subtlest">{e.at}</span>
+                      <span className="text-ui-xs text-wrap-phrase text-foreground-subtle">{e.text}</span>
+                    </div>
+                  ))
+                )
+              )}
+            </div>
           </div>
         )}
         {paneSpawn ? (

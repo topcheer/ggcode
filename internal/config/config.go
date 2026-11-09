@@ -104,6 +104,12 @@ type EndpointConfig struct {
 	ModelLimits         map[string]ModelLimitConfig `yaml:"model_limits,omitempty" json:"model_limits,omitempty"`
 }
 
+// ETunnelConfig /et 隧道(/et setup 持久化):自定义子域名与付费 token。
+type ETunnelConfig struct {
+	Subdomain string `yaml:"subdomain,omitempty" json:"subdomain,omitempty"` // 付费计划自定义子域名
+	Token     string `yaml:"token,omitempty" json:"token,omitempty"`         // 付费计划 API key
+}
+
 type VendorConfig struct {
 	DisplayName string                    `yaml:"display_name" json:"display_name"`
 	APIKey      string                    `yaml:"api_key,omitempty" json:"api_key,omitempty"`
@@ -316,6 +322,7 @@ type Config struct {
 	Swarm               SwarmConfig                `yaml:"swarm,omitempty" json:"swarm,omitempty"`
 	Verify              VerifyConfig               `yaml:"verify,omitempty" json:"verify,omitempty"`
 	A2A                 A2AConfig                  `yaml:"a2a,omitempty" json:"a2a,omitempty"`
+	ETunnel             ETunnelConfig              `yaml:"etunnel,omitempty" json:"etunnel,omitempty"`
 	LanChat             LanChatConfig              `yaml:"lanchat,omitempty" json:"lanchat,omitempty"`
 	Watch               []WatchTriggerConfig       `yaml:"watch,omitempty" json:"watch,omitempty"`
 	Idle                IdleConfig                 `yaml:"idle,omitempty" json:"idle,omitempty"`

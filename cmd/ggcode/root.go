@@ -1261,10 +1261,25 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	webuiSrv.SetChatBridge(tuiBridge)
 	repl.SetWebUIBridge(tuiBridge)
 	// 会话切换执行面注入(webui 发起,实际切换由 TUI resume 全链执行)
+	webuiSrv.SetCronListFn(func() []webui.CronJobView {
+		jobs := repl.CronJobsSnapshot()
+		out := make([]webui.CronJobView, 0, len(jobs))
+		for _, j := range jobs {
+			p := j.Prompt
+			if len(p) > 120 {
+				p = p[:120] + "\u2026"
+			}
+			out = append(out, webui.CronJobView{ID: j.ID, CronExpr: j.CronExpr, Prompt: p, Recurring: j.Recurring, Paused: j.Paused, CreatedAt: j.CreatedAt.Format("2006-01-02T15:04:05Z07:00")})
+		}
+		return out
+	})
 	webuiSrv.SetSessionSwitchFn(repl.RequestSessionSwitch)
 	// 聊天三能力(模型/effort/mode)注入:webui 复用 TUI slash 命令全链
 	webuiSrv.SetChatCommandFn(repl.SubmitCommand)
 	webuiSrv.SetChatControlsFn(repl.ChatControlsSnapshot)
+	// 插入消息队列:三事件广播(append/dequeue/clear)+连接时快照
+	repl.SetQueueNotifyFn(webuiSrv.EmitQueueEvent)
+	webuiSrv.SetQueueSnapshotFn(repl.QueuedSubmissions)
 
 	// 子代理实时流一等接线(§6.1):manager 回调构造 StreamEvent 广播进总线,
 	// TUI/webui/桌面共用同一契约(webui WS 由 streamEventToJSON 转 subagent_delta 帧)
@@ -1295,6 +1310,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		defer webuiSrv.Close()
 
 		repl.SetWebUIReadyAddr(actualAddr, webuiSrv.Token())
+		// /webui tunnel 控制器:etunnel 隧道映射本 WebUI 到公网(../et SDK)
+		tunnelCtl := &webui.TunnelCtl{}
+		repl.SetWebUITunnelCtl(tunnelCtl)
 
 		repl.SetWorkingDir(workingDir)
 		webuiSrv.SetStatusFn(repl.RuntimeStatus)
