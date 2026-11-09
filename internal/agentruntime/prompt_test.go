@@ -6,6 +6,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/memory"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -220,5 +221,19 @@ func TestBuildSubAgentSystemPrompt_ExploreContract(t *testing.T) {
 	other := BuildSubAgentSystemPrompt(ctx, "fix the bug", "Plan")
 	if strings.Contains(other, "## Output Contract (Explore)") {
 		t.Error("non-Explore prompt must not carry the Explore contract")
+	}
+}
+
+// #5340: the shared-workspace agents section is appended verbatim when
+// provided and omitted entirely when empty (zero drift for solo runs).
+func TestBuildInteractiveSystemPromptSharedWorkspaceAgents(t *testing.T) {
+	section := "## Shared workspace agents\n\n- alpha (ggcode): busy\n"
+	with := BuildInteractiveSystemPrompt(nil, "/w", permission.SupervisedMode, nil, nil, nil, nil, "", "", section)
+	if !strings.Contains(with, section) {
+		t.Fatal("section missing from prompt when provided")
+	}
+	without := BuildInteractiveSystemPrompt(nil, "/w", permission.SupervisedMode, nil, nil, nil, nil, "", "", "")
+	if strings.Contains(without, "Shared workspace agents") {
+		t.Fatal("section must be omitted when empty")
 	}
 }

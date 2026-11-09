@@ -1994,3 +1994,19 @@ func TestLoad_IdleSection(t *testing.T) {
 		t.Errorf("idle defaults wrong: %+v", cfg2.Idle)
 	}
 }
+
+// #5340 prompt-quality pins: dependency wording must not regress to the
+// old "never pin" absolutism that contradicted manifest pinning reality.
+func TestDefaultSystemPromptDependencyWording(t *testing.T) {
+	if contains(DefaultSystemPrompt, "Never pin or accept outdated") {
+		t.Fatal("old absolutist dependency wording regressed")
+	}
+	for _, want := range []string{
+		"never silently downgrade",
+		"change them deliberately as the task's goal",
+	} {
+		if !contains(DefaultSystemPrompt, want) {
+			t.Fatalf("expected dependency wording %q", want)
+		}
+	}
+}
