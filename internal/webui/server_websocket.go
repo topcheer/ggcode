@@ -17,19 +17,30 @@ import (
 )
 
 // CheckOrigin 收紧(CSWSH 防护):同源放行;无 Origin 头(非浏览器客户端)放行;
-// 跨 Origin 拒绝。配合 auth 中间件的 Bearer/query token 双重校验。
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true
-		}
-		u, err := url.Parse(origin)
-		if err != nil || u.Host == "" {
-			return false
-		}
-		return u.Host == r.Host
-	},
+// 代理感知同源——etunnel 等反代经 X-Forwarded-Host 还原公网 Host 后,Origin
+// 与转发头匹配即视为同源;携带有效 query token 的跨源放行(纵深防御,攻击页
+// 无法伪造 token);其余跨源拒绝。
+func (s *Server) wsUpgrader() websocket.Upgrader {
+	return websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true
+			}
+			u, err := url.Parse(origin)
+			if err != nil || u.Host == "" {
+				return false
+			}
+			if u.Host == r.Host {
+				return true
+			}
+			// 反代链只透传 X-Forwarded-Host(不回写 Host)时,与其匹配即同源
+			if u.Host == r.Header.Get("X-Forwarded-Host") {
+				return true
+			}
+			return s.authToken != "" && authTokenMatches(r.URL.Query().Get("token"), s.authToken)
+		},
+	}
 }
 
 func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
@@ -90,50 +101,22 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent not available", http.StatusServiceUnavailable)
 		return
 	}
-	conn, err := upgrader.Upgrade(w, r, nil)
+	up := s.wsUpgrader()
+	conn, err := up.Upgrade(w, r, nil)
 	if err != nil {
 		debug.Log("webui", "ws upgrade error: %v", err)
 		return
 	}
 	defer conn.Close()
 
-	const (
-		wsReadTimeout  = 90 * time.Second
-		wsPingInterval = 30 * time.Second
-	)
-	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
-	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
-		return nil
-	})
-	pingDone := make(chan struct{})
+	pingDone := s.startPingLoop(conn)
 	defer close(pingDone)
-	safego.Go("webui.ws.pingLoop", func() {
-		ticker := time.NewTicker(wsPingInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
-					return
-				}
-			case <-pingDone:
-				return
-			}
-		}
-	})
 
 	writeCh := make(chan interface{}, 64)
-	writeDone := make(chan struct{})
-	safego.Go("webui.ws.writeLoop", func() {
-		defer close(writeDone)
-		for msg := range writeCh {
-			if err := conn.WriteJSON(msg); err != nil {
-				debug.Log("webui", "ws write error: %v", err)
-				return
-			}
-		}
-	})
+	writeDone := s.startWriteLoop(conn, writeCh)
+	// 队列事件 sink 注册:断开时注销(快照在 send 定义后推送)
+	unregisterQueue := s.registerQueueSink(writeCh)
+	defer unregisterQueue()
 
 	send := func(msg interface{}) {
 		select {
@@ -144,6 +127,8 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	deltaDrops := int64(0)
+	// 连接建立先推一次队列全量快照(重连/切会话后同步)
+	send(s.queueSnapshotMsg())
 	sendTerminal := func(msg map[string]interface{}) {
 		if msg["type"] == "done" && deltaDrops > 0 {
 			msg["dropped_deltas"] = deltaDrops
@@ -194,114 +179,188 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		var msg struct {
-			Type   string `json:"type"`
-			Text   string `json:"text"`
-			Images []struct {
-				MIME string `json:"mime"`
-				Data string `json:"data"`
-			} `json:"images"`
-			Files []struct {
-				Name string `json:"name"`
-				MIME string `json:"mime"`
-				Data string `json:"data"`
-			} `json:"files"`
-		}
-		if err := json.Unmarshal(msgBytes, &msg); err != nil {
-			send(map[string]interface{}{"type": "error", "error": "invalid message format"})
+		msg, errMsg := parseUserMessage(msgBytes)
+		if errMsg != "" {
+			send(map[string]interface{}{"type": "error", "error": errMsg})
 			continue
 		}
 
-		if msg.Type != "user_message" {
-			send(map[string]interface{}{"type": "error", "error": "expected user_message"})
-			continue
-		}
-		if msg.Text == "" && len(msg.Images) == 0 && len(msg.Files) == 0 {
-			send(map[string]interface{}{"type": "error", "error": "message must contain text, images, or files"})
-			continue
-		}
-
-		content := []provider.ContentBlock{}
-		if msg.Text != "" {
-			content = append(content, provider.TextBlock(msg.Text))
-		}
-		for _, img := range msg.Images {
-			if img.MIME == "" || img.Data == "" {
-				continue
-			}
-			content = append(content, provider.ImageBlock(img.MIME, img.Data))
-		}
-		for _, f := range msg.Files {
-			if f.Name == "" || f.Data == "" {
-				continue
-			}
-			decoded, err := base64.StdEncoding.DecodeString(f.Data)
-			if err != nil {
-				send(map[string]interface{}{"type": "error", "error": fmt.Sprintf("invalid base64 for file %s", f.Name)})
-				continue
-			}
-			fileText := fmt.Sprintf("--- File: %s ---\n%s\n--- End of %s ---", f.Name, string(decoded), f.Name)
-			content = append(content, provider.TextBlock(fileText))
-		}
+		content := buildUserContent(msg, send)
 
 		if s.chatBridge != nil {
 			s.chatBridge.SendUserMessage(content)
 		} else {
-
-			if !s.agentBusy.CompareAndSwap(false, true) {
-				send(map[string]interface{}{"type": "error", "error": "agent is busy processing another request, please wait"})
+			if !s.runAgentMessage(r.Context(), conn, content, send) {
 				continue
 			}
-			s.agentMu.Lock()
-			ctx, cancel := context.WithCancel(r.Context())
-			done := make(chan struct{})
-			readPumpDone := make(chan struct{})
-			safego.Go("webui.ws.readPump", func() {
-				defer close(readPumpDone)
-				for {
-					_, _, err := conn.ReadMessage()
-					if err != nil {
-						cancel()
-						return
-					}
-				}
-			})
-			safego.Go("webui.ws.agentStream", func() {
-				defer close(done)
-				err := s.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
-					defer safego.Recover("webui.ws.streamCallback")
-					if m := streamEventToJSON(event); m != nil {
-						send(m)
-					}
-				}, "human")
-				if err != nil && ctx.Err() == nil {
-					send(map[string]interface{}{"type": "error", "error": err.Error()})
-				}
-			})
-			<-done
-			cancel()
-
-			conn.SetReadDeadline(time.Now())
-			<-readPumpDone
-
-			conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
-			s.agentMu.Unlock()
-			s.agentBusy.Store(false)
 		}
 
-		ackExtras := map[string]interface{}{"type": "user_ack", "text": msg.Text}
-		if len(msg.Images) > 0 {
-			ackExtras["image_count"] = len(msg.Images)
-		}
-		if len(msg.Files) > 0 {
-			fileNames := make([]string, len(msg.Files))
-			for i, f := range msg.Files {
-				fileNames[i] = f.Name
-			}
-			ackExtras["file_names"] = fileNames
-		}
-		send(ackExtras)
+		send(userAck(msg))
 	}
+}
+
+// wsUserMessage 浏览器上行消息(仅 user_message 类型)。
+type wsUserMessage struct {
+	Type   string `json:"type"`
+	Text   string `json:"text"`
+	Images []struct {
+		MIME string `json:"mime"`
+		Data string `json:"data"`
+	} `json:"images"`
+	Files []struct {
+		Name string `json:"name"`
+		MIME string `json:"mime"`
+		Data string `json:"data"`
+	} `json:"files"`
+}
+
+const (
+	wsReadTimeout  = 90 * time.Second
+	wsPingInterval = 30 * time.Second
+)
+
+// startPingLoop 读超时+pong 续期+服务端保活 ping;返回关闭信号由调用方收尾。
+func (s *Server) startPingLoop(conn *websocket.Conn) chan struct{} {
+	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+		return nil
+	})
+	pingDone := make(chan struct{})
+	safego.Go("webui.ws.pingLoop", func() {
+		ticker := time.NewTicker(wsPingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					return
+				}
+			case <-pingDone:
+				return
+			}
+		}
+	})
+	return pingDone
+}
+
+// startWriteLoop 单写者泵;调用方 close(writeCh) 后等 writeDone 排空。
+func (s *Server) startWriteLoop(conn *websocket.Conn, writeCh <-chan interface{}) chan struct{} {
+	writeDone := make(chan struct{})
+	safego.Go("webui.ws.writeLoop", func() {
+		defer close(writeDone)
+		for msg := range writeCh {
+			if err := conn.WriteJSON(msg); err != nil {
+				debug.Log("webui", "ws write error: %v", err)
+				return
+			}
+		}
+	})
+	return writeDone
+}
+
+// parseUserMessage 反序列化+类型/非空校验;错误文案原样回给前端。
+func parseUserMessage(msgBytes []byte) (*wsUserMessage, string) {
+	var msg wsUserMessage
+	if err := json.Unmarshal(msgBytes, &msg); err != nil {
+		return nil, "invalid message format"
+	}
+	if msg.Type != "user_message" {
+		return nil, "expected user_message"
+	}
+	if msg.Text == "" && len(msg.Images) == 0 && len(msg.Files) == 0 {
+		return nil, "message must contain text, images, or files"
+	}
+	return &msg, ""
+}
+
+// buildUserContent 组装 ContentBlock(text/图片/文件);单个文件解码失败
+// 发错误后继续处理其余文件(原 continue 在文件循环内的语义)。
+func buildUserContent(msg *wsUserMessage, send func(interface{})) []provider.ContentBlock {
+	content := []provider.ContentBlock{}
+	if msg.Text != "" {
+		content = append(content, provider.TextBlock(msg.Text))
+	}
+	for _, img := range msg.Images {
+		if img.MIME == "" || img.Data == "" {
+			continue
+		}
+		content = append(content, provider.ImageBlock(img.MIME, img.Data))
+	}
+	for _, f := range msg.Files {
+		if f.Name == "" || f.Data == "" {
+			continue
+		}
+		decoded, err := base64.StdEncoding.DecodeString(f.Data)
+		if err != nil {
+			send(map[string]interface{}{"type": "error", "error": fmt.Sprintf("invalid base64 for file %s", f.Name)})
+			continue
+		}
+		fileText := fmt.Sprintf("--- File: %s ---\n%s\n--- End of %s ---", f.Name, string(decoded), f.Name)
+		content = append(content, provider.TextBlock(fileText))
+	}
+	return content
+}
+
+// runAgentMessage 直连 agent 分支(无 chatBridge):busy 拒绝返回 false(调用方
+// 跳过 ack,与原 continue 语义一致)、读泵保活、流式回调转发、恢复读超时。
+func (s *Server) runAgentMessage(requestCtx context.Context, conn *websocket.Conn, content []provider.ContentBlock, send func(interface{})) bool {
+	if !s.agentBusy.CompareAndSwap(false, true) {
+		send(map[string]interface{}{"type": "error", "error": "agent is busy processing another request, please wait"})
+		return false
+	}
+	s.agentMu.Lock()
+	ctx, cancel := context.WithCancel(requestCtx)
+	done := make(chan struct{})
+	readPumpDone := make(chan struct{})
+	safego.Go("webui.ws.readPump", func() {
+		defer close(readPumpDone)
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				cancel()
+				return
+			}
+		}
+	})
+	safego.Go("webui.ws.agentStream", func() {
+		defer close(done)
+		err := s.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
+			defer safego.Recover("webui.ws.streamCallback")
+			if m := streamEventToJSON(event); m != nil {
+				send(m)
+			}
+		}, "human")
+		if err != nil && ctx.Err() == nil {
+			send(map[string]interface{}{"type": "error", "error": err.Error()})
+		}
+	})
+	<-done
+	cancel()
+
+	conn.SetReadDeadline(time.Now())
+	<-readPumpDone
+
+	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+	s.agentMu.Unlock()
+	s.agentBusy.Store(false)
+	return true
+}
+
+// userAck 上行确认回执(文本回显+附件计数)。
+func userAck(msg *wsUserMessage) map[string]interface{} {
+	ackExtras := map[string]interface{}{"type": "user_ack", "text": msg.Text}
+	if len(msg.Images) > 0 {
+		ackExtras["image_count"] = len(msg.Images)
+	}
+	if len(msg.Files) > 0 {
+		fileNames := make([]string, len(msg.Files))
+		for i, f := range msg.Files {
+			fileNames[i] = f.Name
+		}
+		ackExtras["file_names"] = fileNames
+	}
+	return ackExtras
 }
 
 func streamEventToJSON(event provider.StreamEvent) map[string]interface{} {

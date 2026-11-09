@@ -155,8 +155,12 @@ type Server struct {
 	imActionFn      IMActionFunc
 	restartFn       func()
 	sessionSwitchFn func(sessionID string) error
+	cronListFn      func() []CronJobView
 	chatCommandFn   func(text string) error
 	chatControlsFn  func() map[string]string
+	queueSnapshotFn func() []string
+	wsMu            sync.Mutex
+	queueSinks      map[chan interface{}]struct{}
 	a2aDiscoverFn   A2ADiscoverFunc
 	knightStatusFn  KnightStatusFunc
 	knightActionFn  KnightActionFunc
@@ -226,10 +230,11 @@ func (s *Server) SetChatBridge(b ChatBridge) {
 
 func NewServer(cfg *config.Config) *Server {
 	s := &Server{
-		cfg:       cfg,
-		mux:       http.NewServeMux(),
-		saveScope: "global",
-		authToken: generateAuthToken(),
+		cfg:        cfg,
+		mux:        http.NewServeMux(),
+		saveScope:  "global",
+		authToken:  generateAuthToken(),
+		queueSinks: make(map[chan interface{}]struct{}),
 	}
 	s.routes()
 	return s
@@ -329,6 +334,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/sessions/switch", a(s.handleSessionSwitch))
 	s.mux.HandleFunc("/api/chat/controls", a(s.handleChatControls))
 	s.mux.HandleFunc("/api/chat/commands", a(s.handleChatCommand))
+	s.mux.HandleFunc("/api/chat/queue", a(s.handleChatQueue))
 	s.mux.HandleFunc("/api/sessions/", a(s.handleSessionDetail))
 	s.mux.HandleFunc("/api/workspace/files", a(s.handleWorkspaceFiles))
 	s.mux.HandleFunc("/api/cron/jobs", a(s.handleCronJobs))

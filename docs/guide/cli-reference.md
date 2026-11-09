@@ -177,6 +177,19 @@ Available inside the TUI (`/webui`):
 - If no WebUI server is running in this session (e.g. `--no-webui` or
   headless mode), prints a friendly notice instead of an error.
 
+### et (slash command)
+
+Manage the etunnel public tunnel for the WebUI (top-level command,
+replaces the former `/webui tunnel`):
+
+- `/et on` — publish the running WebUI over a public HTTPS URL (prints the
+  URL with its `#token=` auth fragment; free plan: 4h lifetime, 1 Mbps).
+- `/et off` — close the tunnel.
+- `/et show` — status plus a masked plan summary.
+- `/et setup <subdomain> <token>` — persist a paid-plan custom subdomain
+  and API token to the config `etunnel` section (token is redacted in
+  API responses).
+
 ### llm-probe
 
 Test LLM provider connectivity, authentication, and token usage accuracy:

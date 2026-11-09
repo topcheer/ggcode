@@ -48,6 +48,7 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/update"
 	"github.com/topcheer/ggcode/internal/usage"
+	"github.com/topcheer/ggcode/internal/webui"
 )
 
 type logoMsg struct {
@@ -273,6 +274,7 @@ type Model struct {
 	historySearch        historySearchState
 	compactMode          bool
 	pending              *pendingQueue
+	queueNotifyFn        func(event, text string, count int)
 	sessionMu            *sync.Mutex
 
 	persistedMsgCount    int
@@ -301,7 +303,8 @@ type Model struct {
 	clipboardLoader        func() (imageAttachedMsg, error)
 	clipboardWriter        func(string) error
 	urlOpener              func(string) error
-	webuiURL               string // WebUI 完整 URL(含 #token)；由 webuiReadyMsg 就绪时写入，/webui 命令消费
+	webuiURL               string           // WebUI 完整 URL(含 #token)；由 webuiReadyMsg 就绪时写入，/webui 命令消费
+	webuiTunnel            *webui.TunnelCtl // /webui tunnel 控制器(root 注入)
 	webuiBridge            WebUIEventBroadcaster
 	updateSvc              *update.Service
 	updateInfo             update.CheckResult

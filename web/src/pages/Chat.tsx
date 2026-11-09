@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useChat } from "@/store/chat";
 import { ChatWS } from "@/ws/client";
 import MessageList from "@/chat/MessageList";
-import ChatControls from "@/chat/ChatControls";
+import ChatControls, { ModeToggle } from "@/chat/ChatControls";
 import Composer from "@/chat/Composer";
 import WelcomeScreen from "@/pages/WelcomeScreen";
 
@@ -11,6 +11,7 @@ export default function Chat() {
   const messages = useChat((s) => s.messages);
   const conn = useChat((s) => s.conn);
   const lastError = useChat((s) => s.lastError);
+  const queueItems = useChat((s) => s.queueItems);
   const applyMsg = useChat((s) => s.applyMsg);
   const setConn = useChat((s) => s.setConn);
   const loadHistory = useChat((s) => s.loadHistory);
@@ -37,9 +38,9 @@ export default function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const send = (text: string, images?: string[]) => {
+  const send = (text: string, images?: string[], files?: { name: string; mime: string; data: string }[]) => {
     pushOptimistic(text);
-    wsRef.current?.sendUser(text, images);
+    wsRef.current?.sendUser(text, images, files);
   };
 
   const hasMessages = messages.length > 0;
@@ -64,7 +65,14 @@ export default function Chat() {
           <div className="min-h-0 flex-1">
             <MessageList />
           </div>
+          {queueItems.length > 0 && (
+            <div className="border-t border-border px-4 py-1.5 text-ui-xs text-foreground-subtle">
+              排队中 {queueItems.length} 条(本轮结束后依次发送)
+              <div className="mt-0.5 truncate text-foreground-subtlest">{queueItems[queueItems.length - 1]}</div>
+            </div>
+          )}
           <Composer onSend={send} />
+          <ModeToggle />
         </>
       ) : (
         <>
