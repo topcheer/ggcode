@@ -392,6 +392,8 @@ func extractFilePathFromArgs(toolName string, args json.RawMessage) string {
 		return ""
 	}
 
+	args = normalizeApplyPatchRawArgs(toolName, args) // #5321: nested apply_patch path visible here too
+
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(args, &raw); err != nil {
 		return ""
