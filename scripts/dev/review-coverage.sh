@@ -6,6 +6,22 @@ EPOCH_FILE=.ggcode/review-epoch.txt
 EPOCH=$(cat "$EPOCH_FILE" 2>/dev/null || echo 1)
 LEDGER=.ggcode/review-ledger.e${EPOCH}.txt
 
+# Cross-platform ledger lock (mkdir is atomic everywhere; flock is Linux-only).
+# Spin with timeout; stale locks older than 1 minute are broken forcibly.
+ledger_lock() {
+  local dir="${LEDGER}.lockd" i=0
+  until mkdir "$dir" 2>/dev/null; do
+    if [ -n "$(find "$dir" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      rmdir "$dir" 2>/dev/null || rm -rf "$dir"   # stale lock - break it
+      continue
+    fi
+    i=$((i+1))
+    [ "$i" -gt 100 ] && { echo "ledger lock timeout ($dir)" >&2; exit 1; }
+    sleep 0.1
+  done
+}
+ledger_unlock() { rmdir "${LEDGER}.lockd" 2>/dev/null || true; }
+
 all_files() {
   { git ls-files -s -- '*.go' | grep -v '_test\.go$' || true;
     git ls-files -s -- 'mobile/flutter/**/*.dart' | grep -vE '(\.g\.dart$|_test\.dart$)' || true; }
@@ -61,21 +77,29 @@ case "${1:-status}" in
   mark)
     shift
     [ $# -lt 1 ] && { echo "usage: $0 mark <path>..." >&2; exit 1; }
+    # Concurrency-safe: serialize the read-modify-write and use a unique tmp
+    # file so parallel marks cannot lose entries or collide on a shared temp
+    # path (issue #5390).
+    ledger_lock; trap ledger_unlock EXIT
     touch "$LEDGER"
     for p in "$@"; do
       line=$(git ls-files -s -- "$p" || true)
       if [ -z "$line" ]; then echo "skip (not tracked): $p" >&2; continue; fi
-      { grep -vF "$(printf '\t')$p" "$LEDGER" || true; } > "$LEDGER.tmp"
-      printf '%s\n' "$line" >> "$LEDGER.tmp"
-      mv "$LEDGER.tmp" "$LEDGER"
+      tmp=$(mktemp "${LEDGER}.XXXXXX")
+      { grep -vF "$(printf '\t')$p" "$LEDGER" || true; } > "$tmp"
+      printf '%s\n' "$line" >> "$tmp"
+      mv "$tmp" "$LEDGER"
     done
     ;;
   prune)
     td=$(mktemp -d)
     all_files | sort > "$td/cur"
     [ -f "$LEDGER" ] || { rm -rf "$td"; exit 0; }
-    sort "$LEDGER" | comm -12 - "$td/cur" > "$LEDGER.tmp"
-    mv "$LEDGER.tmp" "$LEDGER"
+    # Concurrency-safe vs concurrent mark: same lock discipline (issue #5390).
+    ledger_lock; trap ledger_unlock EXIT
+    tmp=$(mktemp "${LEDGER}.XXXXXX")
+    sort "$LEDGER" | comm -12 - "$td/cur" > "$tmp"
+    mv "$tmp" "$LEDGER"
     rm -rf "$td"
     ;;
   reset)
