@@ -45,7 +45,11 @@ var researchPerspectives = []researchPerspective{
 type ResearchSubQuery struct {
 	Perspective string
 	Query       string
-	Priority    int
+	// Aspect is the perspective-specific ask WITHOUT the goal text, so the
+	// injected plan never re-embeds the (possibly large) task payload once
+	// per sub-query (#5388). Renderers fall back to Query when empty.
+	Aspect   string
+	Priority int
 }
 
 const defaultResearchSubQueryCap = 6
@@ -78,6 +82,7 @@ func PlanResearchSubQueries(goal string, maxQueries int) []ResearchSubQuery {
 			subs = append(subs, ResearchSubQuery{
 				Perspective: p.name,
 				Query:       fmt.Sprintf(tpl, goal),
+				Aspect:      strings.TrimSpace(strings.TrimPrefix(tpl, "%s")),
 				Priority:    p.priority,
 			})
 		}
@@ -87,6 +92,7 @@ func PlanResearchSubQueries(goal string, maxQueries int) []ResearchSubQuery {
 		subs = append(subs, ResearchSubQuery{
 			Perspective: "general",
 			Query:       goal,
+			Aspect:      "the task as stated above",
 			Priority:    5,
 		})
 	}
@@ -101,10 +107,15 @@ func researchPlanText(subs []ResearchSubQuery) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("[Research Plan] Before searching, decompose this research goal into the following sub-queries ")
-	b.WriteString("(perspective-scoped, per deep-research planner practice) and search them individually:\n")
+	b.WriteString("[Research Plan] The task above is the research goal; decompose it into the following perspective-scoped sub-queries and search them individually:\n")
 	for i, s := range subs {
-		fmt.Fprintf(&b, "%d. [%s] %s\n", i+1, s.Perspective, s.Query)
+		label := s.Aspect
+		if label == "" {
+			// Backward compatibility: hand-built sub-queries (tests, callers)
+			// without Aspect keep rendering their full Query text.
+			label = s.Query
+		}
+		fmt.Fprintf(&b, "%d. [%s] %s\n", i+1, s.Perspective, label)
 	}
 	b.WriteString("Track which sub-queries are answered; search the gaps rather than re-searching covered ground. ")
 	b.WriteString("(This plan is advisory; adapt it if the evidence redirects you.)")
