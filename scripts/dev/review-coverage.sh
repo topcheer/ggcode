@@ -62,20 +62,43 @@ case "${1:-status}" in
     shift
     [ $# -lt 1 ] && { echo "usage: $0 mark <path>..." >&2; exit 1; }
     touch "$LEDGER"
+    # Serialize the read-modify-write against concurrent mark/prune
+    # invocations: an unlocked RMW with a fixed tmp path loses one mark
+    # when two writers race (issue #5390). mkdir is atomic on all
+    # platforms (flock is unavailable on macOS); spin on contention
+    # with a bounded retry so a wedge cannot hang the caller forever.
+    lock="$LEDGER.lock"
+    n=0
+    while ! mkdir "$lock" 2>/dev/null; do
+      sleep 0.05
+      n=$(( n + 1 ))
+      if [ "$n" -ge 200 ]; then echo "mark: ledger lock busy, aborted" >&2; exit 1; fi
+    done
     for p in "$@"; do
       line=$(git ls-files -s -- "$p" || true)
       if [ -z "$line" ]; then echo "skip (not tracked): $p" >&2; continue; fi
-      { grep -vF "$(printf '\t')$p" "$LEDGER" || true; } > "$LEDGER.tmp"
-      printf '%s\n' "$line" >> "$LEDGER.tmp"
-      mv "$LEDGER.tmp" "$LEDGER"
+      tmp=$(mktemp "${LEDGER}.XXXXXX")
+      { grep -vF "$(printf '\t')$p" "$LEDGER" || true; } > "$tmp"
+      printf '%s\n' "$line" >> "$tmp"
+      mv "$tmp" "$LEDGER"
     done
+    rmdir "$lock" 2>/dev/null || true
     ;;
   prune)
     td=$(mktemp -d)
     all_files | sort > "$td/cur"
     [ -f "$LEDGER" ] || { rm -rf "$td"; exit 0; }
-    sort "$LEDGER" | comm -12 - "$td/cur" > "$LEDGER.tmp"
-    mv "$LEDGER.tmp" "$LEDGER"
+    lock="$LEDGER.lock"
+    n=0
+    while ! mkdir "$lock" 2>/dev/null; do
+      sleep 0.05
+      n=$(( n + 1 ))
+      if [ "$n" -ge 200 ]; then echo "prune: ledger lock busy, aborted" >&2; rm -rf "$td"; exit 1; fi
+    done
+    tmp=$(mktemp "${LEDGER}.XXXXXX")
+    sort "$LEDGER" | comm -12 - "$td/cur" > "$tmp"
+    mv "$tmp" "$LEDGER"
+    rmdir "$lock" 2>/dev/null || true
     rm -rf "$td"
     ;;
   reset)
