@@ -178,3 +178,18 @@ func TestExecuteRegistrySlashCommand_Nick(t *testing.T) {
 		}
 	})
 }
+
+func (d *stubDeps) EtunnelControl(args []string) (string, error) {
+	return "et:" + strings.Join(args, " "), nil
+}
+
+// #5376-im-et: /et must be registered for IM inbound and forward args.
+func TestRegistryEtCommand(t *testing.T) {
+	out, ok := ExecuteRegistrySlashCommand((*stubDeps)(nil), "/et show")
+	if !ok || out != "et:show" {
+		t.Fatalf("et dispatch: %q ok=%v", out, ok)
+	}
+	if out, err := (*stubDeps)(nil).EtunnelControl(nil); err != nil || out != "et:" {
+		t.Fatalf("bare /et should forward empty args: %q %v", out, err)
+	}
+}

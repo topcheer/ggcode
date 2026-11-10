@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/usage"
 	"github.com/topcheer/ggcode/internal/util"
+	"github.com/topcheer/ggcode/internal/webui"
 )
 
 const (
@@ -233,6 +234,23 @@ func (d tuiSlashDeps) SetLanIdentity(nick, role, team string) (string, error) {
 	}
 	return fmt.Sprintf("Set: %s (role: %s, team: %s, agent: %s)",
 		d.m.lanChatHub.HumanNick(), role, team, d.m.lanChatHub.AgentNick()), nil
+}
+
+func (d tuiSlashDeps) EtunnelControl(args []string) (string, error) {
+	m := d.m
+	if m == nil || m.config == nil {
+		return "et tunnel is not available in this session", nil
+	}
+	var ctl webui.EtunnelController
+	if m.webuiTunnel != nil {
+		ctl = m.webuiTunnel
+	}
+	save := func(subdomain, token string) error {
+		m.config.ETunnel.Subdomain = subdomain
+		m.config.ETunnel.Token = token
+		return m.config.SaveScoped(m.configSaveScope)
+	}
+	return webui.ControlEt(ctl, m.webuiURL, m.config.ETunnel.Subdomain, m.config.ETunnel.Token, save, args)
 }
 
 func (d tuiSlashDeps) SessionCostSummary() (string, error) {

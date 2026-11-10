@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/webui"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/daemon"
@@ -75,6 +76,29 @@ type DaemonBridge struct {
 	cascadeCancel           func()
 	emitTextOverride        func(string) error
 	remoteDangerousOverride *bool
+
+	// /et (etunnel) IM-inbound support: host-injected handles (daemon wires
+	// these to its webui server + TunnelCtl; TUI-hosted IM uses tuiSlashDeps).
+	etCtl      webui.EtunnelController
+	etLocalURL string
+	etConfig   func() (subdomain, token string)
+	etSave     func(subdomain, token string) error
+}
+
+// SetEtunnel wires the /et IM command to the host tunnel controller.
+func (b *DaemonBridge) SetEtunnel(ctl webui.EtunnelController, localURL string, cfgFn func() (subdomain, token string), saveFn func(subdomain, token string) error) {
+	b.etCtl = ctl
+	b.etLocalURL = localURL
+	b.etConfig = cfgFn
+	b.etSave = saveFn
+}
+
+func (b *DaemonBridge) EtunnelControl(args []string) (string, error) {
+	var sub, tok string
+	if b.etConfig != nil {
+		sub, tok = b.etConfig()
+	}
+	return webui.ControlEt(b.etCtl, b.etLocalURL, sub, tok, b.etSave, args)
 }
 
 func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store session.Store, sess *session.Session) *DaemonBridge {
