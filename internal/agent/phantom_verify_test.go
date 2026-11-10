@@ -222,3 +222,52 @@ func TestPhantomEverRunEditInvalidation(t *testing.T) {
 		t.Fatalf("edit did not clear everRun: %v", s.categoriesEverRun)
 	}
 }
+
+// #5371: invalidateEdits must clear BOTH arming layers. The claim gate
+// suppresses warnings while either layer holds the category, so a
+// same-turn categoriesRun entry would keep suppressing phantom-claim
+// warnings for verification that the edit made stale.
+func TestInvalidateEdits_clearsRunAndEverRunLayers(t *testing.T) {
+	s := newPhantomVerifyState()
+
+	s.recordToolCall("run_command", "go test ./internal/agent/", false)
+	if !s.categoriesRun[phantomCatTest] || !s.categoriesEverRun[phantomCatTest] {
+		t.Fatal("precondition: test category should be armed in both layers")
+	}
+
+	s.invalidateEdits()
+
+	if s.categoriesRun[phantomCatTest] {
+		t.Error("invalidateEdits must clear categoriesRun (same-turn arming still suppresses the claim gate otherwise)")
+	}
+	if s.categoriesEverRun[phantomCatTest] {
+		t.Error("invalidateEdits must clear categoriesEverRun")
+	}
+
+	claims := s.detectPhantomClaims("All tests pass.")
+	flagged := false
+	for _, c := range claims {
+		if c.category == phantomCatTest {
+			flagged = true
+		}
+	}
+	if !flagged {
+		t.Error("test claim should be flagged after a source edit invalidated prior verification")
+	}
+}
+
+// Guard: reset() must keep preserving categoriesEverRun across turns —
+// only invalidateEdits (source edits) clears it (#5371 did not change this).
+func TestReset_preservesEverRunLayer(t *testing.T) {
+	s := newPhantomVerifyState()
+
+	s.recordToolCall("run_command", "go test ./internal/agent/", false)
+	s.reset()
+
+	if s.categoriesRun[phantomCatTest] {
+		t.Error("reset() should clear categoriesRun")
+	}
+	if !s.categoriesEverRun[phantomCatTest] {
+		t.Error("reset() must preserve categoriesEverRun (cross-turn verification memory)")
+	}
+}
