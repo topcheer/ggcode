@@ -152,6 +152,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 
 	cfgAccess := NewConfigAccess(cfg, workingDir)
 	_ = registry.Register(tool.ConfigTool{Access: cfgAccess})
+	_ = registry.Register(tool.MergePreflightTool{WorkingDir: workingDir, Access: gatesAccessAdapter{inner: cfgAccess}})
 
 	startupAssets := LoadInteractiveStartupAssets(workingDir, autoMem)
 	commandMgr := startupAssets.CommandManager
@@ -186,6 +187,11 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 func (c *InteractiveRuntimeCore) SetConfigAgent(ag *agent.Agent) {
 	if c.configAccess != nil {
 		c.configAccess.SetAgent(ag)
+	}
+	if ag != nil && c.configAccess != nil {
+		// Completion gates: feed the agent's merge gate live gates.merge
+		// config (hot on every read, so either CRUD channel applies at once).
+		ag.SetMergeGateConfigProvider(c.configAccess.MergeGateConfig)
 	}
 	if ag != nil {
 
