@@ -1151,6 +1151,11 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
           mode: existing.mode,
           version: existing.version,
           lastEventId: existing.lastEventId,
+          // Keep the session relay URL: clearing the reconnect target detaches
+          // the workspace hookup, it must not wipe the session's own URL
+          // (restoring/historical views read sessions().url; release
+          // blocker #5379).
+          url: existing.url,
           lastUpdatedAt: DateTime.now(),
         );
         _dirtySessions.add(targetSessionId);
