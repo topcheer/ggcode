@@ -7,6 +7,7 @@ import (
 	etunnel "github.com/topcheer/etunnel/sdk"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // TunnelCtl /webui tunnel 的隧道控制器:把 WebUI 本地地址经 etunnel
@@ -54,7 +55,7 @@ func (c *TunnelCtl) StartTunnelOpts(localAddr, subdomain, token string) (string,
 	c.mu.Unlock()
 
 	// 监视关闭(远端过期/断连)后清空状态,允许重新激活
-	go func() {
+	safego.Go("webui.tunnelMonitor", func() {
 		<-t.Done()
 		debug.Log("webui", "tunnel closed: %s", t.CloseReason())
 		c.mu.Lock()
@@ -62,7 +63,7 @@ func (c *TunnelCtl) StartTunnelOpts(localAddr, subdomain, token string) (string,
 		c.url = ""
 		c.cancel = nil
 		c.mu.Unlock()
-	}()
+	})
 	return c.url, true, nil
 }
 
