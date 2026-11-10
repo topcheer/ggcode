@@ -568,3 +568,26 @@ func TestCronCreateTool_FarHorizonAckDualLayer(t *testing.T) {
 		t.Fatal("acknowledged creation must surface the WARNING suffix")
 	}
 }
+
+// #5359: schema/execute param consistency - the canonical param is "far";
+// the legacy far_horizon_ack payload must still acknowledge (not be a
+// documented no-op), and the schema must not advertise a second name.
+func TestCronCreateTool_FarParamContract(t *testing.T) {
+	desc := CronCreateTool{}.Description()
+	if strings.Contains(desc, "far_horizon_ack") {
+		t.Fatal("schema must advertise only the canonical \"far\" param")
+	}
+	s := cron.NewScheduler(nil, "")
+	tool := CronCreateTool{Scheduler: s}
+	target := time.Now().AddDate(0, 5, 0)
+	expr := fmt.Sprintf("0 9 %d %d *", target.Day(), int(target.Month()))
+	// legacy alias payload alone must pass both layers
+	in := fmt.Sprintf(`{"cron":%q,"prompt":"r","one_shot":true,"far_horizon_ack":true,"description":"t"}`, expr)
+	res, err := tool.Execute(context.Background(), json.RawMessage(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("legacy far_horizon_ack payload must acknowledge, got: %v", res.Content)
+	}
+}
