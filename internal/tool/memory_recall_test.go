@@ -158,3 +158,17 @@ func TestMemoryRecall_NilStoresDegradeToNoMatches(t *testing.T) {
 		t.Fatalf("expected no-matches result:\n%s", out.Content)
 	}
 }
+
+// Regression: recallSnippet mixed byte offsets (strings.Index) with rune
+// slicing - CJK bodies panicked with slice bounds out of range because the
+// byte offset exceeds the rune count. Pin the CJK path end to end.
+func TestRecallSnippetCJKNoPanic(t *testing.T) {
+	body := strings.Repeat("记忆体系中文正文段落，每段若干字。", 60) // multibyte-heavy body
+	snippet := recallSnippet(body, []string{"正文"})
+	if snippet == "" || snippet == "(empty body)" {
+		t.Fatalf("expected a non-empty snippet for a CJK hit, got %q", snippet)
+	}
+	if !strings.Contains(snippet, "正文") {
+		t.Fatalf("snippet should contain the hit token, got %q", snippet)
+	}
+}

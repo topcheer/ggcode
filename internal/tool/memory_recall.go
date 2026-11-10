@@ -256,8 +256,15 @@ func recallSnippet(body string, tokens []string) string {
 	lower := strings.ToLower(collapsed)
 	best := -1
 	for _, tok := range tokens {
-		if idx := strings.Index(lower, tok); idx >= 0 && (best == -1 || idx < best) {
-			best = idx
+		if idx := strings.Index(lower, tok); idx >= 0 {
+			// strings.Index returns a BYTE offset; convert to a rune index
+			// before slicing the runes slice, otherwise multibyte bodies
+			// (CJK) panic with slice bounds out of range (byte offset can
+			// exceed the rune count).
+			ridx := len([]rune(lower[:idx]))
+			if best == -1 || ridx < best {
+				best = ridx
+			}
 		}
 	}
 	start, end := 0, len(runes)
