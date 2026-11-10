@@ -302,6 +302,15 @@ Cron jobs support a `queue_if_busy` parameter (default: `false`):
 Only recurring jobs are persisted to `~/.ggcode/cron-jobs.json` (grouped by workspace).
 One-shot reminders are in-memory only and will be lost if the process exits before they fire.
 
+One-shot (non-recurring) schedules are guarded against accidental far-future
+rollover: a `HH:MM`-style schedule whose time has already passed today would
+otherwise resolve to the **same time next year**, silently delaying the
+reminder for months. Creating a one-shot job whose first fire time is more
+than 90 days away is rejected with an error showing the computed trigger
+time. If you really want a reminder that far ahead, spell out the full date
+(month and day) in the schedule. Recurring jobs (daily/weekly/...) are not
+affected by this limit.
+
 ## File-Watch Triggers (Ambient Agents)
 
 Cron fires on a schedule; `watch` fires **on change**. Each trigger watches

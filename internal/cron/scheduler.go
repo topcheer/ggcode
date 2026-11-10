@@ -314,10 +314,43 @@ func cronIDSuffix() string {
 
 const minCronIntervalMinutes = 5
 
+// MaxOneShotHorizon is the maximum distance from creation time at which a
+// one-shot (non-recurring) job is allowed to fire. A HH:MM-style reminder
+// whose time has already passed today resolves to the same time NEXT YEAR,
+// silently postponing the reminder for months; one-shot schedules farther
+// out than this horizon are rejected at creation so the mistake surfaces
+// immediately. Users who genuinely need a far-future one-shot reminder
+// should spell out the full date (month and day) in the schedule.
+// Recurring jobs (daily/weekly/...) are never subject to this limit.
+const MaxOneShotHorizon = 90 * 24 * time.Hour
+
+// checkOneShotHorizon rejects a one-shot (non-recurring) job whose next
+// fire time lies farther than horizon from now. The horizon is a parameter
+// (production callers pass MaxOneShotHorizon) so tests can probe the exact
+// boundary. Recurring jobs pass unconditionally.
+func checkOneShotHorizon(recurring bool, cronExpr string, next, now time.Time, horizon time.Duration) error {
+	if recurring || next.IsZero() || horizon <= 0 {
+		return nil
+	}
+	if d := next.Sub(now); d > horizon {
+		return fmt.Errorf(
+			"one-shot schedule %q would first fire at %s (%s from now, limit %s): "+
+				"the intended time has most likely already passed and rolled over to next year; "+
+				"if you really want a reminder that far ahead, specify the full date (month and day) explicitly",
+			cronExpr, next.Format("2006-01-02 15:04"), d.Round(time.Minute), horizon)
+	}
+	return nil
+}
+
 func (s *Scheduler) Create(cronExpr, prompt string, recurring bool, queueIfBusy bool) (Job, error) {
 	now := time.Now()
 	next, err := NextTime(cronExpr, now)
 	if err != nil {
+		return Job{}, err
+	}
+
+	if err := checkOneShotHorizon(recurring, cronExpr, next, now, MaxOneShotHorizon); err != nil {
+		debug.Log("cron", "Create: rejected one-shot job (expr=%s): %v", cronExpr, err)
 		return Job{}, err
 	}
 
