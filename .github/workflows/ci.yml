@@ -37,6 +37,39 @@ jobs:
       - run: go vet -tags goolm ./...
       - run: git config --global user.name "CI" && git config --global user.email "ci@ggcode.dev"
       - run: GOMEMLIMIT=2GiB GOGC=50 go test -tags goolm -p 1 -timeout 300s ./cmd/... ./internal/... ./desktop/wailskit/...
+
+  # Gate: the embedded webui dist must be rebuilt whenever web/ changes.
+  # Guards against "edited web/ but forgot make build-all" shipping a
+  # binary with a stale embedded frontend.
+  webui-dist-freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: ${{ github.event_name == 'pull_request' }}
+    outputs:
+      webui-touched: ${{ steps.filter.outputs.webui }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            webui:
+              - 'web/**'
+              - 'internal/webui/dist/**'
+      - name: Rebuild webui and verify dist is up to date
+        if: steps.filter.outputs.webui == 'true'
+        run: |
+          corepack enable
+          corepack pnpm install --frozen-lockfile --prefer-offline
+          corepack pnpm run build
+          if ! git diff --quiet -- internal/webui/dist; then
+            echo "::error::internal/webui/dist is stale: the committed dist does not match a rebuild of web/. Run 'make build-all' (webui-build + webui-sync-artifacts) and commit the refreshed artifacts."
+            git diff --stat -- internal/webui/dist
+            exit 1
+          fi
+
   lint:
     name: Format
     runs-on: ubuntu-latest
