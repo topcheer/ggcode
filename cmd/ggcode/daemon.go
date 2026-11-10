@@ -1376,6 +1376,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	})
 	webuiSrv.SetSessionStore(store, workingDir)
 	webuiSrv.SetChatBridge(bridge)
+	// 双隧道状态快照:daemon 无 TUI Model,share 面由 TunnelHost 直出
+	// (修复:此前未注入 → /api/tunnel/status 恒全 false,webui 共享弹窗
+	// 卡"等待二维码"而后端 QR 已生成);et 面默认 inactive(daemon 不承载 /et)。
+	webuiSrv.SetTunnelStatusFn(func() map[string]any {
+		return map[string]any{
+			"share": core.Tunnel.ShareStatusSnapshot(),
+			"et":    map[string]any{"active": false, "url": ""},
+		}
+	})
 	webuiAddr := "127.0.0.1:0"
 	actualAddr, webuiErr := webuiSrv.Start(webuiAddr)
 	if webuiErr == nil {

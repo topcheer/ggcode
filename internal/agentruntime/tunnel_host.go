@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"sync"
@@ -271,6 +272,30 @@ func (h *TunnelHost) GetShareInfo() *ShareResult {
 		Token:      info.Token,
 		RoomID:     info.RoomID,
 	}
+}
+
+// ShareStatusSnapshot webui /api/tunnel/status 的 share 面数据源(daemon
+// 模式无 TUI Model,由 TunnelHost 直出)。字段语义与 TUI TunnelStatusSnapshot
+// 对齐:active=有活跃 share session;connected=已接入 relay;qr/png 供前端渲染。
+func (h *TunnelHost) ShareStatusSnapshot() map[string]any {
+	out := map[string]any{"active": false, "starting": false, "connected": false}
+	h.mu.Lock()
+	ref := h.activeShare
+	h.mu.Unlock()
+	if ref == nil || ref.session == nil {
+		return out
+	}
+	out["active"] = true
+	if info := ref.session.Info(); info != nil {
+		out["connect_url"] = info.ConnectURL
+		if len(info.QRCodePNG) > 0 {
+			out["qrcode_png_b64"] = base64.StdEncoding.EncodeToString(info.QRCodePNG)
+		}
+	}
+	if ref.session.ConnectedState() != nil {
+		out["connected"] = true
+	}
+	return out
 }
 
 func (h *TunnelHost) AttachOnlineBroker(broker *tunnel.Broker) {
