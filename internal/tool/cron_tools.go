@@ -120,7 +120,10 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	// Scheduler.CreateAcknowledgedFar so the scheduler-layer horizon guard
 	// (checkOneShotHorizon, the programmatic-caller backstop) also honors the
 	// acknowledgement instead of re-rejecting.
-	far := args.Far != nil && *args.Far
+	// far=true and far_horizon_ack=true are synonyms (#5359: far_horizon_ack
+	// was documented but orphaned until this wiring); either acknowledges
+	// the one-shot far-future horizon.
+	far := (args.Far != nil && *args.Far) || (args.FarAck != nil && *args.FarAck)
 	farFutureDays := -1
 	if !recurring {
 		if next, err := cron.NextTime(args.Cron, time.Now()); err == nil {
