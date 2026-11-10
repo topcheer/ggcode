@@ -75,7 +75,7 @@ The precompact trigger is `AutoCompactThreshold()` = 99% of the usable prompt bu
 |---------|--------|---------|
 | **Project layout** | Directory walk (depth 2, max 60 entries) | Codebase structure awareness without tool calls |
 | **Modified files** | `git status --short` (max 20 files) | Working-tree state visibility |
-| **Recent commits** | `git log --oneline -5` | Session continuity — recent development direction and commit conventions |
+| **Repo HEAD** | `git rev-parse --abbrev-ref HEAD` + `git log -1` sha + upstream behind-count | Single-line change-detection marker; commit context is on-demand via `git_log` (#5370) |
 | **Project commands** | Build/test/lint command detection | Verify command suggestions |
 | **Toolchain** | Go/Node/Python version detection | Compatible code generation |
 | **Package symbols** | Go exported declarations per package | API surface awareness for Go projects |

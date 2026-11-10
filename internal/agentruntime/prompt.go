@@ -66,7 +66,7 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 	if snap, ok := GlobalSectionSnapshot(); ok {
 		prompt += snap.Overview
 		prompt += snap.Modified
-		prompt += snap.RecentCommits
+		prompt += snap.RepoHead
 		prompt += snap.Commands
 		prompt += snap.Toolchain
 		prompt += snap.Symbols
@@ -74,7 +74,7 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 	} else {
 		prompt += projectOverviewSection(workingDir)
 		prompt += modifiedFilesSection(workingDir)
-		prompt += recentCommitsSection(workingDir)
+		prompt += repoHeadSection(workingDir)
 		prompt += projectCommandsSection(workingDir)
 		prompt += toolchainSection(workingDir)
 		prompt += buildGoPackageSymbolsSection(workingDir)
@@ -252,7 +252,7 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext, task string) string {
 	if snap, ok := GlobalSectionSnapshot(); ok {
 		prompt += snap.Overview
 		prompt += snap.Modified
-		prompt += snap.RecentCommits
+		prompt += snap.RepoHead
 		prompt += snap.Commands
 		prompt += snap.Toolchain
 		prompt += snap.Symbols
@@ -260,7 +260,7 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext, task string) string {
 	} else {
 		prompt += projectOverviewSection(workingDir)
 		prompt += modifiedFilesSection(workingDir)
-		prompt += recentCommitsSection(workingDir)
+		prompt += repoHeadSection(workingDir)
 		prompt += projectCommandsSection(workingDir)
 		prompt += toolchainSection(workingDir)
 		prompt += buildGoPackageSymbolsSection(workingDir)

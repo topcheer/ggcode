@@ -21,13 +21,13 @@ type SectionCollector struct {
 	mu      sync.RWMutex
 	working string
 
-	overview      string
-	modified      string
-	commands      string
-	toolchain     string
-	symbols       string
-	recentCommits string
-	deps          string
+	overview  string
+	modified  string
+	commands  string
+	toolchain string
+	symbols   string
+	repoHead  string
+	deps      string
 
 	lastSnapshot string
 	idle         bool
@@ -55,13 +55,13 @@ func newSectionCollector(workingDir string) *SectionCollector {
 }
 
 type sectionSnapshot struct {
-	Overview      string
-	Modified      string
-	Commands      string
-	Toolchain     string
-	Symbols       string
-	RecentCommits string
-	Deps          string
+	Overview  string
+	Modified  string
+	Commands  string
+	Toolchain string
+	Symbols   string
+	RepoHead  string
+	Deps      string
 }
 
 func InitGlobalSectionCollector(workingDir string) {
@@ -155,13 +155,13 @@ func (sc *SectionCollector) Snapshot() sectionSnapshot {
 	sc.mu.RLock()
 	defer sc.mu.RUnlock()
 	return sectionSnapshot{
-		Overview:      sc.overview,
-		Modified:      sc.modified,
-		Commands:      sc.commands,
-		Toolchain:     sc.toolchain,
-		Symbols:       sc.symbols,
-		RecentCommits: sc.recentCommits,
-		Deps:          sc.deps,
+		Overview:  sc.overview,
+		Modified:  sc.modified,
+		Commands:  sc.commands,
+		Toolchain: sc.toolchain,
+		Symbols:   sc.symbols,
+		RepoHead:  sc.repoHead,
+		Deps:      sc.deps,
 	}
 }
 
@@ -169,8 +169,8 @@ func (sc *SectionCollector) refresh() {
 	start := time.Now()
 
 	var (
-		overview, modified, commands, toolchain, symbols, deps, recentCommits string
-		wg                                                                    sync.WaitGroup
+		overview, modified, commands, toolchain, symbols, deps, repoHead string
+		wg                                                               sync.WaitGroup
 	)
 	wg.Add(7)
 
@@ -185,19 +185,19 @@ func (sc *SectionCollector) refresh() {
 		symbols += buildPythonSymbolsSection(sc.working)
 	})
 	go safego.Run("section.deps", func() { defer wg.Done(); deps = buildPackageDepsSection(sc.working) })
-	go safego.Run("section.recentCommits", func() { defer wg.Done(); recentCommits = computeRecentCommitsSection(sc.working) })
+	go safego.Run("section.repoHead", func() { defer wg.Done(); repoHead = computeRepoHeadSection(sc.working) })
 
 	done := make(chan struct{})
 	go safego.Run("section.waitAndClose", func() { wg.Wait(); close(done) })
 	select {
 	case <-done:
-		sc.store(overview, modified, commands, toolchain, symbols, deps, recentCommits, start)
+		sc.store(overview, modified, commands, toolchain, symbols, deps, repoHead, start)
 	case <-time.After(10 * time.Minute):
 		debug.Log("agentruntime", "section collector refresh hung >10m; skipping update")
 	}
 }
 
-func (sc *SectionCollector) store(overview, modified, commands, toolchain, symbols, deps, recentCommits string, start time.Time) {
+func (sc *SectionCollector) store(overview, modified, commands, toolchain, symbols, deps, repoHead string, start time.Time) {
 	sc.mu.Lock()
 	sc.overview = overview
 	sc.modified = modified
@@ -205,10 +205,10 @@ func (sc *SectionCollector) store(overview, modified, commands, toolchain, symbo
 	sc.toolchain = toolchain
 	sc.symbols = symbols
 	sc.deps = deps
-	sc.recentCommits = recentCommits
+	sc.repoHead = repoHead
 
 	currentSig := overview + "\x00" + modified + "\x00" + commands + "\x00" +
-		toolchain + "\x00" + symbols + "\x00" + deps + "\x00" + recentCommits
+		toolchain + "\x00" + symbols + "\x00" + deps + "\x00" + repoHead
 
 	if currentSig == sc.lastSnapshot {
 		sc.idle = true
