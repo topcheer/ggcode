@@ -148,6 +148,30 @@ func NewPersistentManager(maxCheckpoints int, projectKey string) *Manager {
 	return openPersistentManagerAt(maxCheckpoints, path)
 }
 
+// ListPersisted 按事件顺序回放 projectKey 的持久化 journal,返回回放后仍存活的检查点
+// (save/redo 入列,undo/revert/undo_run/drop_run_files/clear 相应移除)——与 TUI 面板
+// 看到的状态一致,而非简单收集所有 save 行。只读:不打开、不创建 journal 写句柄。
+// maxCheckpoints 应与写入方 Manager 的容量一致(生产为 50)以对齐回放时的淘汰语义。
+func ListPersisted(maxCheckpoints int, projectKey string) []Checkpoint {
+	path, err := journalPathFor(projectKey)
+	if err != nil {
+		return nil
+	}
+	events, _, err := loadJournal(path)
+	if err != nil || len(events) == 0 {
+		return nil
+	}
+	m := NewManager(maxCheckpoints)
+	m.mu.Lock()
+	for _, ev := range events {
+		m.applyJournalEventLocked(ev)
+	}
+	out := make([]Checkpoint, len(m.checkpoints))
+	copy(out, m.checkpoints)
+	m.mu.Unlock()
+	return out
+}
+
 func openPersistentManagerAt(maxCheckpoints int, path string) *Manager {
 	m := NewManager(maxCheckpoints)
 	events, _, err := loadJournal(path)
