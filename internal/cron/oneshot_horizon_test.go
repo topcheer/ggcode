@@ -100,9 +100,10 @@ func TestCreateRecurringFarFutureAllowed(t *testing.T) {
 // acknowledgement turns the hard reject into an opt-in path.
 func TestCreateOneShotFarFutureAcknowledgedAllowed(t *testing.T) {
 	s := NewScheduler(nil, t.TempDir())
-	// an HH:MM that is long past today rolls to next year without an
-	// explicit date, landing far beyond the 90-day horizon
-	expr := time.Now().Add(-2 * time.Hour).Format("15:04")
+	// farFutureExpr is the package's tz-independent ~5-months-out form,
+	// guaranteed beyond MaxOneShotHorizon (a naive "next year same day"
+	// HH:MM form is timezone-dependent and can land only hours away).
+	expr := farFutureExpr()
 	_, err := s.CreateAcknowledgedFar(expr, "far reminder", false, false, true)
 	if err != nil {
 		t.Fatalf("far-acknowledged one-shot must be allowed, got: %v", err)
