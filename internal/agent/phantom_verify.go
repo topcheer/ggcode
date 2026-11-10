@@ -487,6 +487,15 @@ func (s *phantomVerifyState) invalidateEdits() {
 	if s == nil {
 		return
 	}
+	// #5371: a source edit invalidates verification in BOTH layers. The
+	// claim gate suppresses a warning whenever either category is armed, so
+	// clearing only categoriesEverRun leaves the current-turn
+	// categoriesRun entries suppressing phantom-claim warnings for
+	// verification made stale by the edit. reset() deliberately preserves
+	// categoriesEverRun across turns; invalidateEdits deliberately does not.
+	for k := range s.categoriesRun {
+		delete(s.categoriesRun, k)
+	}
 	for k := range s.categoriesEverRun {
 		delete(s.categoriesEverRun, k)
 	}
