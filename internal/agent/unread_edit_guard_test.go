@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/tool"
 	"testing"
 	"time"
 )
@@ -445,5 +447,42 @@ func TestExtractCreateFilePathsExcludesBatchReplace(t *testing.T) {
 
 	if got := extractCreateFilePaths("write_file", json.RawMessage(`{"path":"/w/new.go","content":"x"}`)); len(got) != 1 {
 		t.Fatalf("write_file must still extract created path, got %v", got)
+	}
+}
+
+// #5374: the unread-edit hint must name the file - in multi-file edits N
+// identical nameless lines are indistinguishable.
+func TestUnreadEditHintNamesFile(t *testing.T) {
+	s := newUnreadEditState()
+	got := s.checkUnreadEdit("/tmp/whatever/alpha.go")
+	if !strings.Contains(got, "alpha.go") {
+		t.Fatalf("hint should name the file, got %q", got)
+	}
+}
+
+// #5374: repeating the same hint for a second unread file is deduped at the
+// injection layer (distinct texts still append).
+func TestAppendGuidanceDedupesIdenticalText(t *testing.T) {
+	a := &Agent{} // zero-value guidanceBudget is nil-map safe (allowDeduped lazy-inits)
+	res := &tool.Result{}
+	hint := "You are editing x.go without reading it first."
+	if !a.appendGuidance(res, hint) {
+		t.Fatal("first hint should append")
+	}
+	if a.appendGuidance(res, hint) {
+		t.Fatal("identical hint should be deduped")
+	}
+	if strings.Count(res.Content, hint) != 1 {
+		t.Fatalf("hint should appear exactly once, got %d", strings.Count(res.Content, hint))
+	}
+	// distinct hint appends (within budget: budget allows 2 hints/turn)
+	other := "stale-read on y.go"
+	if !a.appendGuidance(res, other) {
+		t.Fatal("distinct hint should append")
+	}
+	// third distinct hint is budget-suppressed by design (guidanceBudgetPerTurn=2)
+	third := "yet another z.go"
+	if a.appendGuidance(res, third) {
+		t.Fatal("third distinct hint should be budget-suppressed")
 	}
 }
