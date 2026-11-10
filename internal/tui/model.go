@@ -142,31 +142,36 @@ type Model struct {
 	restartRequested        bool
 	restartDebug            bool
 	pendingRestart          bool
-	lastTurnActivityAt      time.Time
-	updatePrepared          *update.PreparedUpdate
-	tmuxExecRequested       bool
-	tmuxExecSession         string
-	tmuxExecSetupLayout     string
-	tmuxStartupSetupLayout  string
-	width                   int
-	height                  int
-	styles                  styles
-	agent                   *agent.Agent
-	program                 *tea.Program
-	cancelFunc              func()
-	shellCancelFunc         func()
-	pendingResumeID         string
-	knightRunning           int
-	lspInstallInFlight      bool
-	policy                  permission.PermissionPolicy
-	spinner                 *ToolSpinner
-	history                 []string
-	historyIdx              int
-	pendingApproval         *ApprovalMsg
-	approvalNotifiedIM      bool
-	inputBellFired          bool
-	session                 *session.Session
-	sessionStore            session.Store
+	// #5367: when the restart was armed. The 30s fallback re-arms while a
+	// turn is active; without a hard deadline anchored to the original arm
+	// time, continuously active turns (autonomous/cron loops) starve the
+	// restart forever while the arm announcement already claimed success.
+	restartArmedAt         time.Time
+	lastTurnActivityAt     time.Time
+	updatePrepared         *update.PreparedUpdate
+	tmuxExecRequested      bool
+	tmuxExecSession        string
+	tmuxExecSetupLayout    string
+	tmuxStartupSetupLayout string
+	width                  int
+	height                 int
+	styles                 styles
+	agent                  *agent.Agent
+	program                *tea.Program
+	cancelFunc             func()
+	shellCancelFunc        func()
+	pendingResumeID        string
+	knightRunning          int
+	lspInstallInFlight     bool
+	policy                 permission.PermissionPolicy
+	spinner                *ToolSpinner
+	history                []string
+	historyIdx             int
+	pendingApproval        *ApprovalMsg
+	approvalNotifiedIM     bool
+	inputBellFired         bool
+	session                *session.Session
+	sessionStore           session.Store
 
 	tuiSend              func(tea.Msg)
 	costCache            *sessionCostCache

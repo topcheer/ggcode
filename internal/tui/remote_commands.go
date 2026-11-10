@@ -21,6 +21,10 @@ import (
 
 const (
 	restartFallbackTimeout = 30 * time.Second
+	// #5367: hard cap on how long an armed restart may keep deferring behind
+	// continuously active turns. Without it, autonomous/cron loops starve the
+	// restart forever while the arm announcement already claimed success.
+	restartArmHardCap = 5 * time.Minute
 )
 
 type armRestartMsg struct {
