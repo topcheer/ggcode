@@ -45,8 +45,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: ${{ github.event_name == 'pull_request' }}
-    outputs:
-      webui-touched: ${{ steps.filter.outputs.webui }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -62,8 +60,10 @@ jobs:
         if: steps.filter.outputs.webui == 'true'
         run: |
           corepack enable
-          corepack pnpm install --frozen-lockfile --prefer-offline
-          corepack pnpm run build
+          # #5366: the pnpm project lives in web/ (no root manifest) - mirror
+          # the Makefile webui-build target instead of running at repo root.
+          corepack pnpm -C web install --frozen-lockfile --prefer-offline
+          corepack pnpm -C web run build
           if ! git diff --quiet -- internal/webui/dist; then
             echo "::error::internal/webui/dist is stale: the committed dist does not match a rebuild of web/. Run 'make build-all' (webui-build + webui-sync-artifacts) and commit the refreshed artifacts."
             git diff --stat -- internal/webui/dist
