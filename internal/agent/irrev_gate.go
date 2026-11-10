@@ -199,21 +199,38 @@ func irrevIsDestructiveCommand(args string) bool {
 	return false
 }
 
-var irrevReadOnlyBinaries = map[string]bool{
+// ReadOnlyCommandBinaries is the read-only command whitelist used by the
+// irreversibility gate: a shell segment whose first effective token (after
+// env-assignment and wrapper prefixes like sudo/nohup are stripped) is one
+// of these binaries is classified as read-only (no gate). Every entry only
+// observes state - it cannot modify files, network, or process state when
+// invoked without redirects/pipes into mutating commands (those cases are
+// rejected before this table is consulted).
+var ReadOnlyCommandBinaries = map[string]bool{
+	// File/directory inspection - read bytes, never write them.
 	"ls": true, "cat": true, "head": true, "tail": true, "grep": true,
-	"rg": true, "find": true, "which": true, "whereis": true, "pwd": true,
+	"rg": true, "find": true, "file": true, "stat": true,
+	// Identity/system introspection - print, do not mutate.
+	"which": true, "whereis": true, "pwd": true,
 	"date": true, "env": true, "printenv": true, "uname": true,
-	"whoami": true, "hostname": true, "wc": true, "sort": true,
-	"uniq": true, "diff": true, "cmp": true, "file": true, "stat": true,
-	"du": true, "df": true, "free": true, "ps": true, "true": true,
-	"cd": true, "shasum": true, "sha256sum": true, "md5sum": true,
+	"whoami": true, "hostname": true, "ps": true, "free": true,
+	// Disk usage inspection.
+	"du": true, "df": true,
+	// Pure text filters - stream transforms with no side effects.
+	"wc": true, "sort": true, "uniq": true, "diff": true, "cmp": true,
+	"shasum": true, "sha256sum": true, "md5sum": true,
 	"cksum": true, "basename": true, "dirname": true, "realpath": true,
 	"readlink": true, "jq": true, "awk": true, "gawk": true,
 	"tr": true, "cut": true, "xxd": true, "od": true, "strings": true,
-	"echo": true, "printf": true,
+	// stdout-only producers - write nothing unless redirected (and any
+	// redirect blocks read-only classification earlier).
+	"echo": true, "printf": true, "true": true, "cd": true,
 }
 
-var irrevReadOnlyGitSubcommands = map[string]bool{
+// ReadOnlyGitSubcommands lists git subcommands that only inspect repository
+// or remote state (no commit/ref/index mutation), so a git <sub> segment is
+// exempt from the irreversibility gate.
+var ReadOnlyGitSubcommands = map[string]bool{
 	"fetch": true, "status": true, "log": true, "diff": true,
 	"show": true, "blame": true, "branch": true, "remote": true,
 	"rev-parse": true, "rev-list": true, "ls-files": true,
@@ -226,12 +243,17 @@ var irrevReadOnlyGitSubcommands = map[string]bool{
 	"check-attr": true, "show-ref": true, "var": true,
 }
 
-var irrevReadOnlyGoSubcommands = map[string]bool{
+// ReadOnlyGoSubcommands lists go tool subcommands that build or inspect
+// without publishing: build/test/vet write only to the build cache, and the
+// rest are pure queries.
+var ReadOnlyGoSubcommands = map[string]bool{
 	"build": true, "test": true, "vet": true, "version": true,
 	"env": true, "list": true, "doc": true,
 }
 
-var irrevReadOnlyGhSubcommands = map[string]map[string]bool{
+// ReadOnlyGhSubcommands maps gh CLI resources to their read-only view/list
+// subcommands (gh api is handled separately with GET-only detection).
+var ReadOnlyGhSubcommands = map[string]map[string]bool{
 	"issue":   {"view": true, "list": true},
 	"pr":      {"view": true, "list": true, "diff": true, "checks": true},
 	"run":     {"view": true, "list": true, "watch": true},
@@ -333,6 +355,16 @@ func irrevSegmentIsReadOnly(seg string) bool {
 		i++
 	}
 	fields = fields[i:]
+	// Wrapper prefixes do not change what the command DOES: the first
+	// effective token is what follows sudo/nohup, so `sudo cat /etc/hosts`
+	// or `nohup grep -rn x .` is classified by cat/grep, not the wrapper.
+	// Mutating payloads behind a wrapper still gate: destructive-command
+	// detection runs on the raw command BEFORE this classifier, so
+	// `sudo rm -rf ...` is already tier-HIGH and never reaches here, and
+	// wrapper-prefixed non-whitelisted commands simply stay medium.
+	for len(fields) > 0 && isReadOnlyWrapperPrefix(fields[0]) {
+		fields = fields[1:]
+	}
 	if len(fields) == 0 {
 		return false
 	}
@@ -376,12 +408,12 @@ func irrevSegmentIsReadOnly(seg string) bool {
 		if rest[0] == "worktree" && len(rest) > 1 && rest[1] == "list" {
 			return true
 		}
-		return irrevReadOnlyGitSubcommands[rest[0]]
+		return ReadOnlyGitSubcommands[rest[0]]
 	case "go":
 		if len(rest) == 0 {
 			return true
 		}
-		return irrevReadOnlyGoSubcommands[rest[0]]
+		return ReadOnlyGoSubcommands[rest[0]]
 	case "gh":
 
 		if len(rest) == 0 {
@@ -394,52 +426,9 @@ func irrevSegmentIsReadOnly(seg string) bool {
 		// explicit mutating method or body/field flag is present
 		// (conservative: field flags imply a write payload even without -X).
 		if rest[0] == "api" {
-			mutating := false
-			for i := 1; i < len(rest); i++ {
-				a := rest[i]
-				// #5289: pflag accepts equals forms (--method=DELETE,
-				// --field=k=v, --input=f) and glued shorthand values
-				// (-Fk=v, -XDELETE). Previous exact-equality matching
-				// missed every equals form, judging mutating calls
-				// read-only. Normalize each token to name[=value] first.
-				name, val := a, ""
-				hasVal := false
-				if eq := strings.IndexByte(a, '='); eq >= 0 {
-					name, val, hasVal = a[:eq], a[eq+1:], true
-				}
-				switch name {
-				case "-X", "--method":
-					m := val
-					if !hasVal {
-						if i+1 >= len(rest) {
-							continue
-						}
-						m = rest[i+1]
-						i++
-					}
-					m = strings.ToUpper(m)
-					if m != "GET" && m != "HEAD" {
-						mutating = true
-					}
-				case "-f", "--field", "-F", "--field-file", "--input", "--slurp":
-					// conservative: field/body flags imply a write
-					// payload even without -X (values inline or next token)
-					mutating = true
-				default:
-					// glued shorthand values: -XDELETE, -Fk=v, -fk=v
-					if strings.HasPrefix(name, "-X") && len(name) > 2 {
-						m := strings.ToUpper(name[2:])
-						if m != "GET" && m != "HEAD" {
-							mutating = true
-						}
-					} else if (strings.HasPrefix(name, "-F") || strings.HasPrefix(name, "-f")) && len(name) > 2 {
-						mutating = true
-					}
-				}
-			}
-			return !mutating
+			return ghApiArgsAreReadOnly(rest[1:])
 		}
-		resource, ok := irrevReadOnlyGhSubcommands[rest[0]]
+		resource, ok := ReadOnlyGhSubcommands[rest[0]]
 		if !ok {
 			return false
 		}
@@ -456,8 +445,71 @@ func irrevSegmentIsReadOnly(seg string) bool {
 		}
 		return true
 	default:
-		return irrevReadOnlyBinaries[bin]
+		return ReadOnlyCommandBinaries[bin]
 	}
+}
+
+// ghApiArgsAreReadOnly reports whether a `gh api` invocation (args = the
+// tokens after "gh api") is a read-only call. GET-by-default is read-only
+// UNLESS an explicit mutating method or body/field flag is present
+// (conservative: field flags imply a write payload even without -X).
+func ghApiArgsAreReadOnly(args []string) bool {
+	mutating := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		// #5289: pflag accepts equals forms (--method=DELETE,
+		// --field=k=v, --input=f) and glued shorthand values
+		// (-Fk=v, -XDELETE). Previous exact-equality matching
+		// missed every equals form, judging mutating calls
+		// read-only. Normalize each token to name[=value] first.
+		name, val := a, ""
+		hasVal := false
+		if eq := strings.IndexByte(a, '='); eq >= 0 {
+			name, val, hasVal = a[:eq], a[eq+1:], true
+		}
+		switch name {
+		case "-X", "--method":
+			m := val
+			if !hasVal {
+				if i+1 >= len(args) {
+					continue
+				}
+				m = args[i+1]
+				i++
+			}
+			m = strings.ToUpper(m)
+			if m != "GET" && m != "HEAD" {
+				mutating = true
+			}
+		case "-f", "--field", "-F", "--field-file", "--input", "--slurp":
+			// conservative: field/body flags imply a write
+			// payload even without -X (values inline or next token)
+			mutating = true
+		default:
+			// glued shorthand values: -XDELETE, -Fk=v, -fk=v
+			if strings.HasPrefix(name, "-X") && len(name) > 2 {
+				m := strings.ToUpper(name[2:])
+				if m != "GET" && m != "HEAD" {
+					mutating = true
+				}
+			} else if (strings.HasPrefix(name, "-F") || strings.HasPrefix(name, "-f")) && len(name) > 2 {
+				mutating = true
+			}
+		}
+	}
+	return !mutating
+}
+
+// isReadOnlyWrapperPrefix reports whether tok is a command wrapper that
+// never changes the payload command's read-only-ness: sudo elevates
+// privileges and nohup detaches from the terminal, but neither turns an
+// inspection command into a mutating one.
+func isReadOnlyWrapperPrefix(tok string) bool {
+	switch tok {
+	case "sudo", "nohup":
+		return true
+	}
+	return false
 }
 
 func isEnvAssignment(tok string) bool {

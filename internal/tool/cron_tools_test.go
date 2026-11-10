@@ -3,8 +3,10 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/cron"
 )
@@ -533,4 +535,36 @@ func firstJobID(t *testing.T, s *cron.Scheduler) string {
 		t.Fatal("no jobs created")
 	}
 	return jobs[0].ID
+}
+
+// #5356: the tool-layer far guard and the scheduler-layer horizon guard
+// cooperate - far=false is rejected with the educational message, far=true
+// routes through CreateAcknowledgedFar (no double rejection) and surfaces
+// the WARNING suffix in the result.
+func TestCronCreateTool_FarHorizonAckDualLayer(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	tool := CronCreateTool{Scheduler: s}
+	target := time.Now().AddDate(0, 5, 0)
+	expr := fmt.Sprintf("0 9 %d %d *", target.Day(), int(target.Month()))
+
+	rejectIn := fmt.Sprintf(`{"cron":%q,"prompt":"far reminder","one_shot":true,"description":"t"}`, expr)
+	res, err := tool.Execute(context.Background(), json.RawMessage(rejectIn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, "one-shot cron rejected") {
+		t.Fatalf("unacknowledged far one-shot must be rejected with the educational message, got: %+v", res.Content)
+	}
+
+	ackIn := fmt.Sprintf(`{"cron":%q,"prompt":"far reminder","one_shot":true,"far":true,"description":"t"}`, expr)
+	res2, err := tool.Execute(context.Background(), json.RawMessage(ackIn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.IsError {
+		t.Fatalf("far-acknowledged one-shot must pass both layers, got: %v", res2.Content)
+	}
+	if !strings.Contains(res2.Content, "WARNING: far-future one-shot accepted") {
+		t.Fatal("acknowledged creation must surface the WARNING suffix")
+	}
 }
