@@ -136,6 +136,8 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		CIStatusTool{WorkingDir: workingDir},
 
+		PRDelta{WorkingDir: workingDir},
+
 		ReviewChanges{WorkingDir: workingDir},
 
 		&CmdSnippetTool{WorkingDir: workingDir},

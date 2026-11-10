@@ -296,6 +296,13 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "Blame main.go",
 		},
 		{
+			name: "pr_delta", toolName: "pr_delta",
+			rawArgs:     `{"pr_branch":"feat/x"}`,
+			wantName:    "PR Delta",
+			wantDetail:  "feat/x",
+			wantDisplay: "PR Delta feat/x",
+		},
+		{
 			name: "git_branch_list remote", toolName: "git_branch_list",
 			rawArgs:     `{"remote":true}`,
 			wantName:    "Branches",
