@@ -343,6 +343,15 @@ func checkOneShotHorizon(recurring bool, cronExpr string, next, now time.Time, h
 }
 
 func (s *Scheduler) Create(cronExpr, prompt string, recurring bool, queueIfBusy bool) (Job, error) {
+	return s.CreateAcknowledgedFar(cronExpr, prompt, recurring, queueIfBusy, false)
+}
+
+// CreateAcknowledgedFar behaves like Create but lets the caller explicitly
+// acknowledge a one-shot first fire beyond MaxOneShotHorizon (the far=false
+// default rejects it). When acknowledged and the horizon is exceeded, the
+// job is still created but a WARNING is logged so the far-future fire is
+// visible in diagnostics (the year+1 rollover trap is opt-in, not silent).
+func (s *Scheduler) CreateAcknowledgedFar(cronExpr, prompt string, recurring, queueIfBusy, farAcknowledged bool) (Job, error) {
 	now := time.Now()
 	next, err := NextTime(cronExpr, now)
 	if err != nil {
@@ -350,8 +359,11 @@ func (s *Scheduler) Create(cronExpr, prompt string, recurring bool, queueIfBusy 
 	}
 
 	if err := checkOneShotHorizon(recurring, cronExpr, next, now, MaxOneShotHorizon); err != nil {
-		debug.Log("cron", "Create: rejected one-shot job (expr=%s): %v", cronExpr, err)
-		return Job{}, err
+		if !farAcknowledged {
+			debug.Log("cron", "Create: rejected one-shot job (expr=%s): %v", cronExpr, err)
+			return Job{}, err
+		}
+		debug.Log("cron", "WARNING: one-shot job acknowledged to fire far in the future (expr=%s): %v", cronExpr, err)
 	}
 
 	second, _ := NextTime(cronExpr, next)

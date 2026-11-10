@@ -95,3 +95,21 @@ func TestCreateRecurringFarFutureAllowed(t *testing.T) {
 		t.Fatalf("recurring jobs must not be affected by the one-shot horizon guard: %v", err)
 	}
 }
+
+// Absorbed from #5354 (credit: teamclaw developer seat): explicit far
+// acknowledgement turns the hard reject into an opt-in path.
+func TestCreateOneShotFarFutureAcknowledgedAllowed(t *testing.T) {
+	s := NewScheduler(nil, t.TempDir())
+	// an HH:MM that is long past today rolls to next year without an
+	// explicit date, landing far beyond the 90-day horizon
+	expr := time.Now().Add(-2 * time.Hour).Format("15:04")
+	_, err := s.CreateAcknowledgedFar(expr, "far reminder", false, false, true)
+	if err != nil {
+		t.Fatalf("far-acknowledged one-shot must be allowed, got: %v", err)
+	}
+	// default (unacknowledged) still rejects the same expression
+	_, err = s.Create(expr, "far reminder", false, false)
+	if err == nil {
+		t.Fatal("unacknowledged far one-shot must still be rejected")
+	}
+}
