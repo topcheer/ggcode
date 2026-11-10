@@ -226,78 +226,22 @@ func (t MergePreflightTool) runPreflight(ctx context.Context, prNumber int, dir 
 	report.HeadPinned = report.HeadSHA != ""
 
 	// --- checks_green: rollup all SUCCESS, and still the current head ---
-	var checkReasons []string
-	for _, e := range prView.StatusRollup {
-		if !e.success() {
-			checkReasons = append(checkReasons, e.describe())
-		}
-	}
-	if len(checkReasons) == 0 {
-		report.ChecksGreen = true
-	}
-
-	// Pin verification: the head must not have moved while we evaluated.
-	// Checks from an older head are exactly what this re-read catches.
-	pinOut, err := t.gh(ctx, dir, "pr", "view", strconv.Itoa(prNumber), "--json", "headRefOid")
-	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("head re-verification failed: %v", err)}, nil
-	}
-	var pinView struct {
-		HeadRefOid string `json:"headRefOid"`
-	}
-	if err := json.Unmarshal([]byte(pinOut), &pinView); err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("failed to parse head re-verification: %v", err)}, nil
-	}
-	if pinView.HeadRefOid != report.HeadSHA {
-		report.ChecksGreen = false
-		checkReasons = append(checkReasons, fmt.Sprintf("head moved during preflight (checks belong to %s, current head %s)", shortSHA(report.HeadSHA), shortSHA(pinView.HeadRefOid)))
+	checkReasons, moved := t.evaluateChecks(ctx, dir, prNumber, prView.StatusRollup, report.HeadSHA)
+	report.ChecksGreen = len(checkReasons) == 0
+	if moved != "" {
 		// Re-pin to the freshest head so the caller merges the real head.
-		report.HeadSHA = pinView.HeadRefOid
+		report.HeadSHA = moved
 	}
 
 	// --- reviews_resolved: latest review per author not CHANGES_REQUESTED ---
 	revOut, err := t.gh(ctx, dir, "api", fmt.Sprintf("repos/%s/pulls/%d/reviews", repo, prNumber))
-	reviewReasons := []string{}
-	if err != nil {
-		reviewReasons = append(reviewReasons, fmt.Sprintf("reviews query failed: %v", err))
-	} else {
-		var reviews []prReview
-		if jerr := json.Unmarshal([]byte(revOut), &reviews); jerr != nil {
-			reviewReasons = append(reviewReasons, fmt.Sprintf("reviews parse failed: %v", jerr))
-		} else {
-			report.ReviewsResolved = resolveReviewStates(reviews, &reviewReasons)
-		}
-	}
+	reviewReasons, resolved := t.evaluateReviews(revOut, err)
+	report.ReviewsResolved = resolved
 
 	// --- holds_clear: no label/comment matches a hold pattern ---
-	holdReasons := []string{}
-	var patterns []*regexp.Regexp
-	if t.Access != nil {
-		patterns, err = t.Access.HoldPatterns()
-		if err != nil {
-			holdReasons = append(holdReasons, fmt.Sprintf("hold_patterns failed to compile: %v", err))
-		}
-	}
-	if len(patterns) > 0 {
-		candidates := make([]string, 0, len(prView.Labels)+len(prView.Comments))
-		for _, l := range prView.Labels {
-			candidates = append(candidates, l.Name)
-		}
-		for _, c := range prView.Comments {
-			candidates = append(candidates, c.Body)
-		}
-		for _, re := range patterns {
-			for _, c := range candidates {
-				if re.MatchString(c) {
-					holdReasons = append(holdReasons, fmt.Sprintf("hold pattern %q matched", re.String()))
-					break
-				}
-			}
-		}
-	}
+	holdReasons := t.evaluateHolds(prView.Labels, prView.Comments)
 	report.HoldsClear = len(holdReasons) == 0
 
-	report.ChecksGreen = report.ChecksGreen && len(checkReasons) == 0
 	var reasons []string
 	reasons = append(reasons, checkReasons...)
 	reasons = append(reasons, reviewReasons...)
@@ -309,6 +253,82 @@ func (t MergePreflightTool) runPreflight(ctx context.Context, prNumber int, dir 
 	}
 
 	return Result{Content: renderPreflight(report, repo)}, nil
+}
+
+// evaluateChecks computes the checks_green predicate inputs: reasons for
+// every rollup entry that is not SUCCESS, plus a head-move detection.
+// It re-reads headRefOid after the rollup so checks that belong to an
+// older head (the head moved during the preflight) fail the predicate;
+// the returned moved value is the fresh head to re-pin to ("" if none).
+func (t MergePreflightTool) evaluateChecks(ctx context.Context, dir string, prNumber int, rollup []rollupEntry, capturedHead string) (reasons []string, moved string) {
+	for _, e := range rollup {
+		if !e.success() {
+			reasons = append(reasons, e.describe())
+		}
+	}
+	pinOut, err := t.gh(ctx, dir, "pr", "view", strconv.Itoa(prNumber), "--json", "headRefOid")
+	if err != nil {
+		return append(reasons, fmt.Sprintf("head re-verification failed: %v", err)), ""
+	}
+	var pinView struct {
+		HeadRefOid string `json:"headRefOid"`
+	}
+	if err := json.Unmarshal([]byte(pinOut), &pinView); err != nil {
+		return append(reasons, fmt.Sprintf("failed to parse head re-verification: %v", err)), ""
+	}
+	if pinView.HeadRefOid != capturedHead {
+		reasons = append(reasons, fmt.Sprintf("head moved during preflight (checks belong to %s, current head %s)", shortSHA(capturedHead), shortSHA(pinView.HeadRefOid)))
+		return reasons, pinView.HeadRefOid
+	}
+	return reasons, ""
+}
+
+// evaluateReviews computes the reviews_resolved predicate from the
+// reviews API response (err non-nil means the query itself failed; the
+// predicate is then conservatively false with the failure recorded).
+func (t MergePreflightTool) evaluateReviews(revOut string, err error) (reasons []string, resolved bool) {
+	if err != nil {
+		return []string{fmt.Sprintf("reviews query failed: %v", err)}, false
+	}
+	var reviews []prReview
+	if jerr := json.Unmarshal([]byte(revOut), &reviews); jerr != nil {
+		return []string{fmt.Sprintf("reviews parse failed: %v", jerr)}, false
+	}
+	resolved = resolveReviewStates(reviews, &reasons)
+	return reasons, resolved
+}
+
+// evaluateHolds computes the holds_clear predicate inputs: one reason
+// per hold pattern that matched any label name or comment body.
+func (t MergePreflightTool) evaluateHolds(labels []struct{ Name string }, comments []struct{ Body string }) []string {
+	var reasons []string
+	var patterns []*regexp.Regexp
+	if t.Access == nil {
+		return nil
+	}
+	patterns, err := t.Access.HoldPatterns()
+	if err != nil {
+		return []string{fmt.Sprintf("hold_patterns failed to compile: %v", err)}
+	}
+	if len(patterns) == 0 {
+		return nil
+	}
+	candidates := make([]string, 0, len(labels)+len(comments))
+	for _, l := range labels {
+		candidates = append(candidates, l.Name)
+	}
+	for _, c := range comments {
+		candidates = append(candidates, c.Body)
+	}
+	for _, re := range patterns {
+		for _, c := range candidates {
+			if re.MatchString(c) {
+				reasons = append(reasons, fmt.Sprintf("hold pattern %q matched", re.String()))
+				break
+			}
+		}
+	}
+	return reasons
 }
 
 // prReview is one entry of the pulls reviews API.
