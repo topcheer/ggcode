@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"fmt"
+
 	"encoding/json"
 	"os"
 	"strings"
@@ -101,7 +103,9 @@ func (s *unreadEditState) checkUnreadEdit(path string) string {
 	}
 	s.warnedFiles[n] = true
 	debug.Log("agent", "unread-edit guard: editing %s without prior read", n)
-	return "You are editing this file without reading it first in this session. Read it with read_file to ensure your edit targets the actual content."
+	// Name the file: in multi-file edits N identical nameless lines are
+	// indistinguishable (issue #5374).
+	return fmt.Sprintf("You are editing %s without reading it first in this session. Read it with read_file to ensure your edit targets the actual content.", path)
 }
 
 func (s *unreadEditState) checkStaleRead(path string) string {
