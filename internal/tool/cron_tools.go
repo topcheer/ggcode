@@ -58,10 +58,6 @@ func (t CronCreateTool) Parameters() json.RawMessage {
 		"description": {
 			"type": "string",
 			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
-		},
-		"far_horizon_ack": {
-			"type": "boolean",
-			"description": "Acknowledge that a one-shot job's first fire lands beyond the 90-day horizon (the HH:MM year-rollover trap guard). Default false: such jobs are rejected with the computed fire time. Set true only when a genuinely far-future reminder is intended; the job is then created and a WARNING is logged."
 		}
 	},
 	"required": [
@@ -82,7 +78,6 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		OneShot     *bool  `json:"one_shot"`
 		Far         *bool  `json:"far"`
 		QueueIfBusy *bool  `json:"queue_if_busy"`
-		FarAck      *bool  `json:"far_horizon_ack"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -119,7 +114,10 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	// gate; an acknowledged far=true routes through
 	// Scheduler.CreateAcknowledgedFar so the scheduler-layer horizon guard
 	// (checkOneShotHorizon, the programmatic-caller backstop) also honors the
-	// acknowledgement instead of re-rejecting.
+	// acknowledgement instead of re-rejecting. far is the single
+	// acknowledgement knob on both cron_create and cron_update; a
+	// far_horizon_ack twin was removed in #5359 because it was never wired
+	// into this guard (documented no-op).
 	far := args.Far != nil && *args.Far
 	farFutureDays := -1
 	if !recurring {

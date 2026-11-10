@@ -537,11 +537,11 @@ func firstJobID(t *testing.T, s *cron.Scheduler) string {
 	return jobs[0].ID
 }
 
-// #5356: the tool-layer far guard and the scheduler-layer horizon guard
+// #5356 (renamed per #5359): the tool-layer far guard and the scheduler-layer horizon guard
 // cooperate - far=false is rejected with the educational message, far=true
 // routes through CreateAcknowledgedFar (no double rejection) and surfaces
 // the WARNING suffix in the result.
-func TestCronCreateTool_FarHorizonAckDualLayer(t *testing.T) {
+func TestCronCreateTool_FarAckDualLayer(t *testing.T) {
 	s := cron.NewScheduler(nil, "")
 	tool := CronCreateTool{Scheduler: s}
 	target := time.Now().AddDate(0, 5, 0)
