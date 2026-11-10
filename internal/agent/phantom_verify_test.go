@@ -216,9 +216,13 @@ func TestMaybeWarnPhantomVerify_includesCategory(t *testing.T) {
 
 func TestPhantomEverRunEditInvalidation(t *testing.T) {
 	s := newPhantomVerifyState()
+	s.categoriesRun["test"] = true
 	s.categoriesEverRun["test"] = true
 	s.invalidateEdits()
 	if len(s.categoriesEverRun) != 0 {
 		t.Fatalf("edit did not clear everRun: %v", s.categoriesEverRun)
+	}
+	if len(s.categoriesRun) != 0 {
+		t.Fatalf("edit did not clear run-level evidence (#5371): %v", s.categoriesRun)
 	}
 }

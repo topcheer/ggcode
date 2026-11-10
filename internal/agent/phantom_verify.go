@@ -487,6 +487,14 @@ func (s *phantomVerifyState) invalidateEdits() {
 	if s == nil {
 		return
 	}
+	// An edit stales verification evidence at BOTH layers (#5371): a same-run
+	// observation (categoriesRun) must not keep a category armed after later
+	// source edits - the claim gate requires !Run && !EverRun, so keeping the
+	// Run entry would silently suppress "verified before, edited after, claimed
+	// without re-running" inside one run.
+	for k := range s.categoriesRun {
+		delete(s.categoriesRun, k)
+	}
 	for k := range s.categoriesEverRun {
 		delete(s.categoriesEverRun, k)
 	}
