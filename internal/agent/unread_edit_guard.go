@@ -89,6 +89,17 @@ func (s *unreadEditState) hasBeenRead(path string) bool {
 }
 
 func (s *unreadEditState) checkUnreadEdit(path string) string {
+	if n := s.warnUnreadPath(path); n != "" {
+		return unreadEditWarning([]string{n})
+	}
+	return ""
+}
+
+// warnUnreadPath pins the per-file warned state and returns the normalized
+// path when a warning is due ("" otherwise). #5374: rendering lives in
+// unreadEditWarning so multi-file edits can coalesce into ONE named hint;
+// this method preserves the guard's per-file state machine.
+func (s *unreadEditState) warnUnreadPath(path string) string {
 	if path == "" {
 		return ""
 	}
@@ -101,7 +112,24 @@ func (s *unreadEditState) checkUnreadEdit(path string) string {
 	}
 	s.warnedFiles[n] = true
 	debug.Log("agent", "unread-edit guard: editing %s without prior read", n)
-	return "You are editing this file without reading it first in this session. Read it with read_file to ensure your edit targets the actual content."
+	return n
+}
+
+// unreadEditWarning renders the #5374 coalesced unread-edit guidance:
+// ONE hint naming every unread file instead of N verbatim repeats, so a
+// multi_file_edit over N unread files no longer walls the tool result and
+// the model can see WHICH files to read. Per-file state (warnedFiles
+// pinning, repeat calls return "") stays in checkUnreadEdit.
+func unreadEditWarning(paths []string) string {
+	switch len(paths) {
+	case 0:
+		return ""
+	case 1:
+		return "You are editing " + paths[0] + " without reading it first in this session. Read it with read_file to ensure your edit targets the actual content."
+	default:
+		return "Files edited without prior read this session: " + strings.Join(paths, ", ") +
+			". Read them with read_file before editing to ensure your edits target the actual content."
+	}
 }
 
 func (s *unreadEditState) checkStaleRead(path string) string {

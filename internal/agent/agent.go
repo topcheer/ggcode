@@ -3429,6 +3429,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if !result.IsError && mutatingSourceEdit(tc.Name) {
 
 				a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
+				var unreadEditPaths []string
 				for _, p := range extractTrackedEditPaths(tc.Name, tc.Arguments) {
 					a.editFailRecovery.recordEditSuccess(p)
 
@@ -3458,8 +3459,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.fixCascade.recordEdit()
 
 					a.errRegression.recordEdit()
-					if hint := a.unreadEdit.checkUnreadEdit(p); hint != "" {
-						a.appendGuidance(&result, hint)
+					// #5374: pin per-file warned state here, collect the paths,
+					// then emit ONE coalesced named-paths hint after the loop
+					// instead of N verbatim repeats in one tool result.
+					if n := a.unreadEdit.warnUnreadPath(p); n != "" {
+						unreadEditPaths = append(unreadEditPaths, n)
 					}
 
 					if hint := a.unreadEdit.checkStaleRead(p); hint != "" {
@@ -3491,6 +3495,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					if hint := a.checkBranchGuard(); hint != "" {
 						a.appendGuidance(&result, hint)
 					}
+				}
+				// #5374: one coalesced named-paths hint for every unread file
+				// this tool call edited (was: N verbatim repeats, no names).
+				if hint := unreadEditWarning(unreadEditPaths); hint != "" {
+					a.appendGuidance(&result, hint)
 				}
 			}
 
