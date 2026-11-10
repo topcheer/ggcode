@@ -190,6 +190,8 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return toolPres("Remote", "")
 	case "git_stash_list":
 		return toolPres("Stash", "list")
+	case "pr_delta":
+		return toolPres("PR Delta", argStr(args, "pr_branch"))
 	case "git_add":
 		files := parseStringSlice(args, "files")
 		return toolPres("Stage", displayFileTarget(strings.Join(files, ", ")))
