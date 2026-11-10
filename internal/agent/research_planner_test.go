@@ -88,6 +88,26 @@ func TestResearchPlanText_Renders(t *testing.T) {
 	}
 }
 
+// Pin for issue #5388: planner-produced sub-queries carry goal-free Aspects,
+// so the injected plan text must never re-embed the (possibly multi-KB) task
+// payload once per sub-query.
+func TestResearchPlanText_NoGoalReembedding(t *testing.T) {
+	goal := strings.Repeat("very long patrol instruction block payload ", 40) + "design"
+	subs := PlanResearchSubQueries(goal, defaultResearchSubQueryCap)
+	if len(subs) < 2 {
+		t.Fatalf("expected multiple perspective sub-queries, got %d", len(subs))
+	}
+	for _, s := range subs {
+		if s.Aspect == "" {
+			t.Errorf("planner must populate Aspect so plan text stays goal-free: %+v", s)
+		}
+	}
+	msg := researchPlanText(subs)
+	if n := strings.Count(msg, goal); n != 0 {
+		t.Errorf("plan text re-embeds goal %d time(s) - issue #5388 regression:\n%s", n, msg)
+	}
+}
+
 func TestResearchPlanState_FireOnce(t *testing.T) {
 	p := &researchPlanState{}
 	if !p.shouldInject() {
