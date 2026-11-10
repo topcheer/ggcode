@@ -19,6 +19,8 @@ func (t CronCreateTool) Name() string { return "cron_create" }
 func (t CronCreateTool) Description() string {
 	return "Create a scheduled job that enqueues a prompt at cron-specified intervals. " +
 		"Set recurring=false for one-shot reminders (in-memory only, not persisted). " +
+		"One-shot jobs whose computed next fire is more than 90 days away are rejected unless far=true — " +
+		"far-future one-shot schedules are almost always a cron field parsing slip. " +
 		"queue_if_busy=false (default) skips if agent is busy; true queues the prompt for later."
 }
 func (t CronCreateTool) Parameters() json.RawMessage {
@@ -36,6 +38,14 @@ func (t CronCreateTool) Parameters() json.RawMessage {
 		"recurring": {
 			"type": "boolean",
 			"description": "Whether to repeat (default true). Only recurring jobs are persisted across restarts; one-shot reminders (recurring=false) are in-memory only."
+		},
+		"one_shot": {
+			"type": "boolean",
+			"description": "Create a self-deleting one-shot reminder: fires once at the next cron match, then removes itself. Preferred over recurring=false for deferred follow-ups. Guarded: the computed next fire must be within 90 days unless far=true."
+		},
+		"far": {
+			"type": "boolean",
+			"description": "Explicitly accept a far-future one-shot: required when the computed next fire is more than 90 days away and that is intentional. The result output carries a loud far-future warning when set."
 		},
 		"queue_if_busy": {
 			"type": "boolean",
@@ -66,6 +76,7 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		Prompt      string `json:"prompt"`
 		Recurring   *bool  `json:"recurring"`
 		OneShot     *bool  `json:"one_shot"`
+		Far         *bool  `json:"far"`
 		QueueIfBusy *bool  `json:"queue_if_busy"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
@@ -94,6 +105,24 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		queueIfBusy = *args.QueueIfBusy
 	}
 
+	// #5353 far-future one-shot trap: two seats (OBS-041, OBS-049) deleted and
+	// recreated one-shot crons whose NextFire landed >1 year out after an
+	// HH:MM-vs-day parsing slip, because creation silently accepted the
+	// far-future schedule. Reject one-shot creation beyond the 90-day horizon
+	// unless explicitly acknowledged with far=true.
+	far := args.Far != nil && *args.Far
+	farFutureDays := -1
+	if !recurring {
+		if next, err := cron.NextTime(args.Cron, time.Now()); err == nil {
+			if days := int(time.Until(next).Hours() / 24); days > oneShotFarFutureDays {
+				if !far {
+					return Result{IsError: true, Content: oneShotFarFutureRejection(next, days)}, nil
+				}
+				farFutureDays = days
+			}
+		}
+	}
+
 	job, err := t.Scheduler.Create(args.Cron, args.Prompt, recurring, queueIfBusy)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
@@ -102,8 +131,22 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	suffix := ""
 	if !recurring {
 		suffix = "\n(one-shot: fires once and is removed automatically; not persisted across restarts)"
+		if farFutureDays > 0 {
+			suffix += fmt.Sprintf("\nWARNING: far-future one-shot accepted via far=true — next fire is %d days away. Far-future one-shots are usually cron field slips (minute hour day-of-month month day-of-week); verify the expression before relying on it.", farFutureDays)
+		}
 	}
 	return Result{Content: string(out) + suffix + "\n"}, nil
+}
+
+const oneShotFarFutureDays = 90
+
+func oneShotFarFutureRejection(next time.Time, days int) string {
+	return fmt.Sprintf(
+		"one-shot cron rejected: computed next fire is %d days away (%s), beyond the %d-day horizon. "+
+			"Far-future one-shot schedules are almost always a cron parsing slip (e.g. HH:MM-vs-day field confusion lands the fire in the next calendar year). "+
+			"Re-check the 5-field expression (minute hour day-of-month month day-of-week). If the far-future fire is intentional, retry with \"far\": true.",
+		days, next.Format(time.RFC3339), oneShotFarFutureDays,
+	)
 }
 
 type CronDeleteTool struct {
@@ -243,6 +286,10 @@ func (t CronUpdateTool) Parameters() json.RawMessage {
 				"type": "boolean",
 				"description": "New queue-if-busy setting (optional, omit to keep current)"
 			},
+		"far": {
+			"type": "boolean",
+			"description": "Explicitly accept a far-future schedule: required when the new cron expression moves a one-shot job's next fire more than 90 days out and that is intentional."
+		},
 			"description": {
 				"type": "string",
 				"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
@@ -263,6 +310,7 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		Cron        *string `json:"cron"`
 		Prompt      *string `json:"prompt"`
 		QueueIfBusy *bool   `json:"queue_if_busy"`
+		Far         *bool   `json:"far"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -277,10 +325,26 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "prompt cannot be empty"}, nil
 	}
 
+	// #5353: the far-future trap applies on update too — a seat re-specifying
+	// the schedule of an existing one-shot can introduce the same >1 year
+	// NextFire slip. Guard only one-shot targets; recurring jobs legitimately
+	// have distant first fires only when the expression is legitimately rare.
+	if args.Cron != nil && strings.TrimSpace(*args.Cron) != "" && (args.Far == nil || !*args.Far) {
+		if job, ok := t.Scheduler.Get(args.JobID); ok && !job.Recurring {
+			if next, err := cron.NextTime(*args.Cron, time.Now()); err == nil {
+				if days := int(time.Until(next).Hours() / 24); days > oneShotFarFutureDays {
+					return Result{IsError: true, Content: oneShotFarFutureRejection(next, days)}, nil
+				}
+			}
+		}
+	}
+
 	job, err := t.Scheduler.Update(args.JobID, args.Cron, args.Prompt, args.QueueIfBusy)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+
+	farAccepted := args.Far != nil && *args.Far
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("✓ Job %s updated\n", job.ID))
@@ -294,6 +358,9 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	}
 	if !job.NextFire.IsZero() {
 		sb.WriteString(fmt.Sprintf("  Next fire: %s\n", job.NextFire.Format("2006-01-02 15:04 MST")))
+		if farAccepted && !job.Recurring && time.Until(job.NextFire).Hours()/24 > oneShotFarFutureDays {
+			sb.WriteString(fmt.Sprintf("  WARNING: far-future one-shot accepted via far=true — next fire is %d days away; verify the expression before relying on it.\n", int(time.Until(job.NextFire).Hours()/24)))
+		}
 	}
 	promptPreview := job.Prompt
 	if len([]rune(promptPreview)) > 80 {
