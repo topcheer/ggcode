@@ -39,7 +39,11 @@ func (t CronCreateTool) Parameters() json.RawMessage {
 		},
 		"queue_if_busy": {
 			"type": "boolean",
-			"description": "Whether to queue the prompt if the agent is busy when the job fires. Default: false (skip if busy). Set to true for important tasks that must run even if the agent is busy — the prompt will queue and execute after the current task finishes."
+			"description": "Whether to queue the prompt if the agent is busy when the job fires. Default: false (skip if busy). Set to true for important tasks that must run even if the agent is busy - the prompt will queue and execute after the current task finishes."
+		},
+		"far": {
+			"type": "boolean",
+			"description": "Explicit acknowledgment for a one-shot whose NextFire lands more than 90 days out (suppresses the far-future warning). Only relevant when recurring=false / one_shot=true."
 		},
 		"durable": {
 			"type": "boolean",
@@ -67,6 +71,7 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		Recurring   *bool  `json:"recurring"`
 		OneShot     *bool  `json:"one_shot"`
 		QueueIfBusy *bool  `json:"queue_if_busy"`
+		Far         *bool  `json:"far"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -102,6 +107,19 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	suffix := ""
 	if !recurring {
 		suffix = "\n(one-shot: fires once and is removed automatically; not persisted across restarts)"
+		// Guard against the one-shot year+1 trap (#5353): a one-shot whose
+		// next match lands >90 days out usually means an HH:MM-vs-day parsing
+		// slip (e.g. "25 18 9 11 *" created after 18:25 already passed today
+		// defers silently for a full year). Warn loudly unless the caller
+		// acknowledged with far=true. Recurring jobs are exempt: annual
+		// schedules legitimately compute up to ~12 months out.
+		const farFutureWarnDays = 90
+		if days := time.Until(job.NextFire).Hours() / 24; days > farFutureWarnDays && (args.Far == nil || !*args.Far) {
+			suffix += fmt.Sprintf(
+				"\nWARNING: this one-shot's NextFire is %.0f days away (%s) - likely an HH:MM-vs-day parsing slip. "+
+					"If intentional, re-create with far=true to acknowledge.",
+				days, job.NextFire.Format("2006-01-02 15:04"))
+		}
 	}
 	return Result{Content: string(out) + suffix + "\n"}, nil
 }
