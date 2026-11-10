@@ -311,7 +311,7 @@ time. If you really want a reminder that far ahead, spell out the full date
 (month and day) in the schedule. Recurring jobs (daily/weekly/...) are not
 affected by this limit.
 
-To create a genuinely far-future one-shot on purpose, pass `far_horizon_ack: true` at the tool layer (or `Scheduler.CreateAcknowledgedFar` in Go): the job is created and a WARNING is logged, so the far fire stays visible in diagnostics.
+To create a genuinely far-future one-shot on purpose, pass `far: true` at the tool layer (or `Scheduler.CreateAcknowledgedFar` in Go): the job is created and a WARNING is logged, so the far fire stays visible in diagnostics.
 
 
 ## File-Watch Triggers (Ambient Agents)
