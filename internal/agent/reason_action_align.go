@@ -76,7 +76,7 @@ func raToolCategory(toolName string) raCategory {
 		return raCatUnderstand
 	case "grep", "search_files", "glob", "code_search", "lsp_workspace_symbols":
 		return raCatSearch
-	case "git_commit", "git_push", "git_add", "ci_status":
+	case "git_commit", "git_push", "git_add", "ci_status", "merge_preflight":
 		return raCatDeploy
 	default:
 		return raCatNone

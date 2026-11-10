@@ -22,6 +22,7 @@ const (
 
 var trStatePollingTools = map[string]bool{
 	"ci_status":           true,
+	"merge_preflight":     true,
 	"git_status":          true,
 	"git_log":             true,
 	"git_diff":            true,

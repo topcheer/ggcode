@@ -20,6 +20,19 @@ func newTestMergeGate(ttl time.Duration) *mergeGateState {
 	return s
 }
 
+func TestMergeGatePreflightIsReadonlyGrounding(t *testing.T) {
+	// merge_preflight is a pure read-only gh query: it must never itself
+	// gate (tier None) and it counts as grounding so the preflight the
+	// completion gate demands also satisfies the irrev gate's evidence
+	// requirement for the subsequent merge command.
+	if got := irrevClassifyTool("merge_preflight", `{"pr_number":5}`); got != irrevTierNone {
+		t.Errorf("merge_preflight tier = %d, want None", got)
+	}
+	if !irrevIsGroundingAction("merge_preflight") {
+		t.Error("merge_preflight must count as a grounding action")
+	}
+}
+
 func TestMergeGateProtectedCommandRequiresPreflight(t *testing.T) {
 	s := newTestMergeGate(time.Minute)
 	got := s.checkCommand(permission.SupervisedMode, "run_command", `{"command":"gh pr merge 5356"}`)

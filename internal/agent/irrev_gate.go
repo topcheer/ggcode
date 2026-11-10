@@ -51,7 +51,8 @@ func irrevClassifyTool(toolName, args string) int {
 		"lsp_diagnostics", "lsp_document_highlights", "lsp_code_actions",
 		"git_show", "git_diff", "git_blame", "git_log", "git_status",
 		"git_branch_list", "git_remote", "git_stash_list",
-		"web_search", "web_fetch", "code_execution", "runtime", "clipboard":
+		"web_search", "web_fetch", "code_execution", "runtime", "clipboard",
+		"merge_preflight":
 		return irrevTierNone
 
 	case "git_tag":
@@ -542,6 +543,11 @@ func irrevIsGroundingAction(toolName string) bool {
 		return true
 
 	case "run_command":
+		return true
+	case "merge_preflight":
+		// The completion gate demands a preflight before protected merges;
+		// counting it as grounding keeps the two gates from demanding
+		// conflicting evidence.
 		return true
 	}
 	return false
