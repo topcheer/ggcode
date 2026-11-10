@@ -70,6 +70,45 @@ jobs:
             exit 1
           fi
 
+  # Gate: the flutter test suite must run at PR time when mobile code
+  # changes. Before #5384 the suite only ran in the Mobile Release workflow
+  # (tag push), so a PR that broke mobile tests passed CI green and the
+  # breakage only surfaced at release time (v1.3.278: the #5379
+  # session_provider_test red shipped to main through green PRs and exploded
+  # in the release Verify step). Mirrors the webui-dist-freshness shape so
+  # the cost only lands where mobile changes; the release workflow keeps its
+  # full-matrix verify (pub get + analyze + test).
+  mobile-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: ${{ github.event_name == 'pull_request' }}
+    env:
+      FLUTTER_VERSION: '3.47.9'
+    defaults:
+      run:
+        working-directory: mobile/flutter
+    steps:
+      - uses: actions/checkout@v6
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            mobile:
+              - 'mobile/**'
+      - name: Setup Flutter
+        if: steps.filter.outputs.mobile == 'true'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+      - name: Get dependencies
+        if: steps.filter.outputs.mobile == 'true'
+        run: flutter pub get
+      - name: Test
+        if: steps.filter.outputs.mobile == 'true'
+        run: flutter test
+
   lint:
     name: Format
     runs-on: ubuntu-latest
