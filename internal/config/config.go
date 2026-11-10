@@ -340,6 +340,7 @@ type Config struct {
 	ProtectedPaths      []string                   `yaml:"protected_paths,omitempty" json:"protected_paths,omitempty"`
 	Sandbox             SandboxConfig              `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
 	Memory              MemoryConfig               `yaml:"memory,omitempty" json:"memory,omitempty"`
+	Gates               GatesConfig                `yaml:"gates,omitempty" json:"gates,omitempty"`
 	FirstRun            bool                       `yaml:"-" json:"-"`
 	instanceDir         string                     `yaml:"-" json:"-"`
 	instancePath        string                     `yaml:"-" json:"-"`
@@ -1487,6 +1488,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SubAgents.MaxConcurrent < 0 {
 		return fmt.Errorf("subagents.max_concurrent must not be negative")
+	}
+	if err := c.ValidateMergeGateConfig(); err != nil {
+		return err
 	}
 	if c.SubAgents.MaxTotal < 0 {
 		return fmt.Errorf("subagents.max_total must not be negative (0 = unlimited)")
