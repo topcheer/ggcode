@@ -101,6 +101,7 @@ var phantomPlainVerbs = map[string][]string{
 	"read_command_output": nil,
 	"task_output":         nil,
 	"ci_status":           {phantomCatCI},
+	"merge_preflight":     {phantomCatCI},
 }
 
 var phantomRunners = map[string]bool{
@@ -316,6 +317,7 @@ var phantomCommandTools = map[string]bool{
 	"read_command_output": true,
 	"task_output":         true,
 	"ci_status":           true,
+	"merge_preflight":     true,
 }
 
 type phantomVerifyClaim struct {

@@ -118,6 +118,8 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 
 	old.Fallbacks = fresh.Fallbacks
 
+	old.Gates = fresh.Gates
+
 	old.KnightConfig = fresh.KnightConfig
 	old.MaxIterations = fresh.MaxIterations
 	old.SessionTokenBudget = fresh.SessionTokenBudget

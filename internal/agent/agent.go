@@ -318,6 +318,7 @@ type Agent struct {
 	bgVerifyJobs                 *bgVerifyRegistry
 	recklessExec                 *recklessExecState
 	irrevGate                    *irrevGateState
+	mergeGate                    *mergeGateState
 	argComplexityGate            *argComplexityGateState
 	verifyDebt                   *verifyDebtState
 	editPropagation              *editPropagationState
@@ -592,6 +593,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		attentionFragment:      newAttentionFragmentState(),
 		recklessExec:           newRecklessExecState(),
 		irrevGate:              newIrrevGateState(),
+		mergeGate:              newMergeGateState(),
 		argComplexityGate:      newArgComplexityGateState(),
 		verifyDebt:             newVerifyDebtState(),
 		editPropagation:        newEditPropagationState(),
@@ -3155,6 +3157,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 		}
 
+		if a.mergeGate != nil {
+			mode := a.currentMode()
+			for _, tc := range toolCalls {
+				if req := a.mergeGate.checkCommand(mode, tc.Name, string(tc.Arguments)); req != "" {
+					debug.Log("agent", "Iteration %d: merge gate requirement injected", i+1)
+					a.contextManager.Add(provider.Message{
+						Role:    "user",
+						Content: []provider.ContentBlock{{Type: "text", Text: req}},
+					})
+				}
+			}
+		}
+
 		if hint := a.maybeToolflowSuggestion(a.runToolNames); hint != "" {
 			debug.Log("agent", "injected toolflow next-step hint (%d chars)", len(hint))
 			a.contextManager.Add(provider.Message{
@@ -4180,6 +4195,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 			if a.irrevGate != nil {
 				a.irrevGate.recordOutcome(tc.Name, result.IsError)
+			}
+			if a.mergeGate != nil {
+				a.mergeGate.RecordPreflightResult(tc.Name, result.Content)
 			}
 
 			if mutatingSourceEdit(tc.Name) && !result.IsError { // #5249: apply_patch must count as a write

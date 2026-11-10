@@ -97,6 +97,7 @@ var verifyTools = map[string]bool{
 	"task_output":         true,
 	"read_command_output": true,
 	"ci_status":           true,
+	"merge_preflight":     true,
 }
 
 var psEditTools = sourceMutatingTools

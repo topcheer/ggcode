@@ -70,6 +70,9 @@ func (a *configAccess) Get(key string) (string, error) {
 	if v, ok, err := a.getKnightSectionKey(key); ok {
 		return v, err
 	}
+	if v, ok, err := a.getGatesSectionKey(key); ok {
+		return v, err
+	}
 	if v, ok, err := a.getRuntimeSectionKey(key); ok {
 		return v, err
 	}
@@ -268,6 +271,12 @@ func (a *configAccess) Set(key, value string) error {
 	if handled, err := a.setKnightSectionKey(key, value); handled {
 		return err
 	}
+	if handled, err := a.setGatesSectionKey(key, value); handled {
+		if err == nil {
+			return a.saveAndPatch(key, value)
+		}
+		return err
+	}
 	if handled, err := a.setRuntimeSectionKey(key, value); handled {
 		return err
 	}
@@ -436,6 +445,7 @@ func (a *configAccess) List(section string) (string, error) {
 		sb.WriteString(a.listSectionIM())
 		sb.WriteString(a.listSectionA2A())
 		sb.WriteString(a.listSectionKnight())
+		sb.WriteString(a.listSectionGates())
 		sb.WriteString(a.listSectionRuntime())
 	case "core":
 		sb.WriteString(a.listSectionCore())
@@ -451,10 +461,12 @@ func (a *configAccess) List(section string) (string, error) {
 		sb.WriteString(a.listSectionA2A())
 	case "knight":
 		sb.WriteString(a.listSectionKnight())
+	case "gates":
+		sb.WriteString(a.listSectionGates())
 	case "runtime":
 		sb.WriteString(a.listSectionRuntime())
 	default:
-		return "", fmt.Errorf("unknown section %q (valid: core, api_key, vendors, mcp, im, a2a, knight, runtime)", section)
+		return "", fmt.Errorf("unknown section %q (valid: core, api_key, vendors, mcp, im, a2a, knight, gates, runtime)", section)
 	}
 
 	return sb.String(), nil
