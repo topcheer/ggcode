@@ -16,6 +16,7 @@ type SlashDeps interface {
 	ToolList() (string, error)
 	ModifiedFiles() (string, error)
 	GitDiff(args []string) (string, error)
+	EtunnelControl(args []string) (string, error)
 }
 
 type SlashCommand struct {
@@ -27,6 +28,14 @@ type SlashCommand struct {
 }
 
 var imSlashRegistry = []SlashCommand{
+	{
+		Name:     "et",
+		Help:     "etunnel tunnel: /et [on|off|show|setup <subdomain> <token>]",
+		Category: "control",
+		Handler: func(d SlashDeps, args []string) (string, error) {
+			return d.EtunnelControl(args)
+		},
+	},
 	{
 		Name:     "cost",
 		Help:     "Session and cross-session cost summary",
