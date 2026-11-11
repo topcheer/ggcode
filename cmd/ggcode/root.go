@@ -618,6 +618,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	agentruntime.InitGlobalSectionCollector(workingDir)
 	defer agentruntime.StopGlobalSectionCollector()
 
+	// #shift-handoff: handoff brief of the most recent prior session in
+	// this workspace. Computed once after session selection (below - the
+	// store/session do not exist yet at first prompt build) and appended
+	// to every system prompt rebuild. Empty for resumed sessions (full
+	// history already restored) and fresh workspaces.
+	var shiftHandoffBrief string
+
 	buildCurrentSystemPrompt := func() (string, []string) {
 		// #5339: same-workspace active agents snapshot. lanchatHub is a
 		// closure variable assigned later in startup; the first build may
@@ -626,7 +633,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		if lanchatHub != nil {
 			sharedAgents = lanchat.FormatWorkspaceAgents(lanchatHub.Participants(), workingDir, lanchatHub.NodeID())
 		}
-		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, detectGitStatus(workingDir), "", sharedAgents)
+		prompt, promptRefs := agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, detectGitStatus(workingDir), "", sharedAgents)
+		if shiftHandoffBrief != "" {
+			prompt += "\n\n" + shiftHandoffBrief
+		}
+		return prompt, promptRefs
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 	trace.Mark(fmt.Sprintf("build initial system prompt skills=%d bytes=%d", len(promptSkillRefs), len(systemPrompt)))
@@ -855,6 +866,18 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			}
 		}
 	}
+	// #shift-handoff: fresh sessions only (resumeID empty). A resumed
+	// session already carries its full history; a brand-new session would
+	// otherwise start amnesiac about the previous session in this workspace
+	// (cron/one-shot runs re-reading context from zero every time).
+	if resumeID == "" && !cfg.DisableHandoff {
+		shiftHandoffBrief = agentruntime.BuildShiftHandoffBrief(store, workingDir, "", agentruntime.DefaultShiftHandoffWindow)
+		if shiftHandoffBrief != "" {
+			systemPrompt += "\n\n" + shiftHandoffBrief
+			trace.Mark(fmt.Sprintf("shift handoff injected bytes=%d", len(shiftHandoffBrief)))
+		}
+	}
+
 	homeDir, _ := os.UserHomeDir()
 	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)
 	knightAgent.SetFactory(knightFactory)
