@@ -561,3 +561,19 @@ func TestIssue1636_TechStackGated(t *testing.T) {
 		t.Fatalf("foreign repo must keep only the generic line, got %v", stack)
 	}
 }
+
+// P2 (#5446): oversized project-memory entries index to path+size only -
+// no inline preview body; the read_file retrieval instruction must stay.
+func TestOversizedProjectMemoryIndexNoPreviewBody(t *testing.T) {
+	big := strings.Repeat("x", MaxInlineProjectMemoryChars+50)
+	line := projectMemoryIndexLine("GGCODE.md", big)
+	if !strings.Contains(line, "GGCODE.md") {
+		t.Fatalf("index line must keep the path:\n%s", line)
+	}
+	if !strings.Contains(line, "read_file") {
+		t.Fatalf("index line must keep the read_file retrieval instruction:\n%s", line)
+	}
+	if strings.Contains(line, "Preview:") {
+		t.Fatalf("index line must not carry an inline preview body:\n%s", line)
+	}
+}

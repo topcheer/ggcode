@@ -29,10 +29,6 @@ const DefaultProjectMemoryFilename = "AGENTS.md"
 
 const MaxInlineProjectMemoryChars = 2000
 
-const projectMemoryIndexPreviewLines = 5
-
-const projectMemoryIndexPreviewChars = 300
-
 func LoadProjectMemory(workingDir string) (content string, files []string, err error) {
 	absDir, err := filepath.Abs(workingDir)
 	if err != nil {
@@ -142,21 +138,13 @@ func ReadProjectMemoryFiles(paths []string) (content string, files []string, err
 }
 
 func projectMemoryIndexLine(path, data string) string {
-	var lines []string
-	for _, ln := range strings.Split(data, "\n") {
-		t := strings.TrimSpace(ln)
-		if t == "" {
-			continue
-		}
-		lines = append(lines, t)
-		if len(lines) >= projectMemoryIndexPreviewLines {
-			break
-		}
-	}
-	preview := truncateProjectMemoryRunes(strings.Join(lines, " / "), projectMemoryIndexPreviewChars)
+	// P2 (#5446): oversized entries carry path + size only. The old inline
+	// preview (up to 5 lines / 300 runes per file, repeated across the
+	// multiple injection paths) was the bulk; read_file on the path (kept
+	// in the instruction) is the retrieval path, so no information is lost.
 	return fmt.Sprintf("[project-memory-index] %s — oversized (%d chars, inline omitted). "+
-		"Reference context only, not full instructions; use read_file on this path to load the full content. Preview: %s",
-		path, len([]rune(data)), preview)
+		"Reference context only, not full instructions; use read_file on this path to load the full content.",
+		path, len([]rune(data)))
 }
 
 func taintedProjectMemoryIndexLine(path string) string {

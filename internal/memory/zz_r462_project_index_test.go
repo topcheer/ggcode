@@ -90,15 +90,20 @@ func TestReadProjectMemoryFiles_CJKBoundary(t *testing.T) {
 	}
 }
 
-func TestProjectMemoryIndexLine_PreviewSkipsBlankLines(t *testing.T) {
-	data := "\n\n# Title\n\nsecond line\n\nthird\nfourth\nfifth\nsixth-should-not-appear\n"
+// P2 (#5446) supersedes the old preview contract: oversized entries index
+// to path + size only; content discovery is read_file on the path.
+func TestProjectMemoryIndexLine_NoPreviewBodyAnymore(t *testing.T) {
+	data := "\n\n# Title\n\nsecond line\n\nthird\nfourth\nfifth\nsixth\n"
 	line := projectMemoryIndexLine("/tmp/AGENTS.md", data)
-	for _, want := range []string{"# Title", "second line", "third", "fourth", "fifth"} {
-		if !strings.Contains(line, want) {
-			t.Fatalf("preview missing %q in: %q", want, line)
-		}
+	if !strings.Contains(line, "/tmp/AGENTS.md") {
+		t.Fatalf("index line must keep the path: %q", line)
 	}
-	if strings.Contains(line, "sixth-should-not-appear") {
-		t.Fatalf("preview must cap at %d non-empty lines", projectMemoryIndexPreviewLines)
+	if !strings.Contains(line, "read_file") {
+		t.Fatalf("index line must keep the read_file instruction: %q", line)
+	}
+	for _, gone := range []string{"# Title", "second line", "sixth"} {
+		if strings.Contains(line, gone) {
+			t.Fatalf("preview body %q must not be inlined anymore: %q", gone, line)
+		}
 	}
 }
