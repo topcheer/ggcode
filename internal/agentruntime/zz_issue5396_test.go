@@ -5,6 +5,8 @@ import (
 	"sort"
 	"testing"
 
+	"strings"
+
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -31,6 +33,94 @@ func TestIssue5396RegisteredToolSchemasAreValidJSON(t *testing.T) {
 		}
 		if !json.Valid(raw) {
 			t.Errorf("%s Parameters() is not valid JSON", tl.Name())
+		}
+	}
+}
+
+// TestIssue5396AssembledRegistrySchemasAreValidJSON sweeps the registry the
+// way production assembles it (RegisterBuiltinTools + RegisterCronTools, the
+// daemon.go:573 ordering) and asserts every registered tool's Parameters()
+// is valid JSON. The internal/tool builtin-only guard does NOT cover the
+// cron family - verified empirically: it passes at the pre-#5396 parent
+// edc395a4c while cron_create was still broken - so this is the class-level
+// net for the tool family that actually caused #5396, plus the whole
+// assembled registry, at the layer the runtime consumes.
+func TestIssue5396AssembledRegistrySchemasAreValidJSON(t *testing.T) {
+	registry := tool.NewRegistry()
+	scheduler := NewSessionCronScheduler("test-issue-5396-asm", t.TempDir(), nil)
+	defer scheduler.Shutdown()
+	if err := tool.RegisterBuiltinTools(registry, nil, t.TempDir(), nil, nil); err != nil {
+		t.Fatalf("RegisterBuiltinTools: %v", err)
+	}
+	RegisterCronTools(registry, scheduler)
+
+	tools := registry.List()
+	if len(tools) < 27 {
+		t.Fatalf("expected assembled registry with builtin+cron tools, got %d", len(tools))
+	}
+	cronFamily := 0
+	for _, tl := range tools {
+		if strings.HasPrefix(tl.Name(), "cron_") {
+			cronFamily++
+		}
+		raw := tl.Parameters()
+		if len(raw) == 0 {
+			continue
+		}
+		if !json.Valid(raw) {
+			t.Errorf("%s Parameters() is not valid JSON", tl.Name())
+		}
+	}
+	if cronFamily != 7 {
+		t.Fatalf("cron family must be inside the assembled-registry net, got %d cron tools", cronFamily)
+	}
+}
+
+// TestIssue5396CronCreateSchemaContract pins the cron_create schema content
+// contract (property keys + required list) that bc404fff3 silently damaged:
+// the far_horizon_ack deletion ate the properties-closing brace, so models
+// lost the required-field constraints and provider endpoints degraded
+// silently. Rows adopted from the unlanded #5397 test.
+func TestIssue5396CronCreateSchemaContract(t *testing.T) {
+	registry := tool.NewRegistry()
+	scheduler := NewSessionCronScheduler("test-issue-5396-contract", t.TempDir(), nil)
+	defer scheduler.Shutdown()
+	RegisterCronTools(registry, scheduler)
+
+	tl, ok := registry.Get("cron_create")
+	if !ok {
+		t.Fatal("cron_create not registered")
+	}
+	raw := tl.Parameters()
+	if !json.Valid(raw) {
+		t.Fatalf("cron_create Parameters() is not valid JSON:\n%s", string(raw))
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("cron_create schema unmarshal failed: %v", err)
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties must be an object, got %T", schema["properties"])
+	}
+	for _, key := range []string{"cron", "prompt", "description", "recurring", "one_shot", "far", "queue_if_busy"} {
+		if _, ok := props[key]; !ok {
+			t.Errorf("cron_create schema missing property %q", key)
+		}
+	}
+	req, ok := schema["required"].([]any)
+	if !ok || len(req) == 0 {
+		t.Fatalf("required must be a non-empty array, got %T", schema["required"])
+	}
+	reqKeys := make(map[string]bool, len(req))
+	for _, r := range req {
+		if s, ok := r.(string); ok {
+			reqKeys[s] = true
+		}
+	}
+	for _, key := range []string{"cron", "prompt", "description"} {
+		if !reqKeys[key] {
+			t.Errorf("cron_create required must contain %q, got %v", key, req)
 		}
 	}
 }
