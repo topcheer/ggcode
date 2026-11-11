@@ -20,6 +20,9 @@ func (f *fakeRestartRequester) RequestRestart(reason string, debugMode bool) {
 	f.debugMode = debugMode
 }
 
+func (f *fakeRestartRequester) ExecTargetPath() string     { return "" }
+func (f *fakeRestartRequester) ExecTargetRevision() string { return "" }
+
 func TestRestartToolNoRequester(t *testing.T) {
 	rt := &RestartTool{}
 	res, err := rt.Execute(context.Background(), json.RawMessage(`{"reason":"test"}`))

@@ -33,6 +33,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/restart"
 	"github.com/topcheer/ggcode/internal/runfile"
 	"github.com/topcheer/ggcode/internal/util"
 
@@ -510,6 +511,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	startupAssets := core.StartupAssets
 
 	startupNotices := core.StartupNotices
+	// #5367: post-exec self-check. If this process was started by a restart
+	// exec, verify the running image matches the recorded intent and surface
+	// the actually-running revision (loud banner on mismatch).
+	if notice, _ := restart.StartupVerifyNotice(); notice != "" {
+		startupNotices = append(startupNotices, notice)
+		restart.ConsumeIntent()
+	}
 	autoFiles := startupAssets.AutoFiles
 	commandMgr := startupAssets.CommandManager
 	trace.Mark("build interactive runtime core")

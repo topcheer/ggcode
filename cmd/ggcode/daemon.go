@@ -152,6 +152,13 @@ func runtimeBypassActive(policy permission.PermissionPolicy, mode permission.Per
 }
 
 func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool, newSession bool, fullLoad bool) error {
+	// #5367: post-exec self-check, daemon side. If this process was started
+	// by a restart exec, verify the running image matches the recorded intent
+	// and report the actually-running revision (loud banner on mismatch).
+	if notice, _ := restart.StartupVerifyNotice(); notice != "" {
+		fmt.Fprintln(os.Stderr, notice)
+		restart.ConsumeIntent()
+	}
 
 	prov, resolved, err := ResolveProvider(cfg)
 	if err != nil {

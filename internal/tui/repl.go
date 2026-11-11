@@ -1029,6 +1029,18 @@ func (rr *replRestartRequester) RequestRestart(reason string, debugMode bool) {
 	})
 }
 
+func (rr *replRestartRequester) ExecTargetPath() string {
+	binary, err := restart.ResolveBinary()
+	if err != nil {
+		return ""
+	}
+	return binary
+}
+
+func (rr *replRestartRequester) ExecTargetRevision() string {
+	return restart.SelfRevision()
+}
+
 func (r *REPL) SetSendMessageTool(mgr *subagent.Manager, tools *tool.Registry) {
 	tools.Register(tool.SendMessageTool{Manager: mgr})
 }
