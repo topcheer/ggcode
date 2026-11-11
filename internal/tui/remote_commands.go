@@ -233,6 +233,9 @@ func (d tuiSlashDeps) SetLanIdentity(nick, role, team string) (string, error) {
 		return fmt.Sprintf("Current: %s (role: %s, team: %s, agent: %s)",
 			d.m.lanChatHub.HumanNick(), d.m.lanChatHub.Role(), d.m.lanChatHub.Team(), d.m.lanChatHub.AgentNick()), nil
 	}
+	if team == "" {
+		team = d.m.lanChatHub.WorkspaceDefaultTeam()
+	}
 	if err := d.m.lanChatHub.SetNickRoleTeam(nick, role, team); err != nil {
 		return "", fmt.Errorf("failed to set nickname: %w", err)
 	}

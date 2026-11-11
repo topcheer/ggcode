@@ -169,6 +169,21 @@ func LoadTeam(dir string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+// SaveTeamExplicit marks the persisted team as user-chosen (set_identity),
+// so later sessions keep it instead of re-deriving the workspace default.
+func SaveTeamExplicit(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create team dir %s: %w", dir, err)
+	}
+	return os.WriteFile(filepath.Join(dir, "lanchat-team-explicit"), []byte("1"), 0o644)
+}
+
+// LoadTeamExplicit reports whether the team was explicitly set by the user.
+func LoadTeamExplicit(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, "lanchat-team-explicit"))
+	return err == nil && strings.TrimSpace(string(data)) == "1"
+}
+
 func LoadTrustedPeers(dir string) (map[string]string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "trusted-peers.json"))
 	if err != nil {

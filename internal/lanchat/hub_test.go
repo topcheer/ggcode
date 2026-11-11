@@ -558,8 +558,8 @@ func TestSetNickRoleTeam(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{Workspace: "/tmp"})
 
-	if hub.Team() != DefaultTeam {
-		t.Fatalf("initial team should be %q, got %q", DefaultTeam, hub.Team())
+	if got := hub.Team(); got != "tmp" {
+		t.Fatalf("initial team should derive from workspace, got %q, want %q", got, "tmp")
 	}
 
 	if err := hub.SetNickRoleTeam("alice", "frontend", "platform"); err != nil {
@@ -668,6 +668,58 @@ func TestHandleNickChangeUpdatesTeam(t *testing.T) {
 func TestDefaultTeam(t *testing.T) {
 	if DefaultTeam != "dev-team" {
 		t.Errorf("DefaultTeam = %q, want 'dev-team'", DefaultTeam)
+	}
+}
+
+func TestDefaultTeamFor(t *testing.T) {
+	cases := []struct {
+		workspace string
+		want      string
+	}{
+		{"", DefaultTeam},
+		{"/", DefaultTeam},
+		{"/tmp/test", "test"},
+		{"/home/alice/My Project", "My_Project"},
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	}
+	for _, tc := range cases {
+		if got := DefaultTeamFor(tc.workspace); got != tc.want {
+			t.Errorf("DefaultTeamFor(%q) = %q, want %q", tc.workspace, got, tc.want)
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if got := DefaultTeamFor(home); got != HomeTeam {
+			t.Errorf("DefaultTeamFor(home %q) = %q, want %q", home, got, HomeTeam)
+		}
+	}
+}
+
+func TestTeamDefaultFollowsWorkspaceUnlessExplicit(t *testing.T) {
+	base := t.TempDir()
+
+	// Session 1: team derived from workspace A and auto-saved.
+	hubA := NewHub("node-A", "tui", "http://localhost:11111", "", NewStore(base), WorkspaceMeta{Workspace: "/ws/alpha"})
+	hubA.SetSessionID(base, "s1")
+	if got := hubA.Team(); got != "alpha" {
+		t.Fatalf("hubA team = %q, want 'alpha'", got)
+	}
+
+	// Same session reopened from workspace B: the derived default follows the
+	// new workspace because the team was never set explicitly.
+	hubB := NewHub("node-B", "tui", "http://localhost:11111", "", NewStore(base), WorkspaceMeta{Workspace: "/ws/beta"})
+	hubB.SetSessionID(base, "s1")
+	if got := hubB.Team(); got != "beta" {
+		t.Fatalf("hubB team = %q, want 'beta' (workspace default, not persisted 'alpha')", got)
+	}
+
+	// Explicit set_identity pins the team for later sessions.
+	if err := hubB.SetNickRoleTeam("carol", "devops", "sre"); err != nil {
+		t.Fatalf("SetNickRoleTeam: %v", err)
+	}
+	hubC := NewHub("node-C", "tui", "http://localhost:11111", "", NewStore(base), WorkspaceMeta{Workspace: "/ws/gamma"})
+	hubC.SetSessionID(base, "s1")
+	if got := hubC.Team(); got != "sre" {
+		t.Fatalf("hubC team = %q, want 'sre' (explicit choice wins over workspace default)", got)
 	}
 }
 

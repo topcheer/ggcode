@@ -465,6 +465,9 @@ func (m Model) handleLanChatSend() (Model, tea.Cmd) {
 		input := strings.TrimSpace(strings.TrimPrefix(text, "/nick "))
 		if input != "" && m.lanChatHub != nil {
 			n, r, t := lanchat.ParseNickRoleTeam(input)
+			if !lanchat.HasTeamSegment(input) {
+				t = m.lanChatHub.WorkspaceDefaultTeam()
+			}
 			m.lanChatHub.SetNickRoleTeam(n, r, t)
 		}
 		return m, nil
@@ -715,6 +718,9 @@ func (m Model) handleNickCommand(parts []string) {
 	}
 	input := strings.TrimSpace(parts[1])
 	nick, role, team := lanchat.ParseNickRoleTeam(input)
+	if !lanchat.HasTeamSegment(input) {
+		team = m.lanChatHub.WorkspaceDefaultTeam()
+	}
 	if nick == "" {
 		m.chatWriteSystem(nextSystemID(), "Nickname cannot be empty (format: /nick name[@role][@team])")
 		return

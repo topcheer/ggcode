@@ -3,12 +3,55 @@ package lanchat
 import (
 	"fmt"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 const DefaultRole = "developer"
 
 const DefaultTeam = "dev-team"
+
+// HomeTeam is the team name used when the workspace is the user's home
+// directory.
+const HomeTeam = "home"
+
+// MaxTeamNameLen caps workspace-derived team names.
+const MaxTeamNameLen = 30
+
+// DefaultTeamFor derives the initial team name from the workspace path: the
+// directory name with spaces replaced by underscores, truncated to
+// MaxTeamNameLen runes, or HomeTeam when the workspace is the user's home
+// directory. Falls back to DefaultTeam when no usable workspace is known.
+func DefaultTeamFor(workspace string) string {
+	if workspace == "" {
+		return DefaultTeam
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if canonicalWorkspaceComparable(workspace) == canonicalWorkspaceComparable(home) {
+			return HomeTeam
+		}
+	}
+	name := filepath.Base(filepath.Clean(workspace))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return DefaultTeam
+	}
+	return truncateTeamName(strings.ReplaceAll(name, " ", "_"))
+}
+
+// HasTeamSegment reports whether a nick spec of the form nick[@role[@team]]
+// carries an explicit team part.
+func HasTeamSegment(input string) bool {
+	return len(strings.Split(strings.TrimSpace(input), "@")) >= 3
+}
+
+func truncateTeamName(name string) string {
+	if utf8.RuneCountInString(name) <= MaxTeamNameLen {
+		return name
+	}
+	return string([]rune(name)[:MaxTeamNameLen])
+}
 
 var adjectives = []string{
 	"Clever", "Brave", "Swift", "Bright", "Calm", "Bold", "Eager",
