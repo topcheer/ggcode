@@ -161,7 +161,7 @@ jobs:
           storeFile=upload.jks
           EOF
 
-      - name: Show version
+      - name: Guard version consistency
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ]; then
@@ -170,9 +170,21 @@ jobs:
               VERSION="${REF#v}"
             fi
           fi
-          echo "Version: ${VERSION}"
+          EXPECTED="${VERSION:-}"
+          PUBSPEC_VERSION="$(grep '^version:' pubspec.yaml | sed 's/^version: \([0-9.]*\).*/\1/')"
+          echo "expected=${EXPECTED:-<none>} pubspec=${PUBSPEC_VERSION}"
           grep '^version:' pubspec.yaml
-          # Version numbers are synced by pre-push hook; no CI bump
+          if [ -z "$EXPECTED" ]; then
+            echo "::warning::no tag/dispatch version to compare against; skipping guard"
+            exit 0
+          fi
+          if [ "$PUBSPEC_VERSION" != "$EXPECTED" ]; then
+            echo "::error::mobile version NOT synced: pubspec=${PUBSPEC_VERSION} but release=${EXPECTED}."
+            echo "Run 'bash mobile/flutter/scripts/version_sync.sh ${EXPECTED}' and merge to main BEFORE tagging/dispatching"
+            echo "(v1.3.279 shipped Android with a stale 1.3.278+2026111001 version code and Google Play rejected it)."
+            exit 1
+          fi
+          # Version numbers are synced by pre-push hook / release process; no CI bump
 
       - name: Build AAB
         run: flutter build appbundle --release
@@ -253,7 +265,7 @@ jobs:
           echo "PP_UUID=$PP_UUID" >> "$GITHUB_ENV"
           echo "PP_NAME=$PP_NAME" >> "$GITHUB_ENV"
 
-      - name: Show version
+      - name: Guard version consistency
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ]; then
@@ -262,9 +274,21 @@ jobs:
               VERSION="${REF#v}"
             fi
           fi
-          echo "Version: ${VERSION}"
+          EXPECTED="${VERSION:-}"
+          PUBSPEC_VERSION="$(grep '^version:' pubspec.yaml | sed 's/^version: \([0-9.]*\).*/\1/')"
+          echo "expected=${EXPECTED:-<none>} pubspec=${PUBSPEC_VERSION}"
           grep '^version:' pubspec.yaml
-          # Version numbers are synced by pre-push hook; no CI bump
+          if [ -z "$EXPECTED" ]; then
+            echo "::warning::no tag/dispatch version to compare against; skipping guard"
+            exit 0
+          fi
+          if [ "$PUBSPEC_VERSION" != "$EXPECTED" ]; then
+            echo "::error::mobile version NOT synced: pubspec=${PUBSPEC_VERSION} but release=${EXPECTED}."
+            echo "Run 'bash mobile/flutter/scripts/version_sync.sh ${EXPECTED}' and merge to main BEFORE tagging/dispatching"
+            echo "(v1.3.279 shipped Android with a stale 1.3.278+2026111001 version code and Google Play rejected it)."
+            exit 1
+          fi
+          # Version numbers are synced by pre-push hook / release process; no CI bump
 
       - name: Clean Flutter build cache
         run: flutter clean
