@@ -233,3 +233,36 @@ func TestMatchMergeGateCompoundCommands(t *testing.T) {
 		}
 	}
 }
+
+// TestMatchMergeGateWrapperPrefix pins #5418: env/sudo (and the #5347
+// wrapper family) as COMMAND tokens prefix real gh invocations and must be
+// stripped before matching, including env followed by further assignments.
+func TestMatchMergeGateWrapperPrefix(t *testing.T) {
+	def := DefaultMergeGateCommands
+	cases := []struct {
+		cmd     string
+		wantPR  int
+		wantHit bool
+	}{
+		// issue probe table: both bypass forms flip to gated
+		{"env FOO=1 gh pr merge 5356", 5356, true},
+		{"sudo gh pr merge 5356", 5356, true},
+		{"nohup gh pr close 42", 42, true},
+		{"xargs gh pr merge 5356", 5356, true},
+		{"sudo env FOO=1 gh pr merge 5356", 5356, true}, // wrappers and assignments alternate
+		{"cd /d && sudo gh pr merge 5356", 5356, true},  // wrapper inside a compound unit
+		{"env gh pr merge", 0, true},                    // bare env + selector-less
+		// echo heads stay ungated in every wrapper shape
+		{"env echo gh pr merge 5356", 0, false},
+		{"sudo echo FOO=1", 0, false},
+		// timeout WITH an argument keeps the argument (selector-shaped
+		// token, not a wrapper) - deliberately non-matching by design
+		{"timeout 30 gh pr merge 5356", 0, false},
+	}
+	for _, tc := range cases {
+		pr, hit := MatchMergeGateCommand(tc.cmd, def)
+		if hit != tc.wantHit || (hit && pr != tc.wantPR) {
+			t.Errorf("MatchMergeGateCommand(%q) = %d,%v want %d,%v", tc.cmd, pr, hit, tc.wantPR, tc.wantHit)
+		}
+	}
+}
