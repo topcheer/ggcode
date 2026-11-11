@@ -114,6 +114,14 @@ jobs:
           if ! printf '%s' "$SHORT" | grep -qE '^[0-9]+(\.[0-9]+){0,2}$'; then
             echo "::error::GGCODE_VERSION '${GGCODE_VERSION}' does not yield a numeric short version ('$SHORT')"; exit 1
           fi
+          # Run 43009773754: a manual dispatch without package_version fell
+          # through to the v0.0.0 placeholder default, PASSED the numeric
+          # check, uploaded a 0.0.0 build to the production ASC app and
+          # burned the run on a guaranteed-409 submit. Reject the
+          # placeholder before anything touches ASC.
+          if [[ "$SHORT" == "0.0.0" ]]; then
+            echo "::error::placeholder version 0.0.0 (manual dispatch default) - pass a real version: gh workflow run deploy-mas.yml -f package_version=v1.3.279"; exit 1
+          fi
           echo "MAS_SHORT_VERSION=${SHORT}" >> "${GITHUB_ENV}"
           echo "short version: ${SHORT} (from ${GGCODE_VERSION})"
 
