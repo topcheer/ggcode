@@ -58,7 +58,8 @@ func (t CronCreateTool) Parameters() json.RawMessage {
 		"description": {
 			"type": "string",
 			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
-		},
+		}
+	},
 	"required": [
 		"cron",
 		"prompt",
