@@ -254,10 +254,33 @@ func firstRmCommandSegment(cmd string) string {
 				fields = fields[1:]
 				continue
 			}
-			if seenWrapper && (strings.HasPrefix(h, "-") || isNumericToken(h) || prevWasFlag) {
-				prevWasFlag = strings.HasPrefix(h, "-") && !isNumericToken(h)
-				fields = fields[1:]
-				continue
+			if seenWrapper {
+				// #5456 form 3: env assignments after a wrapper word
+				// (env VAR=1 nice -n 5 rm ...) strip like the segment-head
+				// stripper — they are assignments, not the command.
+				if strings.Contains(h, "=") && !strings.HasPrefix(h, "-") {
+					fields = fields[1:]
+					continue
+				}
+				if strings.HasPrefix(h, "-") && !isNumericToken(h) {
+					// #5456 forms 1-2: only flags that CONSUME a following
+
+					// (--preserve-env=PATH) and known valueless flags (-0)
+					// do not, so the "rm" after them is no longer swallowed
+					// as a phantom value.
+					prevWasFlag = !wrapperValuelessFlags[h] && !strings.Contains(h, "=")
+					fields = fields[1:]
+					continue
+				}
+				if isNumericToken(h) || prevWasFlag {
+					// Consuming a flag VALUE or numeric resets the pending
+					// flag state (the old combined branch recomputed it for
+					// every token; forgetting the reset swallowed the "rm"
+					// after "sudo -u root").
+					prevWasFlag = false
+					fields = fields[1:]
+					continue
+				}
 			}
 			break
 		}
@@ -697,4 +720,16 @@ func discardAllFires(cmd string) bool {
 		}
 	}
 	return false
+}
+
+// wrapperValuelessFlags lists wrapper flags that do NOT consume a following
+// value (#5456). Unknown flags are conservatively treated as value-consuming
+// (prevWasFlag=true), matching the #5342 behavior; add entries here only for
+// flags verifiably valueless across the wrapper words in rmWrapperWords.
+var wrapperValuelessFlags = map[string]bool{
+	"-0":                   true, // xargs NUL separator
+	"--null":               true, // xargs long form
+	"-i":                   true, // env --ignore-environment / sudo -i variant used valueless
+	"--ignore-environment": true, // env long form
+	"-E":                   true, // sudo --preserve-env (short, bare form)
 }
