@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,15 +91,20 @@ func TestReadProjectMemoryFiles_CJKBoundary(t *testing.T) {
 	}
 }
 
-func TestProjectMemoryIndexLine_PreviewSkipsBlankLines(t *testing.T) {
+// TestProjectMemoryIndexLine_IndexOnlyShape pins the #5446 P2 contract:
+// the oversized placeholder carries ONLY path + char count + read_file
+// pointer - no content preview leaks into the prompt.
+func TestProjectMemoryIndexLine_IndexOnlyShape(t *testing.T) {
 	data := "\n\n# Title\n\nsecond line\n\nthird\nfourth\nfifth\nsixth-should-not-appear\n"
-	line := projectMemoryIndexLine("/tmp/AGENTS.md", data)
-	for _, want := range []string{"# Title", "second line", "third", "fourth", "fifth"} {
-		if !strings.Contains(line, want) {
-			t.Fatalf("preview missing %q in: %q", want, line)
+	line := projectMemoryIndexLine("/tmp/AGENTS.md", len([]rune(data)))
+	for _, forbidden := range []string{"# Title", "second line", "sixth-should-not-appear", "Preview:"} {
+		if strings.Contains(line, forbidden) {
+			t.Fatalf("index line must not carry preview content %q in: %q", forbidden, line)
 		}
 	}
-	if strings.Contains(line, "sixth-should-not-appear") {
-		t.Fatalf("preview must cap at %d non-empty lines", projectMemoryIndexPreviewLines)
+	for _, want := range []string{"/tmp/AGENTS.md", "oversized", fmt.Sprintf("%d chars", len([]rune(data))), "read_file"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("index line missing %q in: %q", want, line)
+		}
 	}
 }
