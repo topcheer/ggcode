@@ -8,14 +8,49 @@ import (
 type fakeEtCtl struct {
 	url     string
 	stopped bool
+	// #5395: record what StartTunnelOpts actually received so the pin
+	// tests can also catch a pass-through regression.
+	gotSub, gotTok string
 }
 
 func (f *fakeEtCtl) StartTunnelOpts(localAddr, subdomain, token string) (string, bool, error) {
+	f.gotSub, f.gotTok = subdomain, token
 	f.url = "https://demo.example.com"
 	return f.url, true, nil
 }
 func (f *fakeEtCtl) StopTunnel()       { f.stopped = true; f.url = "" }
 func (f *fakeEtCtl) TunnelURL() string { return f.url }
+
+// TestControlEtOnPlanDistinction pins #5395: the /et on success message
+// must state the plan that actually started. A paid config (subdomain/token
+// non-empty) runs the paid custom-domain path in StartTunnelOpts and must
+// NOT claim the free-plan limits; a free config keeps the free note.
+func TestControlEtOnPlanDistinction(t *testing.T) {
+	// paid: /et setup saved a subdomain + token, then /et on
+	f := &fakeEtCtl{}
+	out, err := ControlEt(f, "http://127.0.0.1:1#token=x", "mydom", "sekret123", nil, []string{"on"})
+	if err != nil {
+		t.Fatalf("paid on: %v", err)
+	}
+	if !strings.Contains(out, "plan: paid (subdomain=mydom token=****t123)") {
+		t.Fatalf("paid on must carry the paid plan note: %q", out)
+	}
+	if strings.Contains(out, "free plan") {
+		t.Fatalf("paid on must NOT claim free-plan limits: %q", out)
+	}
+	if f.gotSub != "mydom" || f.gotTok != "sekret123" {
+		t.Fatalf("paid on must pass the paid config through, got sub=%q tok=%q", f.gotSub, f.gotTok)
+	}
+	// free: no config, /et on keeps the free note
+	g := &fakeEtCtl{}
+	out, err = ControlEt(g, "http://127.0.0.1:1#token=x", "", "", nil, []string{"on"})
+	if err != nil || !strings.Contains(out, "free plan: 4h lifetime, 1 Mbps") {
+		t.Fatalf("free on must keep the free note: %q %v", out, err)
+	}
+	if g.gotSub != "" || g.gotTok != "" {
+		t.Fatalf("free on must not pass paid config, got sub=%q tok=%q", g.gotSub, g.gotTok)
+	}
+}
 
 func TestControlEtShowOffSetup(t *testing.T) {
 	f := &fakeEtCtl{}
