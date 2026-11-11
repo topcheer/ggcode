@@ -178,6 +178,7 @@ func (m *Model) detachTunnelLifecycle() (*tunnel.Session, *tunnel.Broker) {
 	}
 	m.closeQROverlay()
 	m.tunnelSession = nil
+	m.tunnelShareLive.clear()
 	m.tunnelBroker = nil
 	m.clearMobileFileSender()
 
@@ -377,6 +378,9 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.tunnelSession = msg.session
+	// Authoritative share face for the webui snapshot (survives bubbletea
+	// value copies - see tunnelShareLiveState).
+	m.tunnelShareLive.set(msg.session, msg.broker)
 
 	m.tunnelBroker = msg.broker
 	m.tunnelSpawned = make(map[string]bool)
