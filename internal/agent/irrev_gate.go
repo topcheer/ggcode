@@ -451,8 +451,36 @@ func irrevSegmentIsReadOnly(seg string) bool {
 		}
 		return true
 	default:
+		// #5423(a): an arbitrary binary (repo-local builds, PATH oddities
+		// like bin/ggcode) invoked with ONLY version/help/usage flags is
+		// printing and exiting - side-effect-free by universal convention.
+		// This keeps read-only smoke checks (`bin/ggcode --version`) from
+		// tripping the zero-grounding/medium-impact flag every round.
+		if irrevIsVersionOrHelpOnly(rest) {
+			return true
+		}
 		return ReadOnlyCommandBinaries[bin]
 	}
+}
+
+// irrevIsVersionOrHelpOnly reports whether every token after the binary is
+// one of the universally side-effect-free introspection flags. A command
+// like `bin/ggcode --version -q` or `some/tool --help --color=never`
+// cannot mutate anything; anything else (paths, values, other flags)
+// disqualifies the segment so unknown binaries stay gated.
+func irrevIsVersionOrHelpOnly(rest []string) bool {
+	if len(rest) == 0 {
+		return false
+	}
+	for _, a := range rest {
+		switch a {
+		case "-h", "--help", "-V", "--version", "--usage":
+		case "--color=never", "--color=auto", "-q", "--quiet", "--no-pager":
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ghApiArgsAreReadOnly reports whether a `gh api` invocation (args = the
