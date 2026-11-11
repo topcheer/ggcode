@@ -300,6 +300,31 @@ func (es *ExperienceStore) FormatIndexExcluding(query string, max int, excludeID
 	return formatScoredExperiences(scored)
 }
 
+// FormatIndexPointerTruncated is the P1 prompt-slimming variant (#5446): one
+// line per case instead of the 3-line body (Task/Files/Approach), plus a
+// recall pointer. Full detail stays retrievable via the recall_experience
+// tool - the injection only seeds discovery.
+func (es *ExperienceStore) FormatIndexPointerTruncated(query string, max int) (string, []string) {
+	scored, err := es.Retrieve(query, max)
+	if err != nil || len(scored) == 0 {
+		return "", nil
+	}
+	ids := make([]string, 0, len(scored))
+	var b strings.Builder
+	b.WriteString("Past experience with similar tasks exists (case-based memory). One-line index only - for a case that looks like the current task, call the recall_experience tool with its keywords BEFORE re-deriving an approach:\n")
+	for _, s := range scored {
+		if s.Via != "" {
+			continue
+		}
+		ids = append(ids, s.ID)
+		b.WriteString(fmt.Sprintf("- [%s] %s\n", s.Outcome, oneLine(s.Task, 80)))
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+	return b.String(), ids
+}
+
 func formatScoredExperiences(scored []ScoredExperience) string {
 	var b strings.Builder
 	b.WriteString("Past experience with similar tasks in this project (case-based memory):\n")
