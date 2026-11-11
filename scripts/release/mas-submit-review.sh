@@ -254,6 +254,33 @@ fi
 
 # create the version if it does not exist yet
 if [[ -z "$AV_ID" ]]; then
+  # Layer guard (run 43003971586: HTTP 409 "You cannot create a new version
+  # of the App in the current state"): a DIFFERENT version stuck in
+  # WAITING_FOR_REVIEW/IN_REVIEW blocks new-version creation. The reject
+  # above only handles the version matching ${VERSION}; developer-reject any
+  # other blocking version first, using the same legacy submission dance.
+  BLOCKER=$(echo "$AVS" | jq -r '[.data[] | select(.id != "'"${AV_ID}"'" and (.attributes.appStoreState == "WAITING_FOR_REVIEW" or .attributes.appStoreState == "IN_REVIEW"))][0] // empty')
+  BLK_ID=$(echo "$BLOCKER" | jq -r '.id // empty')
+  if [[ -n "$BLK_ID" ]]; then
+    BLK_VER=$(echo "$BLOCKER" | jq -r '.attributes.versionString // "?"')
+    echo "version ${BLK_VER} (${BLK_ID}) is in review and blocks new-version creation - developer-rejecting"
+    BSUBL=$(asc "-" GET "/v1/appStoreVersions/${BLK_ID}/appStoreVersionSubmission")
+    BSUB_ID=$(echo "$BSUBL" | jq -r '.data.id // empty')
+    if [[ -n "$BSUB_ID" ]]; then
+      asc "reject-blocker" DELETE "/v1/appStoreVersionSubmissions/${BSUB_ID}" > /dev/null
+      echo "submission ${BSUB_ID} removed (Developer Rejected)"
+      for w in 1 2 3 4 5 6 8 10; do
+        sleep 10
+        refresh_jwt_if_needed
+        BVS=$(asc "-" GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
+        BST=$(echo "$BVS" | jq -r "[.data[] | select(.id == \"${BLK_ID}\")][0].attributes.appStoreState // empty")
+        [[ "$BST" != "WAITING_FOR_REVIEW" && "$BST" != "IN_REVIEW" ]] && break
+      done
+    else
+      echo "::warning::blocking version ${BLK_VER} has no live submission - ASC may still refuse creation"
+    fi
+  fi
+
   echo "version ${VERSION} not found on ASC - creating"
   refresh_jwt_if_needed
   # Run 42999275069 evidence: POST /v1/apps/{id}/appStoreVersions is 405
@@ -292,7 +319,26 @@ refresh_jwt_if_needed
 LOCS=$(asc "-" GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionLocalizations")
 LOC_IDS=$(echo "$LOCS" | jq -r '.data[].id // empty' | tr '\n' ' ')
 if [[ -z "${LOC_IDS// }" ]]; then
-  echo "::warning::no appStoreVersionLocalizations on version ${VERSION} - skipping What's New"
+  # Freshly created versions start with ZERO localizations; an update
+  # without What's New gets rejected at submit time. Create en-US then set
+  # the notes on it (POST /v1/appStoreVersionLocalizations, documented
+  # entity route with appStoreVersion relationship).
+  echo "no appStoreVersionLocalizations on version ${VERSION} - creating en-US"
+  refresh_jwt_if_needed
+  NLC=$(asc "-" POST "/v1/appStoreVersionLocalizations" '{"data":{"type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}')
+  LOC_IDS=$(echo "$NLC" | jq -r '.data.id // empty')
+  if [[ -n "$LOC_IDS" ]]; then
+    refresh_jwt_if_needed
+    asc "-" PATCH "/v1/appStoreVersionLocalizations/${LOC_IDS}" '{"data":{"type":"appStoreVersionLocalizations","id":"'"${LOC_IDS}"'","attributes":{"whatsNewText":"'"${WHATS_NEW}"'"}}}' > /dev/null || true
+    LOC_PATCH_CODE=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
+    if [[ "$LOC_PATCH_CODE" == 2* ]]; then
+      echo "whats-new set on created en-US localization ${LOC_IDS}"
+    else
+      echo "::warning::whats-new patch failed on created en-US (HTTP ${LOC_PATCH_CODE}) - continuing"
+    fi
+  else
+    echo "::warning::could not create en-US localization: ${NLC:0:300} - continuing without What's New"
+  fi
 fi
 for LOC_ID in $LOC_IDS; do
   refresh_jwt_if_needed
