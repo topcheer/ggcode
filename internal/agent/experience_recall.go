@@ -18,7 +18,7 @@ func (a *Agent) recallExperience(task string) string {
 		return ""
 	}
 
-	idx, ids := store.FormatIndexTracked(task, experienceRecallTopK)
+	idx, ids := store.FormatIndexPointerTruncated(task, experienceRecallTopK)
 	if len(ids) > 0 {
 		a.experienceInjectedCaseIDs = append(a.experienceInjectedCaseIDs, ids...)
 	}
