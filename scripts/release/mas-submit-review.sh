@@ -270,7 +270,26 @@ refresh_jwt_if_needed
 LOCS=$(asc "-" GET "/v1/appStoreVersions/${AV_ID}/appStoreVersionLocalizations")
 LOC_IDS=$(echo "$LOCS" | jq -r '.data[].id // empty' | tr '\n' ' ')
 if [[ -z "${LOC_IDS// }" ]]; then
-  echo "::warning::no appStoreVersionLocalizations on version ${VERSION} - skipping What's New"
+  # Freshly created versions start with ZERO localizations; an update
+  # without What's New gets rejected at submit time. Create en-US then set
+  # the notes on it (POST /v1/appStoreVersionLocalizations, documented
+  # entity route with appStoreVersion relationship).
+  echo "no appStoreVersionLocalizations on version ${VERSION} - creating en-US"
+  refresh_jwt_if_needed
+  NLC=$(asc "-" POST "/v1/appStoreVersionLocalizations" '{"data":{"type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"},"relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"'"${AV_ID}"'"}}}}}')
+  LOC_IDS=$(echo "$NLC" | jq -r '.data.id // empty')
+  if [[ -n "$LOC_IDS" ]]; then
+    refresh_jwt_if_needed
+    asc "-" PATCH "/v1/appStoreVersionLocalizations/${LOC_IDS}" '{"data":{"type":"appStoreVersionLocalizations","id":"'"${LOC_IDS}"'","attributes":{"whatsNewText":"'"${WHATS_NEW}"'"}}}' > /dev/null || true
+    LOC_PATCH_CODE=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
+    if [[ "$LOC_PATCH_CODE" == 2* ]]; then
+      echo "whats-new set on created en-US localization ${LOC_IDS}"
+    else
+      echo "::warning::whats-new patch failed on created en-US (HTTP ${LOC_PATCH_CODE}) - continuing"
+    fi
+  else
+    echo "::warning::could not create en-US localization: ${NLC:0:300} - continuing without What's New"
+  fi
 fi
 for LOC_ID in $LOC_IDS; do
   refresh_jwt_if_needed
