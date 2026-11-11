@@ -10,6 +10,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/task"
@@ -41,6 +42,11 @@ type Manager struct {
 	toolBuilder  ToolBuilder
 	onUpdate     func(Event)
 	onUsage      func(provider.TokenUsage)
+
+	// teammatePolicy is the permission policy handed to spawned teammate
+	// agents via a SetPermissionPolicy interface hook, mirroring how the
+	// primary agent is gated (#5464).
+	teammatePolicy permission.PermissionPolicy
 
 	results map[string]string
 
@@ -96,6 +102,16 @@ func newManager(cfg config.SwarmConfig, prov provider.Provider, getter func() pr
 		streamRsnBuf:    make(map[string]*strings.Builder),
 		streamBatchDone: make(chan struct{}),
 	}
+}
+
+// SetTeammatePermissionPolicy threads the primary agent's permission policy
+// into every teammate spawned afterwards (#5464): without it, teammate agents
+// run their tools unguarded while the primary agent is permission-gated.
+// Passing nil clears the policy (falls back to factory defaults).
+func (m *Manager) SetTeammatePermissionPolicy(policy permission.PermissionPolicy) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.teammatePolicy = policy
 }
 
 func (m *Manager) SetUsageHandler(fn func(provider.TokenUsage)) {
@@ -402,6 +418,21 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 		if onUsage != nil {
 			if usageAware, ok := agent.(usageHandlerSetter); ok {
 				usageAware.SetUsageHandler(onUsage)
+			}
+		}
+
+		// #5464: thread the permission policy into the teammate agent the
+		// same way the primary agent is gated. Interface hook keeps the
+		// AgentFactory signature untouched; agents that do not implement
+		// SetPermissionPolicy keep their factory default.
+		m.mu.Lock()
+		policy := m.teammatePolicy
+		m.mu.Unlock()
+		if policy != nil {
+			if ps, ok := agent.(interface {
+				SetPermissionPolicy(permission.PermissionPolicy)
+			}); ok {
+				ps.SetPermissionPolicy(policy)
 			}
 		}
 

@@ -1123,6 +1123,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	}, swarmAgentFactory, swarmToolBuilder)
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
 	swarmMgr.SetUsageHandler(repl.SessionUsageHandler())
+	// #5464: teammates must run under the same permission policy as the
+	// primary agent; without this they spawn with no policy wiring.
+	swarmMgr.SetTeammatePermissionPolicy(ag.PermissionPolicy())
 	swarmMgr.SetSystemPromptBuilder(func(name, teamName, wd string) string {
 		remoteAgentsInfo := ""
 		if a2aRegistry != nil {
