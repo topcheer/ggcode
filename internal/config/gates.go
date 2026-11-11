@@ -161,6 +161,7 @@ func (c *Config) ValidateMergeGateConfig() error {
 func MatchMergeGateCommand(command string, patterns []string) (prNumber int, matched bool) {
 	for _, unit := range splitCommandUnits(command) {
 		fields := strings.Fields(unit)
+		fields = stripEnvAssignments(fields)
 		if len(fields) == 0 {
 			continue
 		}
@@ -186,6 +187,21 @@ func MatchMergeGateCommand(command string, patterns []string) (prNumber int, mat
 		}
 	}
 	return 0, false
+}
+
+// stripEnvAssignments drops leading VAR=value tokens from a command
+// unit (#5411): in `GH_TOKEN=x gh pr merge 5356` the assignment prefixes a
+// REAL gh invocation, so the gated action must still match. An assignment
+// token contains '=' and does not start with '-' (which keeps flag forms
+// like --match-head-commit=sha untouched); stripping stops at the first
+// non-assignment token, so `echo FOO=1` keeps its echo head and still does
+// not match.
+func stripEnvAssignments(fields []string) []string {
+	i := 0
+	for i < len(fields) && strings.Contains(fields[i], "=") && !strings.HasPrefix(fields[i], "-") {
+		i++
+	}
+	return fields[i:]
 }
 
 // splitCommandUnits splits a (possibly compound) shell command into its
