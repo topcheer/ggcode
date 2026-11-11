@@ -19,10 +19,15 @@ const restartResumeNudgeDelay = 3 * time.Minute
 // restartResumeNudgePrompt is the prompt enqueued by the resume nudge.
 const restartResumeNudgePrompt = "继续进行之前的任务"
 
+// restartResumeNudgeID is the stable one-shot ID the resume nudge is armed
+// under: re-arming (a second restart before the nudge fires) replaces the
+// pending job instead of stacking a duplicate (#5425).
+const restartResumeNudgeID = cron.RestartResumeNudgeID
+
 // ResumeNudgeScheduler is the scheduler surface the restart tool needs to
 // arm its post-restart resume nudge (a durable one-shot cron).
 type ResumeNudgeScheduler interface {
-	CreateOneShotAt(fireAt time.Time, prompt string, queueIfBusy bool) (cron.Job, error)
+	CreateOneShotWithID(id string, fireAt time.Time, prompt string, queueIfBusy bool) (cron.Job, error)
 }
 
 type RestartRequester interface {
@@ -84,7 +89,7 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 
 	nudgeNote := ""
 	if t.Nudger != nil {
-		if _, err := t.Nudger.CreateOneShotAt(time.Now().Add(restartResumeNudgeDelay), restartResumeNudgePrompt, true); err != nil {
+		if _, err := t.Nudger.CreateOneShotWithID(restartResumeNudgeID, time.Now().Add(restartResumeNudgeDelay), restartResumeNudgePrompt, true); err != nil {
 			debug.Log("restart", "failed to arm resume nudge: %v", err)
 			nudgeNote = fmt.Sprintf(" NOTE: resume nudge scheduling failed (%v); the session still resumes automatically.", err)
 		} else {
