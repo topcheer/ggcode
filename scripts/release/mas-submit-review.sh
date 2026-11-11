@@ -96,6 +96,22 @@ ensure_appstore_version() { # $1=APP_ID $2=VERSION $3=PLATFORM -> echoes AV_ID
     fi
     break
   done
+  # Layer 7 (run 43017322725 + live ASC intel): a DEVELOPER_REJECTED (or
+  # PREPARE_FOR_SUBMISSION) version still occupies the single editable slot
+  # and blocks creation with 409 - but the slot version is itself editable.
+  # Rename it in place to the target version instead of failing.
+  if [[ "${code:-}" == "409" ]]; then
+    refresh_jwt_if_needed
+    vs=$(asc "-" GET "/v1/apps/${app_id}/appStoreVersions?limit=50")
+    sid=$(echo "$vs" | jq -r '[.data[] | select(.attributes.appStoreState == "DEVELOPER_REJECTED" or .attributes.appStoreState == "PREPARE_FOR_SUBMISSION")][0].id // empty')
+    if [[ -n "$sid" ]]; then
+      echo "editable slot occupied - renaming slot version ${sid} to ${ver} in place" >&2
+      avc=$(asc "-" PATCH "/v1/appStoreVersions/${sid}" '{"data":{"type":"appStoreVersions","id":"'"${sid}"'","attributes":{"versionString":"'"${ver}"'"}}}')
+      vid=$(echo "$avc" | jq -r '.data.id // empty')
+      if [[ -n "$vid" ]]; then echo "$vid"; return 0; fi
+      code=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
+    fi
+  fi
   echo "::error::could not create appStoreVersion ${ver} (HTTP ${code:-none}): ${avc:0:400}" >&2
   return 1
 }
@@ -195,7 +211,19 @@ ${two}"
   [[ $rc -eq 0 && "$out" == "vNEW" ]] || { echo "F5 FAIL rc=$rc out=$out err=$err"; fails=$((fails+1)); }
   LEFT=$(cat "$ASC_STUB_FILE"); [[ -z "$LEFT" ]] || { echo "F5 unconsumed: $LEFT"; fails=$((fails+1)); }
 
-  if (( fails == 0 )); then echo "self-test: ALL PASS (F1,F2,F2b,F3,F4,F5)"; return 0; fi
+
+  # F7: create 409 + editable DEVELOPER_REJECTED slot -> rename in place
+  V_SLOT='{"data":[{"id":"vOTHER","attributes":{"versionString":"1.3.200","appStoreState":"READY_FOR_SALE"}},{"id":"vOLD","attributes":{"versionString":"1.3.276","appStoreState":"DEVELOPER_REJECTED"}}]}'
+  ASC_CALLS="200|GET /v1/apps/APP/appStoreVersions?limit=50|${V_SLOT}
+409|POST /v1/appStoreVersions|${ERR409}
+409|POST /v1/appStoreVersions|${ERR409}
+200|GET /v1/apps/APP/appStoreVersions?limit=50|${V_SLOT}
+200|PATCH /v1/appStoreVersions/vOLD|{\"data\":{\"id\":\"vOLD\"}}"
+  run_ensure APP 1.3.279 MAC_OS
+  [[ $rc -eq 0 && "$out" == "vOLD" ]] || { echo "F7 FAIL rc=$rc out=$out err=$err"; fails=$((fails+1)); }
+  LEFT=$(cat "$ASC_STUB_FILE"); [[ -z "$LEFT" ]] || { echo "F7: $LEFT"; fails=$((fails+1)); }
+
+  if (( fails == 0 )); then echo "self-test: ALL PASS (F1,F2,F2b,F3,F4,F5,F7)"; return 0; fi
   echo "self-test: ${fails} failure(s)" >&2; return 1
 }
 
