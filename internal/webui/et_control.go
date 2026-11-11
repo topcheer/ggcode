@@ -95,7 +95,7 @@ func ControlEt(ctl EtunnelController, localURL, subdomain, token string, saveCfg
 		if err != nil {
 			return "", fmt.Errorf("et tunnel failed: %w", err)
 		}
-		return "et tunnel active: " + tunnelURL + tokenSuffix() + "  (free plan: 4h lifetime, 1 Mbps)", nil
+		return "et tunnel active: " + tunnelURL + tokenSuffix() + "\nplan: " + plan(), nil
 	default:
 		return "usage: /et [on|off|show|setup <subdomain> <token>]", nil
 	}

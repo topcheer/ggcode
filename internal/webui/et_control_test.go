@@ -49,3 +49,27 @@ func TestControlEtShowOffSetup(t *testing.T) {
 		t.Fatalf("usage: %q", out)
 	}
 }
+
+// Pin for issue #5395: the "on" branch must reply with the plan-aware
+// suffix (same plan() helper the "show" branch uses), not a hardcoded
+// free-plan string - a paid (custom-subdomain) tunnel must not be
+// announced as "free plan".
+func TestControlEtOnPlanAware(t *testing.T) {
+	f := &fakeEtCtl{}
+	out, err := ControlEt(f, "http://127.0.0.1:1", "mysub", "token123", nil, []string{"on"})
+	if err != nil {
+		t.Fatalf("on paid: %v", err)
+	}
+	if strings.Contains(out, "free plan") {
+		t.Fatalf("on paid config must not say free plan (issue #5395): %q", out)
+	}
+	if !strings.Contains(out, "paid (subdomain=mysub") || !strings.Contains(out, "****n123") {
+		t.Fatalf("on paid config must carry plan() suffix, got %q", out)
+	}
+	// free config keeps the plan: free line
+	f2 := &fakeEtCtl{}
+	out, err = ControlEt(f2, "http://127.0.0.1:1", "", "", nil, []string{"on"})
+	if err != nil || !strings.Contains(out, "plan: free") {
+		t.Fatalf("on free: %q %v", out, err)
+	}
+}
