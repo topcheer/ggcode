@@ -295,9 +295,11 @@ if [[ -z "$AV_ID" ]]; then
   # app relationship in the body (ASC schema: relationships.app required).
   # Run 43008544461 evidence: 409 persists briefly AFTER a successful reject
   # (state propagation) - retry the create with backoff instead of failing.
+  # (#5440 made this call soft ("-" label) so a 409 returns instead of
+  # exiting, keeping the retry branch reachable.)
   AVC=""
   for attempt in 1 2 3 4 5 6 7 8; do
-    AVC=$(asc "create-version" POST "/v1/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
+    AVC=$(asc "-" POST "/v1/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
     AV_ID=$(echo "$AVC" | jq -r '.data.id // empty')
     [[ -n "$AV_ID" ]] && break
     CODE=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
