@@ -290,7 +290,7 @@ jobs:
           chmod +x scripts/release/mas-submit-review.sh
           ./scripts/release/mas-submit-review.sh \
             --bundle-id "gg.ai.ggcode" \
-            --app-id "${MAS_APP_ID:-6771007556}" \
+            --app-id "6771007556" \
             --version "${MAS_SHORT_VERSION}" \
             --build "${MAS_BUILD_VERSION}" \
             --platform MAC_OS \

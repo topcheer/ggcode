@@ -134,16 +134,24 @@ asc() { # asc_fatal "step-name" METHOD PATH [JSON_BODY] — non-2xx = ::error:: 
 # ---------- locate the app ----------
 refresh_jwt_if_needed
 APP_JSON=$(asc "-" GET "/v1/apps?filter%5BbundleId%5D=${BUNDLE_ID}")
-APP_ID=$(echo "$APP_JSON" | jq -r '.data[0].id // empty')
-if [[ -z "$APP_ID" ]]; then
-  # Run 13 evidence: this failure was silent, and the fallback id pointed at a
-  # nonexistent resource (build stayed VALID in TestFlight while poll said
-  # last=none for 40 min). Always surface the raw response for diagnosis.
-  echo "::warning::bundleId lookup returned no app; raw response: ${APP_JSON:0:400}"
-fi
-if [[ -z "$APP_ID" && -n "$APP_ID_ARG" ]]; then
-  echo "::warning::falling back to --app-id ${APP_ID_ARG}"
+LOOKUP_ID=$(echo "$APP_JSON" | jq -r '.data[0].id // empty')
+# Precedence: an explicit --app-id is owner-verified and WINS (#5431 root
+# cause 1). The bundleId lookup is only a fallback: ASC can return a stale
+# or superseded app first for a (re)used bundle id - run 42988168677
+# resolved gg.ai.ggcode to the wrong app 6770855612 (lookup data[0]) while
+# the real id 6771007556 was passed explicitly, so the poll scanned the
+# wrong app's build list for 40 minutes while the upload sat VALID.
+# Run 13 evidence: silent failures cost 40-min polls - always surface raw
+# responses for diagnosis.
+if [[ -n "$APP_ID_ARG" ]]; then
   APP_ID="$APP_ID_ARG"
+  if [[ -n "$LOOKUP_ID" && "$LOOKUP_ID" != "$APP_ID" ]]; then
+    echo "::warning::bundleId lookup resolved ${LOOKUP_ID} but explicit --app-id ${APP_ID} wins (lookup may be stale/superseded); raw: ${APP_JSON:0:200}"
+  fi
+elif [[ -n "$LOOKUP_ID" ]]; then
+  APP_ID="$LOOKUP_ID"
+else
+  echo "::warning::bundleId lookup returned no app; raw response: ${APP_JSON:0:400}"
 fi
 [[ -n "$APP_ID" ]] || { echo "::error::no ASC app for bundleId ${BUNDLE_ID}: ${APP_JSON}" >&2; exit 1; }
 echo "app id: ${APP_ID}"
@@ -160,9 +168,34 @@ for i in $(seq 1 "$((MAX_WAIT*2))"); do
   # version alone can match a stale build or none at all (#5139 invariant 1).
   # Run 42351262813: ASC rejects BOTH filter[version] and sort on the
   # builds-in-app relationship endpoint (HTTP 400 PARAMETER_ERROR.ILLEGAL,
-  # one error per parameter) - the 401 chain previously masked this. Fetch a
-  # page without filter/sort and match client-side instead.
-  B=$(asc "-" GET "/v1/apps/${APP_ID}/builds?limit=50")
+  # one error per parameter) - the 401 chain previously masked this. Match
+  # client-side instead, and FOLLOW the cursor (#5431 root cause 2): a
+  # single limit=50 page truncates once the app has >50 builds (run
+  # 42988168677: total=300 nextCursor="Mg" -> matches=50, the fresh build
+  # sat past page 1). Bound at 10 pages; fresh builds land at the top by
+  # default sort, so the early-exit below usually stops at page 1.
+  B_ALL="[]"
+  B_URL="/v1/apps/${APP_ID}/builds?limit=50"
+  PAGES=0
+  while [[ -n "$B_URL" ]] && (( PAGES < 10 )); do
+    B_PAGE=$(asc "-" GET "$B_URL")
+    LAST_CODE=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
+    if [[ "$LAST_CODE" == "401" ]]; then break; fi
+    B_ALL=$(echo "$B_PAGE" | jq -c --argjson acc "$B_ALL" '$acc + .data')
+    CURSOR=$(echo "$B_PAGE" | jq -r '.meta.paging.next // empty' 2>/dev/null)
+    if [[ -z "$CURSOR" ]]; then
+      B_URL=""
+    else
+      B_URL="/v1/apps/${APP_ID}/builds?limit=50&cursor=${CURSOR}"
+      # Early exit: the fresh build sorts to the top by default, so once a
+      # page contains our build number there is no need to page further.
+      if [[ -n "$BUILD_VERSION" ]] && echo "$B_PAGE" | jq -e --arg v "$BUILD_VERSION" '[.data[] | select(.attributes.version == $v)] | length > 0' >/dev/null 2>&1; then
+        B_URL=""
+      fi
+    fi
+    PAGES=$((PAGES+1))
+  done
+  B="$B_ALL"
   if [[ -n "$BUILD_VERSION" ]]; then
     MATCH=$(echo "$B" | jq -c "[.data[] | select(.attributes.version == \"${BUILD_VERSION}\")] | sort_by(.attributes.uploadedDate) | reverse | .[0]")
   else
