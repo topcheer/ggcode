@@ -451,6 +451,81 @@ func (s *Scheduler) CreateOneShotAt(fireAt time.Time, prompt string, queueIfBusy
 	return job.Snapshot(), nil
 }
 
+// restartResumeNudgeID is the stable ID the restart tool arms its durable
+// resume nudge under. Because CreateOneShotWithID replaces a still-pending
+// job with the same ID instead of adding another one, a double restart
+// (restart → resume → restart again before the nudge fires) re-arms a
+// single nudge instead of stacking duplicates (#5425).
+const RestartResumeNudgeID = "restart-resume-nudge"
+
+// CreateOneShotWithID arms a durable one-shot under a caller-owned stable
+// ID with replace semantics: if a pending one-shot with the same ID already
+// exists, its fire time (and prompt/queue policy) is updated in place — one
+// logical nudge stays one job no matter how many times it is re-armed.
+func (s *Scheduler) CreateOneShotWithID(id string, fireAt time.Time, prompt string, queueIfBusy bool) (Job, error) {
+	if strings.TrimSpace(prompt) == "" {
+		return Job{}, fmt.Errorf("one-shot prompt is required")
+	}
+	if fireAt.IsZero() {
+		return Job{}, fmt.Errorf("one-shot fire time is required")
+	}
+	if strings.TrimSpace(id) == "" {
+		return Job{}, fmt.Errorf("one-shot id is required")
+	}
+
+	now := time.Now()
+	s.mu.Lock()
+	replaced := false
+	job, exists := s.jobs[id]
+	if exists && job.Recurring {
+		s.mu.Unlock()
+		return Job{}, fmt.Errorf("id %s is held by a recurring job", id)
+	}
+	if exists {
+		job.NextFire = fireAt
+		job.Prompt = prompt
+		job.QueueIfBusy = queueIfBusy
+		job.Persist = true
+		replaced = true
+	} else {
+		s.nextID++
+		job = &Job{
+			ID:          id,
+			Prompt:      prompt,
+			Recurring:   false,
+			QueueIfBusy: queueIfBusy,
+			CreatedAt:   now,
+			NextFire:    fireAt,
+			Persist:     true,
+		}
+		s.jobs[id] = job
+		s.knownIDs[id] = true
+	}
+	s.mu.Unlock()
+
+	s.scheduleJob(job)
+	if err := s.save(); err != nil {
+		s.mu.Lock()
+		if !replaced {
+			if timer, ok := s.timers[id]; ok {
+				timer.Stop()
+				delete(s.timers, id)
+			}
+			delete(s.jobs, id)
+		}
+		s.mu.Unlock()
+		debug.Log("cron", "CreateOneShotWithID: failed to persist job %s: %v", id, err)
+		return Job{}, err
+	}
+
+	if replaced {
+		debug.Log("cron", "CreateOneShotWithID: re-armed durable one-shot %s (fires %s)", id, fireAt.Format(time.RFC3339))
+	} else {
+		debug.Log("cron", "CreateOneShotWithID: added durable one-shot %s (fires %s)", id, fireAt.Format(time.RFC3339))
+	}
+	return job.Snapshot(), nil
+}
+
 // CreateAcknowledgedFar behaves like Create but lets the caller explicitly
 // acknowledge a one-shot first fire beyond MaxOneShotHorizon (the far=false
 // default rejects it). When acknowledged and the horizon is exceeded, the

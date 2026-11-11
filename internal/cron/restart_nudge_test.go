@@ -175,3 +175,54 @@ func TestVolatileOneShotNotPersisted(t *testing.T) {
 		}
 	}
 }
+
+// TestCreateOneShotWithIDReplacesPendingNudge pins the #5425 idempotence
+// contract: re-arming the stable-ID resume nudge (double restart before the
+// first nudge fires) must REPLACE the pending job (one instance, updated
+// fire time), never stack a duplicate.
+func TestCreateOneShotWithIDReplacesPendingNudge(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "cron.json")
+	s := NewScheduler(func(string, bool) {}, store)
+
+	first := time.Now().Add(3 * time.Minute)
+	if _, err := s.CreateOneShotWithID(RestartResumeNudgeID, first, "继续进行之前的任务", true); err != nil {
+		t.Fatalf("first arm: %v", err)
+	}
+	second := time.Now().Add(5 * time.Minute)
+	if _, err := s.CreateOneShotWithID(RestartResumeNudgeID, second, "继续进行之前的任务", true); err != nil {
+		t.Fatalf("second arm: %v", err)
+	}
+
+	// Exactly one job under the stable ID in memory...
+	var pending []Job
+	for _, j := range s.List() {
+		if j.ID == RestartResumeNudgeID {
+			pending = append(pending, j)
+		}
+	}
+	if len(pending) != 1 {
+		t.Fatalf("want exactly 1 nudge job after double arm, got %d", len(pending))
+	}
+	if d := pending[0].NextFire.Sub(second); d > time.Second {
+		t.Errorf("re-armed nudge must fire at ~second arm time, drift=%s", d)
+	}
+
+	// ...and exactly one entry on disk.
+	data, err := os.ReadFile(store)
+	if err != nil {
+		t.Fatalf("read store: %v", err)
+	}
+	var onDisk sessionStore
+	if err := json.Unmarshal(data, &onDisk); err != nil {
+		t.Fatalf("parse store: %v", err)
+	}
+	n := 0
+	for _, j := range onDisk.Jobs {
+		if j.ID == RestartResumeNudgeID {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want exactly 1 persisted nudge entry after double arm, got %d", n)
+	}
+}
