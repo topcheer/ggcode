@@ -256,7 +256,11 @@ fi
 if [[ -z "$AV_ID" ]]; then
   echo "version ${VERSION} not found on ASC - creating"
   refresh_jwt_if_needed
-  AVC=$(asc "create-version" POST "/v1/apps/${APP_ID}/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"}}}')
+  # Run 42999275069 evidence: POST /v1/apps/{id}/appStoreVersions is 405
+  # METHOD_NOT_ALLOWED - that nested path is GET-only. appStoreVersions
+  # createInstance is a TOP-LEVEL POST /v1/appStoreVersions with a required
+  # app relationship in the body (ASC schema: relationships.app required).
+  AVC=$(asc "create-version" POST "/v1/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
   AV_ID=$(echo "$AVC" | jq -r '.data.id // empty')
   [[ -n "$AV_ID" ]] || { echo "::error::could not create appStoreVersion ${VERSION}: ${AVC:0:400}" >&2; exit 1; }
 fi
