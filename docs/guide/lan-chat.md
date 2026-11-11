@@ -25,7 +25,11 @@ Each participant has a composite identity with three layers:
 |-------|---------|---------|---------|
 | **Name** | (required) | `alice` | Human-readable display name |
 | **Role** | `developer` | `frontend` | Technical specialization |
-| **Team** | `dev-team` | `platform` | Team/group for targeted messaging |
+| **Team** | workspace name¹ | `platform` | Team/group for targeted messaging |
+
+¹ Derived from the current workspace: directory name with spaces replaced
+by underscores, capped at 30 characters. `home` when running from the
+user's home directory; `dev-team` when no workspace is known.
 
 The human nick is composed as `<name>_<role>` (e.g. `alice_frontend`).
 The agent nick is `<name>_<role>_agent` (e.g. `alice_frontend_agent`).
@@ -33,17 +37,20 @@ The agent nick is `<name>_<role>_agent` (e.g. `alice_frontend_agent`).
 ### Setting Your Identity
 
 ```
-/nick alice                        # alice_developer @ dev-team
-/nick alice@frontend               # alice_frontend @ dev-team
+/nick alice                        # alice_developer @ <workspace-name>
+/nick alice@frontend               # alice_frontend @ <workspace-name>
 /nick alice@frontend@platform      # alice_frontend @ platform
 ```
 
-All three layers are optional except the name. Missing parts use defaults.
+All three layers are optional except the name. Missing parts use defaults;
+without a `@team` argument the team defaults to the workspace name.
 
 ### Persistence
 
 Role and team are persisted per-session — restarting ggcode restores them.
-Starting a new session resets to defaults unless overridden.
+The team default follows the current workspace unless the team was set
+explicitly (`/nick ...@team`): an explicit choice is pinned across sessions
+and workspaces.
 
 ## Presence Exchange
 

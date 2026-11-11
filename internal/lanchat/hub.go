@@ -171,7 +171,7 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		humanNick:              nick,
 		agentNick:              AgentNick(nick),
 		role:                   DefaultRole,
-		team:                   DefaultTeam,
+		team:                   DefaultTeamFor(ws.Workspace),
 		mode:                   mode,
 		endpoint:               endpoint,
 		apiKey:                 apiKey,
@@ -243,8 +243,11 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 		_ = SaveRole(h.store.dir, h.role)
 	}
 
-	if persisted, err := LoadTeam(h.store.dir); err == nil && persisted != "" {
-		h.team = persisted
+	// The persisted team wins only when the user set it explicitly
+	// (set_identity); otherwise the workspace-derived default applies so the
+	// initial team keeps following the current workspace.
+	if persistedTeam, err := LoadTeam(h.store.dir); LoadTeamExplicit(h.store.dir) && err == nil && persistedTeam != "" {
+		h.team = persistedTeam
 	} else {
 		_ = SaveTeam(h.store.dir, h.team)
 	}
@@ -588,6 +591,15 @@ func (h *Hub) PendingApprovals() []PendingAgentMsg {
 	return out
 }
 
+// WorkspaceDefaultTeam returns the team name derived from the hub's current
+// workspace (the /nick default when no team argument is given).
+func (h *Hub) WorkspaceDefaultTeam() string {
+	h.mu.RLock()
+	ws := h.workspace
+	h.mu.RUnlock()
+	return DefaultTeamFor(ws)
+}
+
 func (h *Hub) SetNickRoleTeam(nick, role, team string) error {
 	composite := nick + "_" + role
 	h.mu.Lock()
@@ -606,6 +618,9 @@ func (h *Hub) SetNickRoleTeam(nick, role, team string) error {
 	}
 	if err := SaveTeam(sessionDir, team); err != nil {
 		debug.Log("lanchat", "failed to persist session team: %v", err)
+	}
+	if err := SaveTeamExplicit(sessionDir); err != nil {
+		debug.Log("lanchat", "failed to persist explicit-team marker: %v", err)
 	}
 
 	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(composite, role, team) })

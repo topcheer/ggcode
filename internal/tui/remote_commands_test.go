@@ -5,7 +5,35 @@ import (
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/lanchat"
 )
+
+func TestSetLanIdentityDefaultsTeamFromWorkspace(t *testing.T) {
+	hub := lanchat.NewHub("node-t", "tui", "http://localhost:0", "", lanchat.NewStore(t.TempDir()), lanchat.WorkspaceMeta{Workspace: "/ws/alpha"})
+	m := NewModel(nil, nil)
+	m.lanChatHub = hub
+	d := tuiSlashDeps{m: &m}
+
+	// No team argument: team falls back to the workspace-derived default.
+	msg, err := d.SetLanIdentity("carol", "devops", "")
+	if err != nil {
+		t.Fatalf("SetLanIdentity: %v", err)
+	}
+	if !strings.Contains(msg, "team: alpha") {
+		t.Errorf("response %q should mention workspace default team 'alpha'", msg)
+	}
+	if got := hub.Team(); got != "alpha" {
+		t.Errorf("hub team = %q, want 'alpha'", got)
+	}
+
+	// Explicit team is respected.
+	if _, err := d.SetLanIdentity("carol", "devops", "sre"); err != nil {
+		t.Fatalf("SetLanIdentity: %v", err)
+	}
+	if got := hub.Team(); got != "sre" {
+		t.Errorf("hub team = %q, want 'sre'", got)
+	}
+}
 
 func TestExecuteRemoteSlashCommandProviderSummary(t *testing.T) {
 	m := NewModel(nil, nil)

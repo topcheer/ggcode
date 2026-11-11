@@ -76,14 +76,14 @@ Slash commands are typed directly in the chat input within the TUI.
 | Command | Description |
 |---------|-------------|
 | `/chat` | Open the LAN Chat panel (broadcast, DM, history, @agent approvals) |
-| `/nick [name][@role][@team]` | Set your LAN Chat identity. Without args, shows current. |
+| `/nick [name][@role][@team]` | Set your LAN Chat identity. Without args, shows current. Missing team defaults to the workspace name. |
 
 `/nick` examples:
 
 ```
 /nick                        → show current nick, role, team
-/nick alice                  → alice_developer @ dev-team
-/nick alice@frontend         → alice_frontend @ dev-team
+/nick alice                  → alice_developer @ <workspace-name>
+/nick alice@frontend         → alice_frontend @ <workspace-name>
 /nick alice@frontend@platform → alice_frontend @ platform
 ```
 
