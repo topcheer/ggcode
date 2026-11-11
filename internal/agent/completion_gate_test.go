@@ -59,7 +59,7 @@ func TestMergeGateNonProtectedCommandsPass(t *testing.T) {
 		{"run_command", `{"command":"gh pr view 5356"}`},
 		{"run_command", `{"command":"gh pr merged 5356"}`},
 		{"run_command", `{"command":"go build ./..."}`},
-		{"run_command", `{"command":"gh pr merge"}`},
+		// "gh pr merge" moved below: selector-less form IS gated (#5401)
 		{"edit_file", `{"file_path":"/tmp/x.go"}`},
 		{"read_file", `{"path":"/tmp/x.go"}`},
 	}
@@ -67,6 +67,15 @@ func TestMergeGateNonProtectedCommandsPass(t *testing.T) {
 		if got := s.checkCommand(permission.SupervisedMode, tc.tool, tc.args); got != "" {
 			t.Errorf("checkCommand(%s, %s) = %q, want empty", tc.tool, tc.args, got)
 		}
+	}
+	// #5401: selector-less "gh pr merge" is a real gh action (merges the
+	// current branch's PR) and must be gated - moved out of the
+	// non-protected list above. The requirement wording must tell the
+	// agent to identify the PR instead of preflighting PR 0.
+	if got := s.checkCommand(permission.SupervisedMode, "run_command", `{"command":"gh pr merge"}`); got == "" {
+		t.Errorf("selector-less gh pr merge must be gated, got empty")
+	} else if !strings.Contains(got, "Identify the target PR") || strings.Contains(got, `"pr_number":0`) {
+		t.Errorf("selector-less requirement must ask to identify the PR first, got %q", got)
 	}
 }
 

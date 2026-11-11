@@ -91,13 +91,22 @@ func TestMatchMergeGateCommand(t *testing.T) {
 		{"gh pr merge 5356 --squash --delete-branch", 5356, true},
 		{"gh pr close 42", 42, true},
 		{"gh pr merged 5356", 0, false},
-		{"gh pr merge", 0, false},          // no PR number
-		{"gh pr merge abc", 0, false},      // non-numeric
-		{"git push origin main", 0, false}, // not a protected pattern
-		{"gh pr merge 0", 0, false},        // non-positive
-		{"echo gh pr merge 5356", 0, false},
+		// #5401: the five bypass forms are gated now. Selector-less and
+		// branch-selector forms hit with PR 0 (agent must identify the PR).
+		{"gh pr merge", 0, true},                                                 // no selector: current branch's PR
+		{"gh pr merge --auto --squash 5356", 5356, true},                         // flags before positional
+		{"gh pr merge https://github.com/topcheer/ggcode/pull/5356", 5356, true}, // URL selector
+		{"gh pr merge feature-branch", 0, true},                                  // branch selector: gated, PR 0
+		{"gh pr close --delete-branch 5356", 5356, true},
+		{"gh pr merge abc", 0, true},          // non-numeric selector = branch form
+		{"gh pr merge -d --merge 9", 9, true}, // short flags skipped
+		{"git push origin main", 0, false},    // not a protected pattern
+		{"gh pr merge 0", 0, true},            // explicit 0 is not a PR; still gated
+		{"echo gh pr merge 5356", 0, false},   // prefix-anchored: echo is not gh
 		{"", 0, false},
-		{"gh pr merge -1", 0, false},
+		{"gh pr merge -1", 0, true}, // -1 is a flag-shaped token; gated, PR 0
+		// URL with trailing path/query junk still extracts the tail number
+		{"gh pr merge https://github.com/o/r/pull/77/files?diff=unified", 77, true},
 	}
 	for _, tc := range cases {
 		pr, hit := MatchMergeGateCommand(tc.cmd, def)

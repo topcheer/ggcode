@@ -775,10 +775,19 @@ func (s *mergeGateState) checkCommand(mode permission.PermissionMode, toolName, 
 }
 
 func mergeGateRequirement(cmd string, pr int, ttl time.Duration) string {
+	// #5401: selector-less/branch forms ("gh pr merge", "gh pr merge <branch>")
+	// gate with PR 0 - the agent must resolve the target PR first instead of
+	// preflighting PR number 0.
+	step1 := "1. Call the merge_preflight tool with {\"pr_number\":" + strconv.Itoa(pr) +
+		"} and confirm the result line is PREFLIGHT: PASS.\n"
+	if pr <= 0 {
+		step1 = "1. Identify the target PR (the command carries no explicit PR number - " +
+			"e.g. from the current branch), then call the merge_preflight tool with that " +
+			"{\"pr_number\":N} and confirm the result line is PREFLIGHT: PASS.\n"
+	}
 	return "[completion-gate] The command \"" + cmd + "\" is a gated lifecycle action " +
 		"(gates.merge). REQUIREMENT before executing it:\n" +
-		"1. Call the merge_preflight tool with {\"pr_number\":" + strconv.Itoa(pr) +
-		"} and confirm the result line is PREFLIGHT: PASS.\n" +
+		step1 +
 		"2. Pin the action to the head SHA preflight reports by adding " +
 		"--match-head-commit <head_sha>.\n" +
 		"A PASS snapshot for this PR stays valid for " + ttl.String() +
