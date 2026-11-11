@@ -256,7 +256,11 @@ fi
 if [[ -z "$AV_ID" ]]; then
   echo "version ${VERSION} not found on ASC - creating"
   refresh_jwt_if_needed
-  AVC=$(asc "create-version" POST "/v1/apps/${APP_ID}/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"}}}')
+  # Entity-level route with an explicit app relationship: the relationship
+  # path POST /v1/apps/{id}/appStoreVersions returns 405 METHOD_NOT_ALLOWED
+  # (run 42999275069). Documented ASC pattern is POST /v1/appStoreVersions
+  # with relationships.app.
+  AVC=$(asc "create-version" POST "/v1/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
   AV_ID=$(echo "$AVC" | jq -r '.data.id // empty')
   [[ -n "$AV_ID" ]] || { echo "::error::could not create appStoreVersion ${VERSION}: ${AVC:0:400}" >&2; exit 1; }
 fi
