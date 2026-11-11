@@ -30,6 +30,7 @@ func maskAPIKey(key string) string {
 func (m Model) handleModeSwitch() (tea.Model, tea.Cmd) {
 	oldMode := m.mode
 	m.mode = m.mode.Next()
+	m.modeLive.set(m.mode)
 	debug.Log("mode", "switched %s→%s via Shift+Tab", oldMode, m.mode)
 
 	if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
@@ -60,6 +61,7 @@ func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 		oldMode := m.mode
 		newMode := permission.ParsePermissionMode(parts[1])
 		m.mode = newMode
+		m.modeLive.set(newMode)
 		debug.Log("mode", "switched %s→%s via /mode %s", oldMode, newMode, parts[1])
 		if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
 			cp.SetMode(newMode)

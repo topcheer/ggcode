@@ -60,6 +60,37 @@ import (
 // stale on the REPL-held original while the TUI renders from the live copy.
 // This pointer field survives every copy: TUI handlers and the webui
 // snapshot (TunnelStatusSnapshot) read the same instance.
+// modeLiveState is the authoritative cross-copy store for the permission
+// mode (#5454): same value-copy family as tunnelShareLiveState. bubbletea
+// evolves the Model through value copies, so m.mode goes stale on the
+// REPL-held original while handlers keep writing their copy. This pointer
+// field survives every copy: all mode-write sites publish here and the
+// webui snapshot (RuntimeStatus) reads the same instance.
+type modeLiveState struct {
+	mu   sync.Mutex
+	mode permission.PermissionMode
+}
+
+func (s *modeLiveState) set(mode permission.PermissionMode) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.mode = mode
+	s.mu.Unlock()
+}
+
+// get returns the live mode; ok=false when the store is absent (boot-time
+// fallback callers then read the static copy).
+func (s *modeLiveState) get() (mode permission.PermissionMode, ok bool) {
+	if s == nil {
+		return 0, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mode, true
+}
+
 type tunnelShareLiveState struct {
 	mu      sync.Mutex
 	session *tunnel.Session
@@ -399,6 +430,7 @@ type Model struct {
 	tunnelHost                *agentruntime.TunnelHost
 	tunnelSession             *tunnel.Session
 	tunnelShareLive           *tunnelShareLiveState
+	modeLive                  *modeLiveState
 	tunnelBroker              *tunnel.Broker
 	tunnelMainStream          *tunnelMainStreamState
 	tunnelShareBootstrap      *tunnelShareBootstrapState
@@ -646,6 +678,14 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	// handlers would give each copy its own store - the bug this prevents).
 	if m.tunnelShareLive == nil {
 		m.tunnelShareLive = &tunnelShareLiveState{}
+	}
+
+	// Same pointer-survives-copy contract for the permission mode (#5454):
+	// handlers mutate m.mode on their copy; the webui reads the boot-time
+	// original via RuntimeStatus. modeLive is the single source the webui
+	// reads; every m.mode write site publishes to it.
+	if m.modeLive == nil {
+		m.modeLive = &modeLiveState{}
 	}
 
 	return m

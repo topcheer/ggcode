@@ -140,6 +140,7 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 				cp.SetMode(globalMode)
 			}
 			m.mode = globalMode
+			m.modeLive.set(globalMode) // cross-copy publish (#5454)
 		}
 	} else {
 
@@ -149,6 +150,7 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 				cp.SetMode(sessionMode)
 			}
 			m.mode = sessionMode
+			m.modeLive.set(sessionMode) // cross-copy publish (#5454)
 		}
 
 		if ses.SidebarVisible != nil {
