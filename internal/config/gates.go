@@ -150,33 +150,100 @@ func (c *Config) ValidateMergeGateConfig() error {
 // merge_preflight on the current branch). "gh pr merged 5356" still does
 // not match (exact-token), and a command merely ECHOING the pattern
 // ("echo gh pr merge 5356") does not match because matching is
-// prefix-anchored to the actual command head.
+// prefix-anchored within each command unit.
+//
+// #5407: compound commands are segmented first (&&, ||, ;, |, and
+// newlines separate command units, quote- and escape-aware so separators
+// inside string arguments do not split), and each unit is matched
+// independently - "cd /dir && gh pr merge 5356" gates on its second unit
+// while "echo x && echo gh pr merge 5356" still does not match (each
+// echo unit starts with "echo", not the pattern).
 func MatchMergeGateCommand(command string, patterns []string) (prNumber int, matched bool) {
-	fields := strings.Fields(strings.TrimSpace(command))
-	if len(fields) == 0 {
-		return 0, false
-	}
-	for _, pat := range patterns {
-		pf := strings.Fields(strings.TrimSpace(pat))
-		if len(pf) == 0 || len(fields) < len(pf) {
+	for _, unit := range splitCommandUnits(command) {
+		fields := strings.Fields(unit)
+		if len(fields) == 0 {
 			continue
 		}
-		ok := true
-		for i, tok := range pf {
-			if fields[i] != tok {
-				ok = false
-				break
+		for _, pat := range patterns {
+			pf := strings.Fields(strings.TrimSpace(pat))
+			if len(pf) == 0 || len(fields) < len(pf) {
+				continue
 			}
+			ok := true
+			for i, tok := range pf {
+				if fields[i] != tok {
+					ok = false
+					break
+				}
+			}
+			if !ok {
+				continue
+			}
+			// #5401: the pattern heads the unit; whatever follows selects
+			// the target. Extract a PR number when one is expressible, else
+			// still report a hit with PR 0.
+			return extractPRNumber(fields[len(pf):]), true
 		}
-		if !ok {
-			continue
-		}
-		// #5401: the pattern heads the command; whatever follows selects
-		// the target. Extract a PR number when one is expressible, else
-		// still report a hit with PR 0.
-		return extractPRNumber(fields[len(pf):]), true
 	}
 	return 0, false
+}
+
+// splitCommandUnits splits a (possibly compound) shell command into its
+// command units: substrings that would each be executed as a command.
+// Separators are &&, ||, ;, | (pipes) and newlines. Single- and
+// double-quoted spans and backslash escapes are honored, so a separator
+// inside a string argument does NOT split (echo "a && b" is one unit).
+// Subshells/grouping are not parsed - a unit starting with "(" or "$("
+// simply fails prefix matching, which is the safe (non-matching) side.
+func splitCommandUnits(command string) []string {
+	var (
+		units []string
+		cur   []byte
+		flush = func() {
+			if u := strings.TrimSpace(string(cur)); u != "" {
+				units = append(units, u)
+			}
+			cur = cur[:0]
+		}
+	)
+	for i := 0; i < len(command); i++ {
+		c := command[i]
+		switch {
+		case c == '\\' && i+1 < len(command):
+			// escaped char: keep both bytes verbatim (including escaped separators)
+			cur = append(cur, c, command[i+1])
+			i++
+		case c == '\'' || c == '"':
+			// quoted span: consume through the matching close quote, keep verbatim
+			cur = append(cur, c)
+			i++
+			for i < len(command) && command[i] != c {
+				if c == '"' && command[i] == '\\' && i+1 < len(command) {
+					cur = append(cur, command[i], command[i+1])
+					i++
+				} else {
+					cur = append(cur, command[i])
+				}
+				i++
+			}
+			if i < len(command) {
+				cur = append(cur, c) // closing quote
+			}
+		case c == '&' && i+1 < len(command) && command[i+1] == '&',
+			c == '|' && i+1 < len(command) && command[i+1] == '|',
+			c == ';',
+			c == '|',
+			c == '\n':
+			flush()
+			if c == '&' || c == '|' {
+				i++ // consume the second byte of && / ||
+			}
+		default:
+			cur = append(cur, c)
+		}
+	}
+	flush()
+	return units
 }
 
 // extractPRNumber scans the tokens after a matched pattern for an

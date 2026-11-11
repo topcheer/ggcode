@@ -166,3 +166,41 @@ gates:
 		t.Errorf("roundtrip TTL = %s", c2.Gates.Merge.PreflightTTL)
 	}
 }
+
+// TestMatchMergeGateCompoundCommands pins #5407: compound commands gate on
+// the unit that actually runs the merge/close action, quote-aware so
+// separators inside string arguments do not split units, and echo units
+// (plain or in a compound) never false-positive.
+func TestMatchMergeGateCompoundCommands(t *testing.T) {
+	def := DefaultMergeGateCommands
+	cases := []struct {
+		cmd     string
+		wantPR  int
+		wantHit bool
+	}{
+		// acceptance: compound forms hit
+		{"cd /repo/dir && gh pr merge 5356", 5356, true},
+		{"git status; gh pr merge --auto", 0, true}, // ; separator, no selector
+		{"make release && gh pr close 42 --delete-branch", 42, true},
+		{"go build ./... | tee log; gh pr merge 8", 8, true},          // pipe + ; mix
+		{"gh pr view 9 && gh pr merge 9 || echo keep-going", 9, true}, // || chain
+		{"echo x\necho y\ngh pr merge 7", 7, true},                    // newline separated
+		// acceptance: echo compound display forms do NOT hit
+		{"echo gh pr merge 5356 && echo done", 0, false},
+		{"echo \"gh pr merge 5356\"", 0, false},
+		{"echo hello && echo gh pr merge 5356", 0, false},
+		// acceptance: separators inside quoted args do not split units -
+		// the whole echo (including the quoted separator) is one echo unit
+		{"echo \"a && gh pr merge 5356\" && true", 0, false},
+		// escaped separator stays inside the unit (no split, no match)
+		{"echo a \\&\\& gh pr merge 5356", 0, false},
+		// leading env assignment prefix stays non-matching (conservative)
+		{"FOO=1 gh pr merge 5356", 0, false},
+	}
+	for _, tc := range cases {
+		pr, hit := MatchMergeGateCommand(tc.cmd, def)
+		if hit != tc.wantHit || (hit && pr != tc.wantPR) {
+			t.Errorf("MatchMergeGateCommand(%q) = %d,%v want %d,%v", tc.cmd, pr, hit, tc.wantPR, tc.wantHit)
+		}
+	}
+}
