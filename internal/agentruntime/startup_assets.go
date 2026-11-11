@@ -74,6 +74,41 @@ func LoadInteractiveStartupAssets(
 	}
 }
 
+// skillPromptSeedLine renders one P4 discovery line (#5446): name + the
+// first clause of when_to_use (preferred) or description. First clause is
+// enough for the model to decide to run skill '?keyword' for the rest.
+func skillPromptSeedLine(skill *commands.Command) string {
+	name := strings.TrimSpace(skill.Name)
+	seed := strings.TrimSpace(skill.WhenToUse)
+	if seed == "" {
+		seed = strings.TrimSpace(skill.Description)
+	}
+	seed = firstClause(seed, 90)
+	if seed == "" {
+		return "- " + name
+	}
+	return fmt.Sprintf("- %s: %s", name, seed)
+}
+
+// firstClause cuts the text at the first sentence/clause boundary within
+// max runes (never splitting mid-rune).
+func firstClause(s string, max int) string {
+	cutset := ".;!;"
+	idx := -1
+	for _, c := range cutset {
+		if j := strings.IndexByte(s, byte(c)); j > 8 && (idx == -1 || j < idx) {
+			idx = j
+		}
+	}
+	if idx > 0 {
+		s = s[:idx]
+	}
+	if utf8.RuneCountInString(s) > max {
+		s = truncateRunes(s, max, "...")
+	}
+	return strings.TrimSpace(s)
+}
+
 func BuildSkillsSystemPrompt(skills []*commands.Command) string {
 	prompt, _ := BuildSkillsSystemPromptWithPromptRefs(skills)
 	return prompt
@@ -114,18 +149,12 @@ func BuildSkillsSystemPromptWithPromptRefs(skills []*commands.Command) (string, 
 			}
 			continue
 		}
-		desc := strings.TrimSpace(skill.Description)
-		if when := strings.TrimSpace(skill.WhenToUse); when != "" {
-			if desc != "" {
-				desc += " - "
-			}
-			desc += when
-		}
-
-		if utf8.RuneCountInString(desc) > maxDescChars {
-			desc = truncateRunes(desc, maxDescChars, "...")
-		}
-		line := fmt.Sprintf("- %s: %s", name, desc)
+		// P4 (#5446): one line per skill = discovery seed only. Prefer the
+		// when_to_use first clause (the matching signal); fall back to the
+		// description first clause. With ~130 skills the 4K cap previously
+		// surfaced only ~25 names - single-lining multiplies coverage per
+		// char while full discovery stays on skill '?keyword'.
+		line := skillPromptSeedLine(skill)
 		if total+len(line)+1 > maxChars {
 			break
 		}

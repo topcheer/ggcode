@@ -43,14 +43,14 @@ func TestIssue1155SkillDescriptionTruncationRuneSafe(t *testing.T) {
 
 	line := findSkillLine(t, prompt, "cn-heavy")
 	descPart := strings.TrimPrefix(line, "- cn-heavy: ")
-	if n := utf8.RuneCountInString(descPart); n != issue1155MaxDescChars {
-		t.Errorf("truncated description = %d runes, want %d", n, issue1155MaxDescChars)
+	if n := utf8.RuneCountInString(descPart); n != 90 {
+		t.Errorf("P4 seed truncation = %d runes, want 90 (seed cap)", n)
 	}
 	if !strings.HasSuffix(descPart, "...") {
 		t.Errorf("truncated description missing ellipsis suffix: %q", descPart)
 	}
 	content := strings.TrimSuffix(descPart, "...")
-	if n := utf8.RuneCountInString(content); n != issue1155MaxDescChars-3 {
+	if n := utf8.RuneCountInString(content); n != 90-3 {
 		t.Errorf("content before suffix = %d runes, want %d", n, issue1155MaxDescChars-3)
 	}
 	if !utf8.ValidString(descPart) {
@@ -77,20 +77,20 @@ func TestIssue1155WhenToUseMergeTruncationRuneSafe(t *testing.T) {
 	if !utf8.ValidString(descPart) {
 		t.Errorf("merged truncated description is not valid UTF-8: %q", descPart)
 	}
-	if n := utf8.RuneCountInString(descPart); n != issue1155MaxDescChars {
-		t.Errorf("merged truncated description = %d runes, want %d", n, issue1155MaxDescChars)
+	if n := utf8.RuneCountInString(descPart); n != 90 {
+		t.Errorf("P4 seed truncation = %d runes, want 90", n)
 	}
 }
 
 func TestIssue1155ASCIIDescriptionBoundary(t *testing.T) {
 	skills := []*commands.Command{
-		{Name: "ascii-exact", Description: strings.Repeat("a", issue1155MaxDescChars), Enabled: true},
-		{Name: "ascii-over", Description: strings.Repeat("b", issue1155MaxDescChars+5), Enabled: true},
+		{Name: "ascii-exact", Description: strings.Repeat("a", 90), Enabled: true},
+		{Name: "ascii-over", Description: strings.Repeat("b", 95), Enabled: true},
 	}
 	prompt := BuildSkillsSystemPrompt(skills)
 
 	exactLine := findSkillLine(t, prompt, "ascii-exact")
-	wantExact := "- ascii-exact: " + strings.Repeat("a", issue1155MaxDescChars)
+	wantExact := "- ascii-exact: " + strings.Repeat("a", 90)
 	if exactLine != wantExact {
 		t.Errorf("description at cap was modified:\n got %q\nwant %q", exactLine, wantExact)
 	}
@@ -99,7 +99,7 @@ func TestIssue1155ASCIIDescriptionBoundary(t *testing.T) {
 	}
 
 	overLine := findSkillLine(t, prompt, "ascii-over")
-	wantOver := "- ascii-over: " + strings.Repeat("b", issue1155MaxDescChars-3) + "..."
+	wantOver := "- ascii-over: " + strings.Repeat("b", 90-3) + "..."
 	if overLine != wantOver {
 		t.Errorf("over-cap line:\n got %q\nwant %q", overLine, wantOver)
 	}
@@ -224,5 +224,24 @@ func TestIssue1154GlobalCollectorInitStopSnapshotRaceStress(t *testing.T) {
 	InitGlobalSectionCollector(dirA)
 	if _, ok := GlobalSectionSnapshot(); !ok {
 		t.Fatal("expected available snapshot after final Init")
+	}
+}
+
+// P4 (#5446): skills section is one discovery-seed line per skill (name +
+// when_to_use/description FIRST clause), never the full body; discovery
+// guidance must stay so the full metadata remains reachable.
+func TestSkillsPromptSeedLineShape(t *testing.T) {
+	skills := []*commands.Command{
+		{Name: "deploy-verify", Description: "Full deployment verification.", WhenToUse: "Use after pushing code to prove CI and deployment health. Additional tail that must not appear.", Enabled: true},
+	}
+	prompt := BuildSkillsSystemPrompt(skills)
+	if !strings.Contains(prompt, "- deploy-verify: Use after pushing code") {
+		t.Fatalf("seed line must be name + when_to_use first clause:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "Additional tail") {
+		t.Fatalf("seed line must not carry the full when_to_use body:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "?") {
+		t.Fatalf("discovery guidance (?keyword) must remain present:\n%s", prompt)
 	}
 }
