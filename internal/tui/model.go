@@ -54,6 +54,39 @@ import (
 
 // TunnelStatusSnapshot 两条隧道的结构化状态(webui 侧栏图标弹层数据源):
 // share=mobile app relay(/share 家族),et=公网 WebUI 隧道(/et 家族)。
+// tunnelShareLiveState is the authoritative cross-copy store for the active
+// mobile-share face. bubbletea evolves the Model through value copies
+// (tea.NewProgram receives r.model by value), so fields like tunnelSession go
+// stale on the REPL-held original while the TUI renders from the live copy.
+// This pointer field survives every copy: TUI handlers and the webui
+// snapshot (TunnelStatusSnapshot) read the same instance.
+type tunnelShareLiveState struct {
+	mu      sync.Mutex
+	session *tunnel.Session
+	broker  *tunnel.Broker
+}
+
+func (s *tunnelShareLiveState) set(session *tunnel.Session, broker *tunnel.Broker) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.session = session
+	s.broker = broker
+	s.mu.Unlock()
+}
+
+func (s *tunnelShareLiveState) clear() { s.set(nil, nil) }
+
+func (s *tunnelShareLiveState) currentSession() *tunnel.Session {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.session
+}
+
 func (m *Model) TunnelStatusSnapshot() map[string]any {
 	out := map[string]any{
 		"share": map[string]any{"active": false, "starting": false, "connected": false},
@@ -63,15 +96,23 @@ func (m *Model) TunnelStatusSnapshot() map[string]any {
 	if m.tunnelStarting {
 		share["starting"] = true
 	}
-	if m.tunnelSession != nil {
+	// Read the share session from the shared live store first: m.tunnelSession
+	// lives on bubbletea's value-copied model and is stale from the REPL's
+	// original (webui QR stuck on 等待二维码, TUI overlay fine). Fall back for
+	// models constructed before the shared store existed (tests).
+	shareSession := m.tunnelShareLive.currentSession()
+	if shareSession == nil {
+		shareSession = m.tunnelSession
+	}
+	if shareSession != nil {
 		share["active"] = true
-		if info := m.tunnelSession.Info(); info != nil {
+		if info := shareSession.Info(); info != nil {
 			share["connect_url"] = info.ConnectURL
 			if len(info.QRCodePNG) > 0 {
 				share["qrcode_png_b64"] = base64.StdEncoding.EncodeToString(info.QRCodePNG)
 			}
 		}
-		if cs := m.tunnelSession.ConnectedState(); cs != nil {
+		if cs := shareSession.ConnectedState(); cs != nil {
 			share["connected"] = true
 		}
 	}
@@ -357,6 +398,7 @@ type Model struct {
 
 	tunnelHost                *agentruntime.TunnelHost
 	tunnelSession             *tunnel.Session
+	tunnelShareLive           *tunnelShareLiveState
 	tunnelBroker              *tunnel.Broker
 	tunnelMainStream          *tunnelMainStreamState
 	tunnelShareBootstrap      *tunnelShareBootstrapState
@@ -597,6 +639,13 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 
 	if a != nil {
 		setupReflection(a)
+	}
+
+	// Shared live share-face store: initialized exactly once here so every
+	// bubbletea value copy carries the same pointer (lazy init inside
+	// handlers would give each copy its own store - the bug this prevents).
+	if m.tunnelShareLive == nil {
+		m.tunnelShareLive = &tunnelShareLiveState{}
 	}
 
 	return m
