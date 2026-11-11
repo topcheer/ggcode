@@ -266,6 +266,13 @@ func (b *ChatBridge) LanChatSetNick(nick string) error {
 		return fmt.Errorf("LAN chat not available")
 	}
 	n, r, t := lanchat.ParseNickRoleTeam(nick)
+	// #5468: same fallback as the TUI entry points (lanchat_panel.go /
+	// remote_commands.go) - a nick without an explicit team segment keeps
+	// the workspace-derived default instead of silently pinning the fixed
+	// dev-team (which SaveTeamExplicit would then persist forever).
+	if !lanchat.HasTeamSegment(nick) {
+		t = b.lanchatHub.WorkspaceDefaultTeam()
+	}
 	return b.lanchatHub.SetNickRoleTeam(n, r, t)
 }
 
