@@ -574,6 +574,8 @@ func esCatalog(key string) string {
 		return "Formatos soportados: PNG, JPEG, GIF, WebP (max 20MB)\n\n"
 	case "image.clipboard_failed":
 		return "No se pudo pegar una imagen del portapapeles: %v"
+	case "image.clipboard_no_image":
+		return "No se encontró ninguna imagen en el portapapeles."
 	case "image.clipboard_no_image_windows":
 		return "Sin imagen en el portapapeles. En Windows, Ctrl+V a menudo es interceptado por la terminal. Pruebe Ctrl+Shift+V o /image paste."
 	case "slash.help":

@@ -717,6 +717,8 @@ func enCatalog(key string) string {
 		return "Supported formats: PNG, JPEG, GIF, WebP (max 20MB)\n\n"
 	case "image.clipboard_failed":
 		return "Could not paste an image from the clipboard: %v"
+	case "image.clipboard_no_image":
+		return "No image found in the clipboard."
 	case "image.clipboard_no_image_windows":
 		return "No image found in clipboard. On Windows, Ctrl+V is often intercepted by the terminal. Try Ctrl+Shift+V or /image paste instead."
 	case "slash.help":

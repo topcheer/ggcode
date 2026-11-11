@@ -574,6 +574,8 @@ func viCatalog(key string) string {
 		return "Định dạng hỗ trợ: PNG, JPEG, GIF, WebP (tối đa 20MB)\n\n"
 	case "image.clipboard_failed":
 		return "Không thể dán ảnh từ clipboard: %v"
+	case "image.clipboard_no_image":
+		return "Không tìm thấy ảnh trong clipboard."
 	case "image.clipboard_no_image_windows":
 		return "Không tìm thấy ảnh trong clipboard. Trên Windows, Ctrl+V thường bị terminal chặn. Thử Ctrl+Shift+V hoặc /image paste."
 	case "slash.help":

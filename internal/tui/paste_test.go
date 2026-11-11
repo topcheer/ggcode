@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -548,6 +550,69 @@ func TestHandleClipboardPasteFallback_FallsBackToText(t *testing.T) {
 	}
 	if fallback.Content != "hello from clipboard" {
 		t.Fatalf("expected text content preserved, got %q", fallback.Content)
+	}
+}
+
+func TestHandleClipboardPasteFallback_SaveErrorFallsBackToText(t *testing.T) {
+	m := setupModelForPaste()
+	m.clipboardLoader = func() (imageAttachedMsg, error) {
+		return imageAttachedMsg{}, fmt.Errorf("writing attached image: disk full")
+	}
+
+	cmd := m.handleClipboardPasteFallback(tea.PasteMsg{Content: "hello from clipboard"})
+	if cmd == nil {
+		t.Fatal("expected fallback command")
+	}
+	msg := cmd()
+	fallback, ok := msg.(textPasteMsg)
+	if !ok {
+		t.Fatalf("expected textPasteMsg on save error with text content, got %T", msg)
+	}
+	if fallback.Content != "hello from clipboard" {
+		t.Fatalf("expected text content preserved, got %q", fallback.Content)
+	}
+}
+
+func TestHandleClipboardPasteFallback_SaveErrorEmptyContentNotifies(t *testing.T) {
+	m := setupModelForPaste()
+	m.clipboardLoader = func() (imageAttachedMsg, error) {
+		return imageAttachedMsg{}, fmt.Errorf("writing attached image: disk full")
+	}
+
+	cmd := m.handleClipboardPasteFallback(tea.PasteMsg{Content: ""})
+	if cmd == nil {
+		t.Fatal("expected fallback command")
+	}
+	msg := cmd()
+	notify, ok := msg.(systemNotifyMsg)
+	if !ok {
+		t.Fatalf("expected systemNotifyMsg on save error with empty content, got %T", msg)
+	}
+	if notify.Text == "" {
+		t.Fatal("expected non-empty notify text")
+	}
+}
+
+func TestHandleClipboardPaste_NoImageNotifiesOnNonWindows(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows branch has its own message")
+	}
+	m := setupModelForPaste()
+	m.clipboardLoader = func() (imageAttachedMsg, error) {
+		return imageAttachedMsg{}, image.ErrClipboardImageUnavailable
+	}
+
+	cmd := m.handleClipboardPaste()
+	if cmd == nil {
+		t.Fatal("expected paste command")
+	}
+	msg := cmd()
+	notify, ok := msg.(systemNotifyMsg)
+	if !ok {
+		t.Fatalf("expected systemNotifyMsg instead of silent nil, got %T", msg)
+	}
+	if notify.Text == "" {
+		t.Fatal("expected non-empty notify text")
 	}
 }
 

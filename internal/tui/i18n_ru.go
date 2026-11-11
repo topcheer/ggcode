@@ -598,6 +598,8 @@ func ruCatalog(key string) string {
 		return "Поддерживаемые форматы: PNG, JPEG, GIF, WebP (макс. 20МБ)\n\n"
 	case "image.clipboard_failed":
 		return "Не удалось вставить изображение из буфера обмена: %v"
+	case "image.clipboard_no_image":
+		return "Изображение в буфере обмена не найдено."
 	case "image.clipboard_no_image_windows":
 		return "Изображение в буфере обмена не найдено. В Windows Ctrl+V часто перехватывается терминалом. Попробуйте Ctrl+Shift+V или /image paste."
 

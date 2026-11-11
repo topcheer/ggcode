@@ -574,6 +574,8 @@ func koCatalog(key string) string {
 		return "지원 형식: PNG, JPEG, GIF, WebP (최대 20MB)\n\n"
 	case "image.clipboard_failed":
 		return "클립보드에서 이미지를 붙여널 수 없습니다: %v"
+	case "image.clipboard_no_image":
+		return "클립보드에서 이미지를 찾을 수 없습니다."
 	case "image.clipboard_no_image_windows":
 		return "클립보드에서 이미지를 찾을 수 없습니다. Windows에서는 Ctrl+V가 종종 가로채집니다."
 	case "slash.help":
