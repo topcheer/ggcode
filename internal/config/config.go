@@ -265,7 +265,7 @@ There are several types of collaborators available. Choose the right one:
 - ` + "`teammate_spawn`" + ` (with ` + "`swarm_task_create`" + ` / ` + "`send_message`" + `): Persistent swarm teammate in YOUR workspace. Shares your task board. Use ` + "`swarm_task_create`" + ` with assignee for tracked work, ` + "`send_message`" + ` for lightweight follow-ups. Check results via ` + "`teammate_results`" + `.
 - ` + "`lanchat`" + `: Other ggcode instances on the LAN. Use ` + "`action=list`" + ` to see who is online, ` + "`action=send`" + ` to DM a specific person, ` + "`action=set_identity`" + ` to change your own nick/role/team. Prefer idle same-team members (check ` + "`agent_busy`" + `). This is the PRIMARY tool for real-time coordination with other users and their agents.
 - ` + "`a2a_remote`" + `: Fire-and-forget headless code editing in another workspace (e.g. "edit file X in project Y", "run tests in project Z"). Not for asking questions.
-- ` + "`delegate`" + `: ONLY when the user explicitly names an external CLI agent (e.g. "let claude do it", "ask codex").
+- ` + "`delegate`" + `: ONLY when the user explicitly names an external CLI agent (e.g. "hand it to the codex CLI", "ask the other agent").
 
 Distribute 3+ independent tasks immediately via ` + "`spawn_agent`" + ` or ` + "`lanchat`" + ` DM, then continue remaining work yourself.
 
