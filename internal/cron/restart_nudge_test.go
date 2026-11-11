@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -110,9 +111,9 @@ func TestCreateOneShotAtPersistsPendingNudge(t *testing.T) {
 	}
 }
 
-// TestLoadDropsExpiredPersistedOneShot pins that a nudge whose fire time
-// passed during downtime is dropped on Load instead of firing stale or
-// resurrecting forever.
+// TestLoadDropsExpiredPersistedOneShot pins the #5428 contract: a nudge
+// whose fire time passed during downtime is delivered exactly once on Load
+// (never adopted, never resurrecting forever).
 func TestLoadDropsExpiredPersistedOneShot(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "cron.json")
 	fired := make(chan string, 1)
@@ -138,9 +139,23 @@ func TestLoadDropsExpiredPersistedOneShot(t *testing.T) {
 	if jobs := s2.List(); len(jobs) != 0 {
 		t.Errorf("expired nudge must not be adopted, got %d jobs", len(jobs))
 	}
+	// #5428 contract: an expired durable one-shot is DELIVERED once at Load
+	// (the "continue the prior task" intent survives downtime) instead of
+	// being silently dropped. At-least-once is the accepted tradeoff: the
+	// only double-delivery window is a crash between the original enqueue
+	// and its store prune, and the prompt itself is benign to repeat.
 	select {
 	case p := <-fired:
-		t.Errorf("stale nudge fired after Load: %q", p)
+		if p != "stale" {
+			t.Errorf("unexpected redelivered prompt %q", p)
+		}
+	default:
+		t.Error("expired nudge must be delivered once at Load (#5428)")
+	}
+	// And exactly once: nothing further.
+	select {
+	case p := <-fired:
+		t.Errorf("nudge delivered more than once after Load: %q", p)
 	default:
 	}
 }
@@ -225,4 +240,46 @@ func TestCreateOneShotWithIDReplacesPendingNudge(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("want exactly 1 persisted nudge entry after double arm, got %d", n)
 	}
+}
+
+// TestLoadDeliversExpiredNudgeOnce pins the #5428 contract: a durable resume
+// nudge that expired while the process was down is delivered exactly once at
+// Load (the "continue the prior task" intent survives long downtime) and is
+// pruned from the store so a later restart cannot deliver it again.
+func TestLoadDeliversExpiredNudgeOnce(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "cron.json")
+
+	// Arm a nudge on a first scheduler, then shut it down before it fires.
+	first := NewScheduler(func(string, bool) {}, store)
+	due := time.Now().Add(-time.Minute) // already expired on disk
+	if _, err := first.CreateOneShotWithID(RestartResumeNudgeID, due, "继续进行之前的任务", true); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	first.Shutdown()
+
+	var mu sync.Mutex
+	var got []string
+	s := NewScheduler(func(prompt string, queueIfBusy bool) {
+		mu.Lock()
+		got = append(got, prompt)
+		mu.Unlock()
+		if !queueIfBusy {
+			t.Errorf("expired nudge delivery must keep queue_if_busy=true")
+		}
+	}, store)
+	defer s.Shutdown()
+	s.Load()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0] != "继续进行之前的任务" {
+		t.Fatalf("want exactly 1 delivered expired nudge, got %d: %q", len(got), got)
+	}
+
+	// Store must be pruned: a second Load delivers nothing.
+	s2 := NewScheduler(func(prompt string, _ bool) {
+		t.Errorf("second Load must not re-deliver the expired nudge, got %q", prompt)
+	}, store)
+	defer s2.Shutdown()
+	s2.Load()
 }
