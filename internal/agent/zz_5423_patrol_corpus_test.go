@@ -15,7 +15,16 @@ import (
 // members on both sides.
 func TestIrrevPatrolCorpusReadOnly(t *testing.T) {
 	corpus := []string{
-		// B2.1 main-CI step-1 shape
+		// watchdog_dev 22:33Z sweep, verbatim shape (export prefix, timeout
+		// wrapper, backslash continuations, || fallback, EXIT capture)
+		"cd /Volumes/new/ggai/ggcode; export GH_PAGER=cat; echo \"== utc ==\"; date -u +%H:%M:%SZ; echo \"== open pulls ==\"; timeout 25 gh api 'repos/topcheer/ggcode/pulls?state=open&per_page=20&sort=updated&direction=desc' --jq '.[] | [.number, .updated_at, .head.sha[0:10], .head.ref[:32], .title[:52]] | @tsv'; timeout 40 gh api 'repos/topcheer/ggcode/issues?state=all&per_page=20&sort=updated&direction=desc' --jq '.[] | select(.updated_at > \"2026-11-11T22:18:00Z\") | [.number, .updated_at, (.pull_request != null | if . then \"PR\" else \"IS\" end), .state, .title[:55]] | @tsv' || echo DELTA_QUERY_FAILED; timeout 25 gh api 'repos/topcheer/ggcode/actions/runs?per_page=8' --jq '.workflow_runs[] | select(.status != \"completed\") | [.id, .name, .status, .created_at] | @tsv' | head -4",
+		// watchdog_dev 23:00Z retry shape (grep && tail | cut)
+		"grep -c 'watchdog_dev' .ggcode/self-observations.md && tail -3 .ggcode/self-observations.md | cut -c1-80",
+		// unit isolation: the suspicious atoms
+		"export GH_PAGER=cat",
+		"timeout 25 gh api 'repos/topcheer/ggcode/actions/runs?per_page=8' --jq '.workflow_runs[0].status'",
+		"date -u +%H:%M:%SZ",
+		// original corpus below
 		`gh run list --repo topcheer/ggcode --branch main --limit 3 --json databaseId,status,conclusion,createdAt,displayTitle`,
 		// run-id probes (escalation shape)
 		`gh api repos/topcheer/ggcode/actions/runs/43105798349 --jq '.status'`,

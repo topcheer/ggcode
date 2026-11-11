@@ -349,8 +349,15 @@ func irrevSegmentIsReadOnly(seg string) bool {
 	if seg == "" {
 		return true
 	}
-	if strings.Contains(seg, ">") || strings.Contains(seg, "$(") ||
-		strings.Contains(seg, "`") || strings.Contains(seg, "<(") {
+	// #5423(b): redirect/substitution detection must be QUOTE-AWARE. A
+	// comparison inside a quoted --jq program (`select(.updated_at >
+	// "2026-...")`) contains a bare `>` that is data, not a redirect;
+	// gating on the raw string misclassified the standard patrol sweep.
+	// Real shell redirects/substitutions are unquoted by definition, so
+	// checking the quote-stripped span keeps them gated.
+	bare := irrevStripQuoted(seg)
+	if strings.Contains(bare, ">") || strings.Contains(bare, "$(") ||
+		strings.Contains(bare, "`") || strings.Contains(bare, "<(") {
 
 		return false
 	}
@@ -368,8 +375,24 @@ func irrevSegmentIsReadOnly(seg string) bool {
 	// detection runs on the raw command BEFORE this classifier, so
 	// `sudo rm -rf ...` is already tier-HIGH and never reaches here, and
 	// wrapper-prefixed non-whitelisted commands simply stay medium.
-	for len(fields) > 0 && isReadOnlyWrapperPrefix(fields[0]) {
-		fields = fields[1:]
+	for len(fields) > 0 {
+		if isReadOnlyWrapperPrefix(fields[0]) {
+			fields = fields[1:]
+			continue
+		}
+		// #5423(b): `timeout 25 gh api ...` is the standard patrol sweep
+		// shape (bounded network probes). timeout is a wrapper: the command
+		// is what follows, and its duration argument(s) are pure timing
+		// config, never payload. Mutating payloads behind timeout still
+		// gate via the destructive-command pre-check.
+		if fields[0] == "timeout" || fields[0] == "gtimeout" {
+			fields = fields[1:]
+			for len(fields) > 0 && isTimeoutDurationArg(fields[0]) {
+				fields = fields[1:]
+			}
+			continue
+		}
+		break
 	}
 	if len(fields) == 0 {
 		return false
@@ -420,6 +443,17 @@ func irrevSegmentIsReadOnly(seg string) bool {
 			return true
 		}
 		return ReadOnlyGoSubcommands[rest[0]]
+	case "export":
+		// #5423(b): `export GH_PAGER=cat` (and any NAME=value set) is a
+		// pure shell builtin - no process is launched, nothing is written;
+		// it only shapes subsequent command output. Every argument must be
+		// an assignment or a bare identifier to qualify.
+		for _, a := range rest {
+			if !isEnvAssignment(a) && !isBareIdentifier(a) {
+				return false
+			}
+		}
+		return len(rest) > 0
 	case "gh":
 
 		if len(rest) == 0 {
@@ -544,6 +578,73 @@ func isReadOnlyWrapperPrefix(tok string) bool {
 		return true
 	}
 	return false
+}
+
+// irrevStripQuoted removes single- and double-quoted spans from a shell
+// segment so redirect/substitution detection only sees unquoted shell
+// metacharacters. Backslash escapes are honored inside double quotes;
+// single quotes have no escapes in POSIX shell.
+func irrevStripQuoted(seg string) string {
+	var b []byte
+	var q byte
+	for i := 0; i < len(seg); i++ {
+		c := seg[i]
+		if q != 0 {
+			if q == '"' && c == '\\' && i+1 < len(seg) {
+				i++ // skip escaped char inside double quotes
+				continue
+			}
+			if c == q {
+				q = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'':
+			q = '\''
+		case '"':
+			q = '"'
+		default:
+			b = append(b, c)
+		}
+	}
+	return string(b)
+}
+
+// isTimeoutDurationArg matches the duration argument forms `timeout`
+// accepts: "25", "2m", "2m30s", "1.5s" - digits with optional unit
+// suffixes from the time package set. Anything else (a command word,
+// a flag like --foreground) does not match and stays put.
+func isTimeoutDurationArg(tok string) bool {
+	if tok == "" || tok[0] < '0' || tok[0] > '9' {
+		return false
+	}
+	for i := 0; i < len(tok); i++ {
+		c := tok[i]
+		if (c >= '0' && c <= '9') || c == '.' ||
+			c == 's' || c == 'm' || c == 'h' || c == 'u' || c == 'n' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// isBareIdentifier matches shell identifier tokens ([A-Za-z_][A-Za-z0-9_]*),
+// used for the argument shapes of the export builtin.
+func isBareIdentifier(tok string) bool {
+	if tok == "" {
+		return false
+	}
+	for i := 0; i < len(tok); i++ {
+		c := tok[i]
+		if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(i > 0 && c >= '0' && c <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func isEnvAssignment(tok string) bool {
