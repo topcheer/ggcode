@@ -254,32 +254,38 @@ fi
 
 # create the version if it does not exist yet
 if [[ -z "$AV_ID" ]]; then
-  # Layer guard (run 43003971586: HTTP 409 "You cannot create a new version
-  # of the App in the current state"): a DIFFERENT version stuck in
-  # WAITING_FOR_REVIEW/IN_REVIEW blocks new-version creation. The reject
-  # above only handles the version matching ${VERSION}; developer-reject any
-  # other blocking version first, using the same legacy submission dance.
-  BLOCKER=$(echo "$AVS" | jq -r '[.data[] | select(.id != "'"${AV_ID}"'" and (.attributes.appStoreState == "WAITING_FOR_REVIEW" or .attributes.appStoreState == "IN_REVIEW"))][0] // empty')
-  BLK_ID=$(echo "$BLOCKER" | jq -r '.id // empty')
-  if [[ -n "$BLK_ID" ]]; then
-    BLK_VER=$(echo "$BLOCKER" | jq -r '.attributes.versionString // "?"')
-    echo "version ${BLK_VER} (${BLK_ID}) is in review and blocks new-version creation - developer-rejecting"
-    BSUBL=$(asc "-" GET "/v1/appStoreVersions/${BLK_ID}/appStoreVersionSubmission")
-    BSUB_ID=$(echo "$BSUBL" | jq -r '.data.id // empty')
-    if [[ -n "$BSUB_ID" ]]; then
-      asc "reject-blocker" DELETE "/v1/appStoreVersionSubmissions/${BSUB_ID}" > /dev/null
-      echo "submission ${BSUB_ID} removed (Developer Rejected)"
-      for w in 1 2 3 4 5 6 8 10; do
-        sleep 10
-        refresh_jwt_if_needed
-        BVS=$(asc "-" GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
-        BST=$(echo "$BVS" | jq -r "[.data[] | select(.id == \"${BLK_ID}\")][0].attributes.appStoreState // empty")
-        [[ "$BST" != "WAITING_FOR_REVIEW" && "$BST" != "IN_REVIEW" ]] && break
+  # Layer guard (runs 43003971586/43008544461: HTTP 409 "You cannot create a
+  # new version of the App in the current state"): ANY older version stuck in
+  # WAITING_FOR_REVIEW/IN_REVIEW blocks new-version creation, and rejection
+  # state takes time to propagate. Reject ALL blocking versions (43008544461
+  # rejected only the first and 409 persisted), then wait for a clean slate.
+  reject_all_blockers() {
+    local rounds=0 bvid
+    while (( rounds < 6 )); do
+      refresh_jwt_if_needed
+      local VS; VS=$(asc "-" GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
+      local BLK; BLK=$(echo "$VS" | jq -c '[.data[] | select(.attributes.appStoreState == "WAITING_FOR_REVIEW" or .attributes.appStoreState == "IN_REVIEW")]')
+      local N; N=$(echo "$BLK" | jq 'length')
+      (( N == 0 )) && return 0
+      for row in $(echo "$BLK" | jq -r '.[] | @base64'); do
+        local B; B=$(echo "$row" | base64 -d)
+        local BID BVER
+        BID=$(echo "$B" | jq -r '.id'); BVER=$(echo "$B" | jq -r '.attributes.versionString // "?"')
+        echo "version ${BVER} (${BID}) is in review and blocks new-version creation - developer-rejecting"
+        local SUB; SUB=$(asc "-" GET "/v1/appStoreVersions/${BID}/appStoreVersionSubmission")
+        local SID; SID=$(echo "$SUB" | jq -r '.data.id // empty')
+        if [[ -n "$SID" ]]; then
+          asc "reject-blocker" DELETE "/v1/appStoreVersionSubmissions/${SID}" > /dev/null
+          echo "submission ${SID} removed (Developer Rejected)"
+        else
+          echo "::warning::blocking version ${BVER} has no live submission"
+        fi
       done
-    else
-      echo "::warning::blocking version ${BLK_VER} has no live submission - ASC may still refuse creation"
-    fi
-  fi
+      rounds=$((rounds+1)); sleep 20
+    done
+    echo "::warning::in-review versions may still block creation after 6 reject rounds"
+  }
+  reject_all_blockers
 
   echo "version ${VERSION} not found on ASC - creating"
   refresh_jwt_if_needed
@@ -287,8 +293,20 @@ if [[ -z "$AV_ID" ]]; then
   # METHOD_NOT_ALLOWED - that nested path is GET-only. appStoreVersions
   # createInstance is a TOP-LEVEL POST /v1/appStoreVersions with a required
   # app relationship in the body (ASC schema: relationships.app required).
-  AVC=$(asc "create-version" POST "/v1/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
-  AV_ID=$(echo "$AVC" | jq -r '.data.id // empty')
+  # Run 43008544461 evidence: 409 persists briefly AFTER a successful reject
+  # (state propagation) - retry the create with backoff instead of failing.
+  AVC=""
+  for attempt in 1 2 3 4 5 6 7 8; do
+    AVC=$(asc "create-version" POST "/v1/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
+    AV_ID=$(echo "$AVC" | jq -r '.data.id // empty')
+    [[ -n "$AV_ID" ]] && break
+    CODE=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
+    if [[ "$CODE" == "409" && $attempt -lt 8 ]]; then
+      echo "create-version 409 (attempt ${attempt}/8) - state still settling, retrying in 20s"
+      sleep 20; refresh_jwt_if_needed; continue
+    fi
+    break
+  done
   [[ -n "$AV_ID" ]] || { echo "::error::could not create appStoreVersion ${VERSION}: ${AVC:0:400}" >&2; exit 1; }
 fi
 
