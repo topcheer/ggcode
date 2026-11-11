@@ -1,11 +1,28 @@
 package agentruntime
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// goSymbolDump runs the on-demand provider (the P3 retrieval path) and
+// flattens its output for substring assertions - the extraction-semantics
+// tests moved here from the old inline-section assertions (#5446).
+func goSymbolDump(t *testing.T, root string) string {
+	t.Helper()
+	pkgs, err := workspaceSymbols{root: root}.Symbols("go", "", 50)
+	if err != nil {
+		t.Fatalf("provider: %v", err)
+	}
+	var b strings.Builder
+	for _, p := range pkgs {
+		fmt.Fprintf(&b, "%s: %s\n", p.Path, strings.Join(p.Symbols, ", "))
+	}
+	return b.String()
+}
 
 func TestBuildGoPackageSymbolsSection_Basic(t *testing.T) {
 	root := t.TempDir()
@@ -22,18 +39,31 @@ func NewServer() *Server { return nil }
 func Shutdown() {}
 `)
 
+	// Section carries counts + tool pointer only (#5446 P3); the semantic
+	// assertions moved to the provider dump below.
 	out := buildGoPackageSymbolsSection(root)
 	if out == "" {
 		t.Fatal("expected non-empty symbol section for Go project")
 	}
-	for _, want := range []string{"## Package symbols", "Server", "Handler", "NewServer()", "Shutdown()"} {
+	for _, want := range []string{"## Package symbols", "Go packages", "symbols", "lsp_workspace_symbols"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("symbol section missing %q:\n%s", want, out)
+			t.Errorf("section missing %q:\n%s", want, out)
+		}
+	}
+	for _, body := range []string{"NewServer()", "Shutdown()", "Handle()"} {
+		if strings.Contains(out, body) {
+			t.Errorf("section must not inline symbol bodies (%q):\n%s", body, out)
 		}
 	}
 
-	if strings.Contains(out, "Handle()") {
-		t.Errorf("methods should be excluded:\n%s", out)
+	dump := goSymbolDump(t, root)
+	for _, want := range []string{"Server", "Handler", "NewServer()", "Shutdown()"} {
+		if !strings.Contains(dump, want) {
+			t.Errorf("provider dump missing %q:\n%s", want, dump)
+		}
+	}
+	if strings.Contains(dump, "Handle()") {
+		t.Errorf("methods should be excluded:\n%s", dump)
 	}
 }
 
@@ -59,15 +89,15 @@ func TestBuildGoPackageSymbolsSection_NestedPackages(t *testing.T) {
 	mustMkdir(t, filepath.Join(root, "internal", "agent"))
 	mustWrite(t, filepath.Join(root, "internal", "agent", "agent.go"), "package agent\ntype Agent struct{}\nfunc New() *Agent { return nil }\n")
 
-	out := buildGoPackageSymbolsSection(root)
-	if !strings.Contains(out, "cmd/") {
-		t.Errorf("expected cmd/ package:\n%s", out)
+	dump := goSymbolDump(t, root)
+	if !strings.Contains(dump, "cmd:") {
+		t.Errorf("expected cmd package:\n%s", dump)
 	}
-	if !strings.Contains(out, "internal/agent/") {
-		t.Errorf("expected internal/agent/ package:\n%s", out)
+	if !strings.Contains(dump, "internal/agent:") {
+		t.Errorf("expected internal/agent package:\n%s", dump)
 	}
-	if !strings.Contains(out, "Run()") || !strings.Contains(out, "Agent") || !strings.Contains(out, "New()") {
-		t.Errorf("expected symbols Run(), Agent, New():\n%s", out)
+	if !strings.Contains(dump, "Run()") || !strings.Contains(dump, "Agent") || !strings.Contains(dump, "New()") {
+		t.Errorf("expected symbols Run(), Agent, New():\n%s", dump)
 	}
 }
 
@@ -77,12 +107,12 @@ func TestBuildGoPackageSymbolsSection_TestFilesExcluded(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "pkg.go"), "package main\nfunc RealFunc() {}\n")
 	mustWrite(t, filepath.Join(root, "pkg_test.go"), "package main\nfunc TestHelper() {}\n")
 
-	out := buildGoPackageSymbolsSection(root)
-	if !strings.Contains(out, "RealFunc()") {
-		t.Errorf("expected RealFunc():\n%s", out)
+	dump := goSymbolDump(t, root)
+	if !strings.Contains(dump, "RealFunc()") {
+		t.Errorf("expected RealFunc():\n%s", dump)
 	}
-	if strings.Contains(out, "TestHelper()") {
-		t.Errorf("test-only functions should be excluded:\n%s", out)
+	if strings.Contains(dump, "TestHelper()") {
+		t.Errorf("test-only functions should be excluded:\n%s", dump)
 	}
 }
 
@@ -96,12 +126,12 @@ func TestBuildGoPackageSymbolsSection_SkipsNoiseDirs(t *testing.T) {
 	mustMkdir(t, filepath.Join(root, "pkg"))
 	mustWrite(t, filepath.Join(root, "pkg", "p.go"), "package pkg\nfunc RealFunc() {}\n")
 
-	out := buildGoPackageSymbolsSection(root)
-	if strings.Contains(out, "VendorFunc") || strings.Contains(out, "vendor") {
-		t.Errorf("vendor should be excluded:\n%s", out)
+	dump := goSymbolDump(t, root)
+	if strings.Contains(dump, "VendorFunc") || strings.Contains(dump, "vendor") {
+		t.Errorf("vendor should be excluded:\n%s", dump)
 	}
-	if !strings.Contains(out, "RealFunc()") {
-		t.Errorf("expected RealFunc() from pkg:\n%s", out)
+	if !strings.Contains(dump, "RealFunc()") {
+		t.Errorf("expected RealFunc() from pkg:\n%s", dump)
 	}
 }
 
@@ -116,15 +146,15 @@ func ExportedFunc() {}
 func helperFunc() {}
 `)
 
-	out := buildGoPackageSymbolsSection(root)
-	if !strings.Contains(out, "Exported") {
-		t.Errorf("expected Exported type:\n%s", out)
+	dump := goSymbolDump(t, root)
+	if !strings.Contains(dump, "Exported") {
+		t.Errorf("expected Exported type:\n%s", dump)
 	}
-	if !strings.Contains(out, "ExportedFunc()") {
-		t.Errorf("expected ExportedFunc():\n%s", out)
+	if !strings.Contains(dump, "ExportedFunc()") {
+		t.Errorf("expected ExportedFunc():\n%s", dump)
 	}
 
-	for _, line := range strings.Split(out, "\n") {
+	for _, line := range strings.Split(dump, "\n") {
 
 		if strings.Contains(line, "unexported") || strings.Contains(line, "helperFunc") {
 			t.Errorf("unexported symbols should be excluded, found in: %s", line)
@@ -140,10 +170,10 @@ func TestBuildGoPackageSymbolsSection_ParseErrorGraceful(t *testing.T) {
 
 	mustWrite(t, filepath.Join(root, "good.go"), "package main\nfunc Good() {}\n")
 
-	out := buildGoPackageSymbolsSection(root)
+	dump := goSymbolDump(t, root)
 
-	if !strings.Contains(out, "Good()") {
-		t.Errorf("expected Good() despite parse errors:\n%s", out)
+	if !strings.Contains(dump, "Good()") {
+		t.Errorf("expected Good() despite parse errors:\n%s", dump)
 	}
 }
 
@@ -163,13 +193,10 @@ func TestBuildGoPackageSymbolsSection_FileCount(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "b.go"), "package main\ntype B struct{}\n")
 	mustWrite(t, filepath.Join(root, "c_test.go"), "package main\nfunc TestC() {}\n")
 
-	out := buildGoPackageSymbolsSection(root)
-
-	if !strings.Contains(out, "2 files") {
-		t.Errorf("expected 2 files in output:\n%s", out)
-	}
-	if strings.Contains(out, "3 files") {
-		t.Errorf("test files should not be counted:\n%s", out)
+	// File counts left the prompt surface with P3; pin at the extractor.
+	_, fc := extractPackageSymbols(root)
+	if fc != 2 {
+		t.Errorf("expected 2 files counted, got %d", fc)
 	}
 }
 
