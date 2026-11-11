@@ -234,7 +234,13 @@ func (t MergePreflightTool) runPreflight(ctx context.Context, prNumber int, dir 
 	}
 
 	// --- reviews_resolved: latest review per author not CHANGES_REQUESTED ---
-	revOut, err := t.gh(ctx, dir, "api", fmt.Sprintf("repos/%s/pulls/%d/reviews", repo, prNumber))
+	// --paginate + --slurp: the REST reviews endpoint returns pages
+	// ASCENDING by submitted time, so a bare call (default 30/page) drops
+	// the newest reviews off-page - an off-page CHANGES_REQUESTED would be
+	// invisible and the gate would still PASS (#5408). --slurp merges all
+	// pages into one JSON array-of-arrays, which evaluateReviews flattens.
+	revOut, err := t.gh(ctx, dir, "api", "--paginate", "--slurp",
+		fmt.Sprintf("repos/%s/pulls/%d/reviews", repo, prNumber))
 	reviewReasons, resolved := t.evaluateReviews(revOut, err)
 	report.ReviewsResolved = resolved
 
@@ -292,7 +298,21 @@ func (t MergePreflightTool) evaluateReviews(revOut string, err error) (reasons [
 	}
 	var reviews []prReview
 	if jerr := json.Unmarshal([]byte(revOut), &reviews); jerr != nil {
-		return []string{fmt.Sprintf("reviews parse failed: %v", jerr)}, false
+		// --paginate --slurp wraps pages as an array-of-arrays (#5408);
+		// flatten before falling back to the parse-failure verdict.
+		var pages [][]prReview
+		if perr := json.Unmarshal([]byte(revOut), &pages); perr == nil {
+			total := 0
+			for _, pg := range pages {
+				total += len(pg)
+			}
+			reviews = make([]prReview, 0, total)
+			for _, pg := range pages {
+				reviews = append(reviews, pg...)
+			}
+		} else {
+			return []string{fmt.Sprintf("reviews parse failed: %v", jerr)}, false
+		}
 	}
 	resolved = resolveReviewStates(reviews, &reasons)
 	return reasons, resolved

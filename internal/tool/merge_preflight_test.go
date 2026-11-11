@@ -65,7 +65,9 @@ func (s *ghScript) run(_ context.Context, _ string, args ...string) (string, err
 		return s.prView, nil
 	case strings.Contains(joined, "headRefOid"):
 		return s.pinView, nil
-	case strings.HasPrefix(joined, "api repos/"):
+	case strings.Contains(joined, "/pulls/") && strings.Contains(joined, "/reviews"):
+		// #5408: production now calls gh api --paginate --slurp; the
+		// fixture keys off the endpoint path so both shapes dispatch here.
 		return s.reviews, nil
 	}
 	return "", fmt.Errorf("unexpected gh call: %s", joined)
@@ -325,5 +327,38 @@ func TestMergePreflightRequiresPRNumber(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Error("missing pr_number and action must be rejected")
+	}
+}
+
+// Pin for issue #5408: the reviews query runs with --paginate --slurp, so
+// evaluateReviews must flatten the array-of-arrays page wrapper. An
+// off-page (newest) CHANGES_REQUESTED must stay visible to the
+// latest-review-per-author rule instead of silently passing.
+func TestMergePreflightPaginatedReviewsOffPageCRVisible(t *testing.T) {
+	script := &ghScript{
+		repo:   "acme/widgets\n",
+		prView: happyPRView("aaabbbcccddd000"),
+		// Page 1 (ascending): alice approves early. Page 2: alice
+		// requests changes later - the latest state must win.
+		reviews: `[[{"user":{"login":"alice"},"state":"APPROVED","submitted_at":"2026-11-01T10:00:00Z"}],[{"user":{"login":"alice"},"state":"CHANGES_REQUESTED","submitted_at":"2026-11-09T10:00:00Z"}]]`,
+	}
+	res := runPreflight(t, script, 5356)
+	r := parseReportLine(t, res.Content)
+	if r.ReviewsResolved {
+		t.Fatalf("off-page CHANGES_REQUESTED must fail reviews_resolved (issue #5408), verdict=%s reasons=%v", r.Verdict, r.Reasons)
+	}
+	if !strings.Contains(strings.Join(r.Reasons, " "), "alice") {
+		t.Errorf("reasons must name the blocking author, got %v", r.Reasons)
+	}
+	// And the slurp single-page shape still resolves when latest is APPROVED.
+	script2 := &ghScript{
+		repo:    "acme/widgets\n",
+		prView:  happyPRView("aaabbbcccddd000"),
+		reviews: `[[{"user":{"login":"alice"},"state":"CHANGES_REQUESTED","submitted_at":"2026-11-01T10:00:00Z"}],[{"user":{"login":"alice"},"state":"APPROVED","submitted_at":"2026-11-09T10:00:00Z"}]]`,
+	}
+	res2 := runPreflight(t, script2, 5356)
+	r2 := parseReportLine(t, res2.Content)
+	if !r2.ReviewsResolved {
+		t.Errorf("latest APPROVED after CR must resolve, got verdict=%s reasons=%v", r2.Verdict, r2.Reasons)
 	}
 }
