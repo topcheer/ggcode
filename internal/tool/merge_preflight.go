@@ -234,7 +234,11 @@ func (t MergePreflightTool) runPreflight(ctx context.Context, prNumber int, dir 
 	}
 
 	// --- reviews_resolved: latest review per author not CHANGES_REQUESTED ---
-	revOut, err := t.gh(ctx, dir, "api", fmt.Sprintf("repos/%s/pulls/%d/reviews", repo, prNumber))
+	// #5408: the REST endpoint defaults to per_page=30 in ASCENDING order
+	// (oldest first), so a plain call silently drops the NEWEST reviews on
+	// PRs with >30 - exactly the rows the latest-per-author resolution
+	// below needs. Pull all pages explicitly.
+	revOut, err := t.fetchAllReviews(ctx, dir, repo, prNumber)
 	reviewReasons, resolved := t.evaluateReviews(revOut, err)
 	report.ReviewsResolved = resolved
 
@@ -286,6 +290,48 @@ func (t MergePreflightTool) evaluateChecks(ctx context.Context, dir string, prNu
 // evaluateReviews computes the reviews_resolved predicate from the
 // reviews API response (err non-nil means the query itself failed; the
 // predicate is then conservatively false with the failure recorded).
+// fetchAllReviews pages through the PR reviews endpoint
+// (per_page=100, page=1..) and returns the merged set as one JSON array
+// string. Stops at the first short page; a hard cap of 10 pages (1000
+// reviews) guards against pathological loops. A first-page failure is
+// returned as an error (real query failure); later-page failures keep
+// the pages fetched so far (latest-per-author still applies to what is
+// visible).
+func (t MergePreflightTool) fetchAllReviews(ctx context.Context, dir, repo string, prNumber int) (string, error) {
+	const perPage = 100
+	// Pages are kept as raw JSON: a decode/re-encode round trip through
+	// prReview would re-serialize fields with Go field names where the
+	// struct lacks matching json tags (user.login -> user.Login) and
+	// silently break the downstream author resolution. RawMessage
+	// concatenation preserves the API bytes verbatim.
+	var all []json.RawMessage
+	for page := 1; page <= 10; page++ {
+		out, err := t.gh(ctx, dir, "api", fmt.Sprintf("repos/%s/pulls/%d/reviews?per_page=%d&page=%d", repo, prNumber, perPage, page))
+		if err != nil {
+			if page == 1 {
+				return "", err
+			}
+			break
+		}
+		var pageReviews []json.RawMessage
+		if jerr := json.Unmarshal([]byte(out), &pageReviews); jerr != nil {
+			if page == 1 {
+				return "", fmt.Errorf("reviews page 1 parse failed: %w", jerr)
+			}
+			break
+		}
+		all = append(all, pageReviews...)
+		if len(pageReviews) < perPage {
+			break
+		}
+	}
+	merged, err := json.Marshal(all)
+	if err != nil {
+		return "", err
+	}
+	return string(merged), nil
+}
+
 func (t MergePreflightTool) evaluateReviews(revOut string, err error) (reasons []string, resolved bool) {
 	if err != nil {
 		return []string{fmt.Sprintf("reviews query failed: %v", err)}, false

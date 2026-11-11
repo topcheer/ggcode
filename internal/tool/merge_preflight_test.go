@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -48,8 +49,12 @@ type ghScript struct {
 	prView  string // for --json number,headRefOid,statusCheckRollup,labels,comments
 	pinView string // for --json headRefOid
 	reviews string
-	calls   []string
-	repoErr error
+	// reviewPages, when set, routes paged review calls (per_page=100&page=N)
+	// to the Nth entry (1-based); index 0 maps to page 1. Calls beyond the
+	// last entry return "[]" (empty page terminates the loop).
+	reviewPages []string
+	calls       []string
+	repoErr     error
 }
 
 func (s *ghScript) run(_ context.Context, _ string, args ...string) (string, error) {
@@ -66,6 +71,20 @@ func (s *ghScript) run(_ context.Context, _ string, args ...string) (string, err
 	case strings.Contains(joined, "headRefOid"):
 		return s.pinView, nil
 	case strings.HasPrefix(joined, "api repos/"):
+		if strings.Contains(joined, "page=") && len(s.reviewPages) > 0 {
+			page := 1
+			// "&page=" (not "page=") - per_page=100 also contains "page="
+			if idx := strings.Index(joined, "&page="); idx >= 0 {
+				p, err := strconv.Atoi(joined[idx+len("&page="):])
+				if err == nil {
+					page = p
+				}
+			}
+			if page >= 1 && page <= len(s.reviewPages) {
+				return s.reviewPages[page-1], nil
+			}
+			return "[]", nil
+		}
 		return s.reviews, nil
 	}
 	return "", fmt.Errorf("unexpected gh call: %s", joined)
@@ -172,6 +191,62 @@ func TestMergePreflightChecksNotSuccess(t *testing.T) {
 	}
 	if len(r.Reasons) != 2 {
 		t.Errorf("expected 2 check reasons, got %v", r.Reasons)
+	}
+}
+
+// TestMergePreflightReviewPagingBeyondPage1 pins #5408: the reviews
+// endpoint is oldest-first with a 30-row default, so the newest reviews
+// land on the LAST page. A PR with 100+ reviews must still surface the
+// page-2 CHANGES_REQUESTED as unresolved - before the fix the paged-out
+// review was invisible and the gate misfired PASS.
+func TestMergePreflightReviewPagingBeyondPage1(t *testing.T) {
+	// page 1: 100 stale APPROVED reviews (the pre-fix 30-row default would
+	// stop here and declare the PR resolved)
+	var page1 strings.Builder
+	page1.WriteString("[")
+	for i := 0; i < 100; i++ {
+		if i > 0 {
+			page1.WriteString(",")
+		}
+		fmt.Fprintf(&page1, `{"user":{"login":"reviewer%d"},"state":"APPROVED","submitted_at":"2026-01-01T00:00:%02dZ"}`, i, i%60)
+	}
+	page1.WriteString("]")
+	// page 2: the NEWEST review, CHANGES_REQUESTED from a reviewer whose
+	// older APPROVED sits on page 1 - latest-per-author must win
+	page2 := `[{"user":{"login":"reviewer0"},"state":"CHANGES_REQUESTED","submitted_at":"2026-02-01T00:00:00Z"}]`
+	script := &ghScript{
+		repo:        "acme/widgets\n",
+		prView:      happyPRView("aaabbbcccddd000"),
+		pinView:     `{"headRefOid":"aaabbbcccddd000"}`,
+		reviewPages: []string{page1.String(), page2},
+	}
+	res := runPreflight(t, script, 5356)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Content)
+	}
+	r := parseReportLine(t, res.Content)
+	if r.ReviewsResolved {
+		t.Fatalf("page-2 CHANGES_REQUESTED must not be paged out: reasons=%v", r.Reasons)
+	}
+	found := false
+	for _, reason := range r.Reasons {
+		if strings.Contains(reason, "reviewer0") && strings.Contains(reason, "CHANGES_REQUESTED") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("unresolved reason must name reviewer0's latest CHANGES_REQUESTED, got %v", r.Reasons)
+	}
+	// the paged query must actually have been issued
+	sawPaged := false
+	for _, c := range script.calls {
+		if strings.Contains(c, "per_page=100&page=") {
+			sawPaged = true
+			break
+		}
+	}
+	if !sawPaged {
+		t.Fatalf("reviews must be fetched with explicit pagination, calls=%v", script.calls)
 	}
 }
 
