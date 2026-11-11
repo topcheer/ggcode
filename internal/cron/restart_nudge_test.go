@@ -2,6 +2,7 @@ package cron
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -111,43 +112,30 @@ func TestCreateOneShotAtPersistsPendingNudge(t *testing.T) {
 	}
 }
 
-// TestLoadDropsExpiredPersistedOneShot pins the #5428 contract: a nudge
-// whose fire time passed during downtime is delivered exactly once on Load
-// (never adopted, never resurrecting forever).
+// TestLoadDropsExpiredPersistedOneShot pins the #5428 contract for a
+// persisted entry that already elapsed on disk: Load delivers it exactly
+// once (never adopted, never resurrecting forever). The store is written
+// directly so the test does not race the creating scheduler's immediate
+// fire/prune (the CI flip that motivated this rewrite).
 func TestLoadDropsExpiredPersistedOneShot(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "cron.json")
-	fired := make(chan string, 1)
-	s := NewScheduler(func(prompt string, _ bool) { fired <- prompt }, store)
-
-	past := time.Now().Add(-time.Minute)
-	if _, err := s.CreateOneShotAt(past, "stale", true); err != nil {
-		t.Fatalf("CreateOneShotAt: %v", err)
-	}
-	// The fire already elapsed: drain any immediate fire from the creating
-	// scheduler, then rebuild from disk and confirm no stale refire.
-	select {
-	case p := <-fired:
-		if p != "stale" {
-			t.Errorf("unexpected prompt %q", p)
-		}
-	case <-time.After(2 * time.Second):
-		// acceptable: creating scheduler may or may not fire before Stop
+	past := time.Now().Add(-time.Minute).Format(time.RFC3339)
+	body := fmt.Sprintf(`{"jobs":[{"id":"restart-resume-nudge","prompt":"stale","recurring":false,"queue_if_busy":true,"persist":true,"next_fire":%q,"created_at":%q}]}`, past, past)
+	if err := os.WriteFile(store, []byte(body), 0o644); err != nil {
+		t.Fatalf("write store: %v", err)
 	}
 
+	fired := make(chan string, 2)
 	s2 := NewScheduler(func(prompt string, _ bool) { fired <- prompt }, store)
+	defer s2.Shutdown()
 	s2.Load()
 	if jobs := s2.List(); len(jobs) != 0 {
 		t.Errorf("expired nudge must not be adopted, got %d jobs", len(jobs))
 	}
-	// #5428 contract: an expired durable one-shot is DELIVERED once at Load
-	// (the "continue the prior task" intent survives downtime) instead of
-	// being silently dropped. At-least-once is the accepted tradeoff: the
-	// only double-delivery window is a crash between the original enqueue
-	// and its store prune, and the prompt itself is benign to repeat.
 	select {
 	case p := <-fired:
 		if p != "stale" {
-			t.Errorf("unexpected redelivered prompt %q", p)
+			t.Errorf("unexpected delivered prompt %q", p)
 		}
 	default:
 		t.Error("expired nudge must be delivered once at Load (#5428)")
@@ -244,18 +232,16 @@ func TestCreateOneShotWithIDReplacesPendingNudge(t *testing.T) {
 
 // TestLoadDeliversExpiredNudgeOnce pins the #5428 contract: a durable resume
 // nudge that expired while the process was down is delivered exactly once at
-// Load (the "continue the prior task" intent survives long downtime) and is
-// pruned from the store so a later restart cannot deliver it again.
+// Load and is pruned from the store so a later restart cannot deliver it
+// again. The store is written directly (no creating scheduler) so the test is
+// deterministic.
 func TestLoadDeliversExpiredNudgeOnce(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "cron.json")
-
-	// Arm a nudge on a first scheduler, then shut it down before it fires.
-	first := NewScheduler(func(string, bool) {}, store)
-	due := time.Now().Add(-time.Minute) // already expired on disk
-	if _, err := first.CreateOneShotWithID(RestartResumeNudgeID, due, "继续进行之前的任务", true); err != nil {
-		t.Fatalf("arm: %v", err)
+	past := time.Now().Add(-time.Minute).Format(time.RFC3339)
+	body := fmt.Sprintf(`{"jobs":[{"id":"restart-resume-nudge","prompt":"继续进行之前的任务","recurring":false,"queue_if_busy":true,"persist":true,"next_fire":%q,"created_at":%q}]}`, past, past)
+	if err := os.WriteFile(store, []byte(body), 0o644); err != nil {
+		t.Fatalf("write store: %v", err)
 	}
-	first.Shutdown()
 
 	var mu sync.Mutex
 	var got []string
