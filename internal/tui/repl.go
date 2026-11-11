@@ -422,7 +422,7 @@ func (p *tuiRuntimeProvider) RuntimeSessionID() string {
 }
 
 func (p *tuiRuntimeProvider) RuntimePermissionMode() string {
-	return p.repl.model.mode.String()
+	return p.repl.liveModeString() // cross-copy store first (#5454): handlers mutate the copy, not the REPL-held original
 }
 
 func (p *tuiRuntimeProvider) RuntimeVendor() string {

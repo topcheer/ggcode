@@ -994,6 +994,7 @@ func (m *Model) handleTunnelModeChangeMsg(msg tunnelModeChangeMsg) (tea.Model, t
 		return m, nil
 	}
 	m.mode = newMode
+	m.modeLive.set(newMode) // publish to the cross-copy store (#5454): webui reads modeLive
 	if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
 		cp.SetMode(newMode)
 	}
