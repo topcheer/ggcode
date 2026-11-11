@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"fmt"
+	"github.com/topcheer/ggcode/internal/debug"
 	"sort"
 	"strings"
 
@@ -58,6 +59,8 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		}
 	}
 	prompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames, availableModels)
+	baseLen := len(prompt)
+	snapLens := ""
 
 	if styleGuidance := config.OutputStyleGuidance(cfg.OutputStyle); styleGuidance != "" {
 		prompt += "\n\n" + styleGuidance
@@ -71,6 +74,8 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		prompt += snap.Toolchain
 		prompt += snap.Symbols
 		prompt += snap.Deps
+		snapLens = fmt.Sprintf("overview=%d modified=%d repoHead=%d commands=%d toolchain=%d SYMBOLS=%d deps=%d",
+			len(snap.Overview), len(snap.Modified), len(snap.RepoHead), len(snap.Commands), len(snap.Toolchain), len(snap.Symbols), len(snap.Deps))
 	} else {
 		prompt += projectOverviewSection(workingDir)
 		prompt += modifiedFilesSection(workingDir)
@@ -83,9 +88,11 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		prompt += buildPackageDepsSection(workingDir)
 	}
 	var promptSkillRefs []string
+	skillsLen := 0
 	if commandMgr != nil {
 		skillsPrompt, refs := BuildSkillsSystemPromptWithPromptRefs(commandMgr.List())
 		promptSkillRefs = refs
+		skillsLen = len(skillsPrompt)
 		if skillsPrompt != "" {
 			prompt += "\n\n## Skills\n" + skillsPrompt
 		}
@@ -131,6 +138,11 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		prompt += "\n\n" + namedAgentInfo
 	}
 
+	// #5446 prompt-budget ledger: per-stage char sizes (~4 chars/token) so
+	// slimming work cuts where the bytes actually are.
+	debug.Log("prompt-budget", "total=%d (~%dtok) base=%d skills=%d remote=%d sharedws=%d automem=%d namedagents=%d snapshot{%s}",
+		len(prompt), len(prompt)/4, baseLen, skillsLen,
+		len(remoteAgentsInfo), len(sharedWorkspaceAgents), 0, len(namedAgentInfo), snapLens)
 	return prompt, promptSkillRefs
 }
 
