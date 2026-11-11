@@ -129,19 +129,36 @@ func (c *Config) ValidateMergeGateConfig() error {
 }
 
 // MatchMergeGateCommand reports whether command matches any protected
-// pattern and, if so, the PR number it references. A command matches a
-// pattern when the command's leading tokens equal the pattern tokens and
-// the token right after the pattern is a positive integer (the PR number).
-// Matching is exact-token (case-sensitive), so "gh pr merge 5356" matches
-// "gh pr merge" but "gh pr merged 5356" does not.
+// pattern and, if so, the PR number it references (#5401).
+//
+// A command matches when its leading tokens equal the pattern tokens
+// (exact-token, case-sensitive), regardless of how the target PR is
+// expressed afterwards - this mirrors the real gh CLI grammar
+// `gh pr merge [<number> | <url> | <branch>] [flags]` where flags and
+// positional arguments interleave freely:
+//
+//	gh pr merge 5356                 -> PR 5356
+//	gh pr merge --auto --squash 5356  -> PR 5356 (flags skipped)
+//	gh pr merge https://o/r/pull/5356-> PR 5356 (URL tail)
+//	gh pr merge feature-branch        -> PR 0 (branch selector: gated,
+//	                                    preflight must identify the PR)
+//	gh pr merge                       -> PR 0 (no selector: gh acts on
+//	                                    the current branch's PR)
+//
+// PR 0 means "gated but no explicit PR number" - the caller injects the
+// requirement and asks the agent to identify the PR (e.g. via
+// merge_preflight on the current branch). "gh pr merged 5356" still does
+// not match (exact-token), and a command merely ECHOING the pattern
+// ("echo gh pr merge 5356") does not match because matching is
+// prefix-anchored to the actual command head.
 func MatchMergeGateCommand(command string, patterns []string) (prNumber int, matched bool) {
 	fields := strings.Fields(strings.TrimSpace(command))
-	if len(fields) < 2 {
+	if len(fields) == 0 {
 		return 0, false
 	}
 	for _, pat := range patterns {
 		pf := strings.Fields(strings.TrimSpace(pat))
-		if len(pf) == 0 || len(fields) < len(pf)+1 {
+		if len(pf) == 0 || len(fields) < len(pf) {
 			continue
 		}
 		ok := true
@@ -154,11 +171,42 @@ func MatchMergeGateCommand(command string, patterns []string) (prNumber int, mat
 		if !ok {
 			continue
 		}
-		n, err := strconv.Atoi(fields[len(pf)])
-		if err != nil || n <= 0 {
-			continue
-		}
-		return n, true
+		// #5401: the pattern heads the command; whatever follows selects
+		// the target. Extract a PR number when one is expressible, else
+		// still report a hit with PR 0.
+		return extractPRNumber(fields[len(pf):]), true
 	}
 	return 0, false
+}
+
+// extractPRNumber scans the tokens after a matched pattern for an
+// explicit PR selector: the first non-flag token that is either a
+// positive integer or a github pull-request URL (whose /pull/<n> tail
+// carries the number). Branch names and flag-only forms yield 0.
+func extractPRNumber(rest []string) int {
+	for _, tok := range rest {
+		if strings.HasPrefix(tok, "-") {
+			continue // gh flag (--squash, --match-head-commit=..., -d)
+		}
+		if n, err := strconv.Atoi(tok); err == nil {
+			if n > 0 {
+				return n
+			}
+			continue
+		}
+		if strings.Contains(tok, "/pull/") {
+			tail := tok[strings.LastIndex(tok, "/pull/")+len("/pull/"):]
+			// tolerate trailing junk (query/hash) by trimming at the next '/'
+			if i := strings.IndexAny(tail, "/?#"); i >= 0 {
+				tail = tail[:i]
+			}
+			if n, err := strconv.Atoi(tail); err == nil && n > 0 {
+				return n
+			}
+		}
+		// first non-flag, non-numeric token is a branch selector - the
+		// action is gated but has no explicit PR number
+		return 0
+	}
+	return 0 // flag-only or no selector at all
 }

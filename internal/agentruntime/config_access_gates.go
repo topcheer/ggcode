@@ -168,6 +168,9 @@ func (a *configAccess) gatesTest(command string) (string, error) {
 		return b.String(), nil
 	}
 	fmt.Fprintf(&b, "protected: yes (prefix in gates.merge.commands)\npr: %d\n", pr)
+	if pr <= 0 {
+		b.WriteString("pr selector: none in command (branch/no-arg form) - identify the PR before preflight\n")
+	}
 	if ag != nil {
 		if fresh, head := ag.MergeGatePreflightStatus(pr); fresh {
 			fmt.Fprintf(&b, "preflight snapshot: fresh (head %s, within ttl %s) - gate requirement satisfied\n",
