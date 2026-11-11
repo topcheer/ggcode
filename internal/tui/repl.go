@@ -1007,6 +1007,9 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 	if rt, ok := tools.Get("restart"); ok {
 		if rtt, ok := rt.(*tool.RestartTool); ok {
 			rtt.Requester = &replRestartRequester{repl: r}
+			// Arm the durable resume nudge (one-shot cron +3min) on restart;
+			// nil scheduler leaves the nudge disabled, restart still works.
+			rtt.Nudger = r.cronScheduler
 		}
 	}
 }

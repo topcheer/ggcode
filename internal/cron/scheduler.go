@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,11 @@ type Job struct {
 	CreatedAt   time.Time
 	NextFire    time.Time
 	Paused      bool
+	// Persist marks a non-recurring job as durable across process restarts
+	// (persisted with an explicit NextFire and re-adopted on Load while still
+	// in the future). Zero-value false keeps ordinary one-shots volatile,
+	// preserving the historic session-scoped semantics.
+	Persist bool
 }
 
 func (j *Job) Snapshot() Job {
@@ -40,6 +46,10 @@ type jobJSON struct {
 	QueueIfBusy bool   `json:"queue_if_busy"`
 	Paused      bool   `json:"paused,omitempty"`
 	CreatedAt   string `json:"created_at"`
+	// Persist + NextFire are only meaningful for durable one-shot jobs
+	// (see Job.Persist); recurring jobs recompute NextFire from CronExpr.
+	Persist  bool   `json:"persist,omitempty"`
+	NextFire string `json:"next_fire,omitempty"`
 }
 
 type sessionStore struct {
@@ -180,6 +190,46 @@ func (s *Scheduler) Load() {
 
 	for _, jj := range ss.Jobs {
 		if !jj.Recurring {
+			// Ordinary one-shots never persisted: skip silently. Durable
+			// one-shots (restart nudges) are adopted while still pending.
+			if !jj.Persist {
+				continue
+			}
+			fireAt, err := time.Parse(time.RFC3339, jj.NextFire)
+			if err != nil || fireAt.IsZero() {
+				debug.Log("cron", "Load: dropped persisted one-shot %s (missing/invalid next_fire)", jj.ID)
+				continue
+			}
+			if !time.Now().Before(fireAt) {
+				debug.Log("cron", "Load: dropped expired persisted one-shot %s (was due %s)", jj.ID, fireAt.Format(time.RFC3339))
+				continue
+			}
+			createdAt, _ := time.Parse(time.RFC3339, jj.CreatedAt)
+			s.mu.Lock()
+			if _, exists := s.jobs[jj.ID]; exists {
+				s.mu.Unlock()
+				continue
+			}
+			s.nextID++
+			job := &Job{
+				ID:          jj.ID,
+				Prompt:      jj.Prompt,
+				Recurring:   false,
+				QueueIfBusy: jj.QueueIfBusy,
+				CreatedAt:   createdAt,
+				NextFire:    fireAt,
+				Persist:     true,
+			}
+			s.jobs[job.ID] = job
+			s.knownIDs[job.ID] = true
+			var n int
+			fmt.Sscanf(job.ID, "cron-%d", &n)
+			if n > s.nextID {
+				s.nextID = n
+			}
+			s.mu.Unlock()
+			s.scheduleJob(job)
+			debug.Log("cron", "Load: adopted pending one-shot %s (fires %s)", job.ID, fireAt.Format(time.RFC3339))
 			continue
 		}
 
@@ -250,8 +300,12 @@ func (s *Scheduler) save() error {
 
 	jobs := make([]jobJSON, 0)
 	for _, j := range s.jobs {
-		if !j.Recurring {
+		if !j.Recurring && !j.Persist {
 			continue
+		}
+		nextFire := ""
+		if j.Persist && !j.NextFire.IsZero() {
+			nextFire = j.NextFire.Format(time.RFC3339)
 		}
 		jobs = append(jobs, jobJSON{
 			ID:          j.ID,
@@ -261,6 +315,8 @@ func (s *Scheduler) save() error {
 			QueueIfBusy: j.QueueIfBusy,
 			Paused:      j.Paused,
 			CreatedAt:   j.CreatedAt.Format(time.RFC3339),
+			Persist:     j.Persist,
+			NextFire:    nextFire,
 		})
 	}
 
@@ -272,7 +328,7 @@ func (s *Scheduler) save() error {
 				inMemory[j.ID] = true
 			}
 			for _, jj := range onDisk.Jobs {
-				if jj.Recurring && !inMemory[jj.ID] && !s.knownIDs[jj.ID] {
+				if (jj.Recurring || jj.Persist) && !inMemory[jj.ID] && !s.knownIDs[jj.ID] {
 					jobs = append(jobs, jj)
 				}
 			}
@@ -344,6 +400,55 @@ func checkOneShotHorizon(recurring bool, cronExpr string, next, now time.Time, h
 
 func (s *Scheduler) Create(cronExpr, prompt string, recurring bool, queueIfBusy bool) (Job, error) {
 	return s.CreateAcknowledgedFar(cronExpr, prompt, recurring, queueIfBusy, false)
+}
+
+// CreateOneShotAt creates a durable one-shot job firing exactly at fireAt
+// (no cron expression; NextFire is authoritative). The job is persisted with
+// its explicit NextFire and survives process restarts: on Load, a still-
+// pending instance is re-adopted and an expired one is dropped without
+// firing. Intended for cross-restart nudges such as the restart tool's
+// resume prompt. queueIfBusy should be true so the prompt still enqueues
+// while the resumed session is busy.
+func (s *Scheduler) CreateOneShotAt(fireAt time.Time, prompt string, queueIfBusy bool) (Job, error) {
+	if strings.TrimSpace(prompt) == "" {
+		return Job{}, fmt.Errorf("one-shot prompt is required")
+	}
+	if fireAt.IsZero() {
+		return Job{}, fmt.Errorf("one-shot fire time is required")
+	}
+
+	now := time.Now()
+	s.mu.Lock()
+	s.nextID++
+	id := fmt.Sprintf("cron-%d-%s", s.nextID, cronIDSuffix())
+	job := &Job{
+		ID:          id,
+		Prompt:      prompt,
+		Recurring:   false,
+		QueueIfBusy: queueIfBusy,
+		CreatedAt:   now,
+		NextFire:    fireAt,
+		Persist:     true,
+	}
+	s.jobs[id] = job
+	s.knownIDs[id] = true
+	s.mu.Unlock()
+
+	s.scheduleJob(job)
+	if err := s.save(); err != nil {
+		s.mu.Lock()
+		if timer, ok := s.timers[id]; ok {
+			timer.Stop()
+			delete(s.timers, id)
+		}
+		delete(s.jobs, id)
+		s.mu.Unlock()
+		debug.Log("cron", "CreateOneShotAt: failed to persist job %s: %v", id, err)
+		return Job{}, err
+	}
+
+	debug.Log("cron", "CreateOneShotAt: added durable one-shot %s (fires %s)", id, fireAt.Format(time.RFC3339))
+	return job.Snapshot(), nil
 }
 
 // CreateAcknowledgedFar behaves like Create but lets the caller explicitly
@@ -734,8 +839,16 @@ func (s *Scheduler) fireJob(job *Job, gen uint64) {
 		job.NextFire = next
 		s.scheduleJobLocked(job)
 	} else {
+		persistRemoval := job.Persist
 		delete(s.jobs, job.ID)
 		delete(s.timers, job.ID)
+		if persistRemoval {
+			s.mu.Unlock()
+			if err := s.save(); err != nil {
+				debug.Log("cron", "failed to persist removal of one-shot job %s: %v", job.ID, err)
+			}
+			return
+		}
 	}
 	s.mu.Unlock()
 }
