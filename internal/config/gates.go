@@ -165,7 +165,7 @@ func (c *Config) ValidateMergeGateConfig() error {
 func MatchMergeGateCommand(command string, patterns []string) (prNumber int, matched bool) {
 	for _, unit := range splitCommandUnits(command) {
 		fields := strings.Fields(unit)
-		fields = stripEnvAssignments(fields)
+		fields = stripCommandPrefixes(fields)
 		if len(fields) == 0 {
 			continue
 		}
@@ -193,19 +193,47 @@ func MatchMergeGateCommand(command string, patterns []string) (prNumber int, mat
 	return 0, false
 }
 
-// stripEnvAssignments drops leading VAR=value tokens from a command
-// unit (#5411): in `GH_TOKEN=x gh pr merge 5356` the assignment prefixes a
-// REAL gh invocation, so the gated action must still match. An assignment
-// token contains '=' and does not start with '-' (which keeps flag forms
-// like --match-head-commit=sha untouched); stripping stops at the first
-// non-assignment token, so `echo FOO=1` keeps its echo head and still does
-// not match.
-func stripEnvAssignments(fields []string) []string {
+// stripCommandPrefixes drops leading transparent prefixes from a command
+// unit before prefix matching (#5411 assignments, #5418 wrapper commands):
+//
+//	VAR=value tokens      - FOO=1 gh pr merge 5356 heads with gh
+//	wrapper command tokens - sudo/nohup/env/xargs/timeout prefix a REAL
+//	                        invocation, mirroring the read-only classifier's
+//	                        sudo/nohup handling in internal/agent (#5347)
+//	env FOO=1 gh ...      - env accepts further assignments before the
+//	                        command, so stripping alternates between the
+//	                        two forms until a real command head remains
+//
+// An assignment token contains '=' and does not start with '-' (flag forms
+// like --match-head-commit=sha are never stripped); a wrapper token must be
+// exactly one of the known names (no path arguments). Stripping stops at the
+// first token that is neither, so `echo FOO=1` keeps its echo head and
+// `timeout 30 gh ...` keeps its 30 - the digits are a selector-shaped token,
+// not a wrapper, which errs on the non-matching side. xargs/timeout variants
+// with arguments are therefore only partially stripped by design: the bare
+// forms gate, the argument forms stay visible to the manual review path.
+func stripCommandPrefixes(fields []string) []string {
 	i := 0
-	for i < len(fields) && strings.Contains(fields[i], "=") && !strings.HasPrefix(fields[i], "-") {
-		i++
+	for i < len(fields) {
+		if tok := fields[i]; isEnvAssignmentToken(tok) || isWrapperPrefixToken(tok) {
+			i++
+			continue
+		}
+		break
 	}
 	return fields[i:]
+}
+
+func isEnvAssignmentToken(tok string) bool {
+	return strings.Contains(tok, "=") && !strings.HasPrefix(tok, "-")
+}
+
+func isWrapperPrefixToken(tok string) bool {
+	switch tok {
+	case "sudo", "nohup", "env", "xargs", "timeout":
+		return true
+	}
+	return false
 }
 
 // splitCommandUnits splits a (possibly compound) shell command into its
