@@ -188,6 +188,7 @@ func (s *Scheduler) Load() {
 		return ss.Jobs[i].CreatedAt < ss.Jobs[j].CreatedAt
 	})
 
+	expiredFired := 0
 	for _, jj := range ss.Jobs {
 		if !jj.Recurring {
 			// Ordinary one-shots never persisted: skip silently. Durable
@@ -201,7 +202,21 @@ func (s *Scheduler) Load() {
 				continue
 			}
 			if !time.Now().Before(fireAt) {
-				debug.Log("cron", "Load: dropped expired persisted one-shot %s (was due %s)", jj.ID, fireAt.Format(time.RFC3339))
+				// The durable one-shot expired while the process was down (e.g. a
+				// restart-resume nudge whose 3-minute window elapsed during a long
+				// downtime). Its intent ("continue the prior task") is still
+				// valid for the session that just resumed, so deliver the prompt
+				// once now instead of silently dropping it (#5428). The store
+				// rewrite below prunes the entry so it cannot re-fire.
+				s.enqueue(jj.Prompt, jj.QueueIfBusy)
+				expiredFired++
+				// Mark the ID as known so the merge in save() treats its
+				// on-disk entry as intentionally absent and prunes it instead
+				// of resurrecting it (knownIDs = "seen, deliberately gone").
+				s.mu.Lock()
+				s.knownIDs[jj.ID] = true
+				s.mu.Unlock()
+				debug.Log("cron", "Load: delivered expired persisted one-shot %s (was due %s)", jj.ID, fireAt.Format(time.RFC3339))
 				continue
 			}
 			createdAt, _ := time.Parse(time.RFC3339, jj.CreatedAt)
@@ -279,6 +294,15 @@ func (s *Scheduler) Load() {
 	s.mu.Unlock()
 	if loadedCount > 0 {
 		debug.Log("cron", "Load: restored %d recurring cron jobs from %s", loadedCount, s.storePath)
+	}
+	if expiredFired > 0 {
+		// Rewrite the store without the delivered expired one-shots so a
+		// later restart cannot deliver them a second time.
+		if err := s.save(); err != nil {
+			debug.Log("cron", "Load: delivered %d expired one-shot(s) at resume but failed to prune store: %v", expiredFired, err)
+		} else {
+			debug.Log("cron", "Load: delivered %d expired one-shot(s) at resume; pruned from store", expiredFired)
+		}
 	}
 }
 

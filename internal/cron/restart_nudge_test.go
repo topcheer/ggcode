@@ -2,8 +2,10 @@ package cron
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -110,37 +112,38 @@ func TestCreateOneShotAtPersistsPendingNudge(t *testing.T) {
 	}
 }
 
-// TestLoadDropsExpiredPersistedOneShot pins that a nudge whose fire time
-// passed during downtime is dropped on Load instead of firing stale or
-// resurrecting forever.
+// TestLoadDropsExpiredPersistedOneShot pins the #5428 contract for a
+// persisted entry that already elapsed on disk: Load delivers it exactly
+// once (never adopted, never resurrecting forever). The store is written
+// directly so the test does not race the creating scheduler's immediate
+// fire/prune (the CI flip that motivated this rewrite).
 func TestLoadDropsExpiredPersistedOneShot(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "cron.json")
-	fired := make(chan string, 1)
-	s := NewScheduler(func(prompt string, _ bool) { fired <- prompt }, store)
-
-	past := time.Now().Add(-time.Minute)
-	if _, err := s.CreateOneShotAt(past, "stale", true); err != nil {
-		t.Fatalf("CreateOneShotAt: %v", err)
-	}
-	// The fire already elapsed: drain any immediate fire from the creating
-	// scheduler, then rebuild from disk and confirm no stale refire.
-	select {
-	case p := <-fired:
-		if p != "stale" {
-			t.Errorf("unexpected prompt %q", p)
-		}
-	case <-time.After(2 * time.Second):
-		// acceptable: creating scheduler may or may not fire before Stop
+	past := time.Now().Add(-time.Minute).Format(time.RFC3339)
+	body := fmt.Sprintf(`{"jobs":[{"id":"restart-resume-nudge","prompt":"stale","recurring":false,"queue_if_busy":true,"persist":true,"next_fire":%q,"created_at":%q}]}`, past, past)
+	if err := os.WriteFile(store, []byte(body), 0o644); err != nil {
+		t.Fatalf("write store: %v", err)
 	}
 
+	fired := make(chan string, 2)
 	s2 := NewScheduler(func(prompt string, _ bool) { fired <- prompt }, store)
+	defer s2.Shutdown()
 	s2.Load()
 	if jobs := s2.List(); len(jobs) != 0 {
 		t.Errorf("expired nudge must not be adopted, got %d jobs", len(jobs))
 	}
 	select {
 	case p := <-fired:
-		t.Errorf("stale nudge fired after Load: %q", p)
+		if p != "stale" {
+			t.Errorf("unexpected delivered prompt %q", p)
+		}
+	default:
+		t.Error("expired nudge must be delivered once at Load (#5428)")
+	}
+	// And exactly once: nothing further.
+	select {
+	case p := <-fired:
+		t.Errorf("nudge delivered more than once after Load: %q", p)
 	default:
 	}
 }
@@ -225,4 +228,44 @@ func TestCreateOneShotWithIDReplacesPendingNudge(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("want exactly 1 persisted nudge entry after double arm, got %d", n)
 	}
+}
+
+// TestLoadDeliversExpiredNudgeOnce pins the #5428 contract: a durable resume
+// nudge that expired while the process was down is delivered exactly once at
+// Load and is pruned from the store so a later restart cannot deliver it
+// again. The store is written directly (no creating scheduler) so the test is
+// deterministic.
+func TestLoadDeliversExpiredNudgeOnce(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "cron.json")
+	past := time.Now().Add(-time.Minute).Format(time.RFC3339)
+	body := fmt.Sprintf(`{"jobs":[{"id":"restart-resume-nudge","prompt":"继续进行之前的任务","recurring":false,"queue_if_busy":true,"persist":true,"next_fire":%q,"created_at":%q}]}`, past, past)
+	if err := os.WriteFile(store, []byte(body), 0o644); err != nil {
+		t.Fatalf("write store: %v", err)
+	}
+
+	var mu sync.Mutex
+	var got []string
+	s := NewScheduler(func(prompt string, queueIfBusy bool) {
+		mu.Lock()
+		got = append(got, prompt)
+		mu.Unlock()
+		if !queueIfBusy {
+			t.Errorf("expired nudge delivery must keep queue_if_busy=true")
+		}
+	}, store)
+	defer s.Shutdown()
+	s.Load()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0] != "继续进行之前的任务" {
+		t.Fatalf("want exactly 1 delivered expired nudge, got %d: %q", len(got), got)
+	}
+
+	// Store must be pruned: a second Load delivers nothing.
+	s2 := NewScheduler(func(prompt string, _ bool) {
+		t.Errorf("second Load must not re-deliver the expired nudge, got %q", prompt)
+	}, store)
+	defer s2.Shutdown()
+	s2.Load()
 }
