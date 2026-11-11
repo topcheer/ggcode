@@ -96,6 +96,22 @@ ensure_appstore_version() { # $1=APP_ID $2=VERSION $3=PLATFORM -> echoes AV_ID
     fi
     break
   done
+  # Layer 7 (run 43017322725 + live ASC intel): a DEVELOPER_REJECTED (or
+  # PREPARE_FOR_SUBMISSION) version still occupies the single editable slot
+  # and blocks creation with 409 - but the slot version is itself editable.
+  # Rename it in place to the target version instead of failing.
+  if [[ "${code:-}" == "409" ]]; then
+    refresh_jwt_if_needed
+    vs=$(asc "-" GET "/v1/apps/${app_id}/appStoreVersions?limit=50")
+    sid=$(echo "$vs" | jq -r '[.data[] | select(.attributes.appStoreState == "DEVELOPER_REJECTED" or .attributes.appStoreState == "PREPARE_FOR_SUBMISSION")][0].id // empty')
+    if [[ -n "$sid" ]]; then
+      echo "editable slot occupied - renaming slot version ${sid} to ${ver} in place" >&2
+      avc=$(asc "-" PATCH "/v1/appStoreVersions/${sid}" '{"data":{"type":"appStoreVersions","id":"'"${sid}"'","attributes":{"versionString":"'"${ver}"'"}}}')
+      vid=$(echo "$avc" | jq -r '.data.id // empty')
+      if [[ -n "$vid" ]]; then echo "$vid"; return 0; fi
+      code=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
+    fi
+  fi
   echo "::error::could not create appStoreVersion ${ver} (HTTP ${code:-none}): ${avc:0:400}" >&2
   return 1
 }
@@ -195,7 +211,19 @@ ${two}"
   [[ $rc -eq 0 && "$out" == "vNEW" ]] || { echo "F5 FAIL rc=$rc out=$out err=$err"; fails=$((fails+1)); }
   LEFT=$(cat "$ASC_STUB_FILE"); [[ -z "$LEFT" ]] || { echo "F5 unconsumed: $LEFT"; fails=$((fails+1)); }
 
-  if (( fails == 0 )); then echo "self-test: ALL PASS (F1,F2,F2b,F3,F4,F5)"; return 0; fi
+
+  # F7: create 409 + editable DEVELOPER_REJECTED slot -> rename in place
+  V_SLOT='{"data":[{"id":"vOTHER","attributes":{"versionString":"1.3.200","appStoreState":"READY_FOR_SALE"}},{"id":"vOLD","attributes":{"versionString":"1.3.276","appStoreState":"DEVELOPER_REJECTED"}}]}'
+  ASC_CALLS="200|GET /v1/apps/APP/appStoreVersions?limit=50|${V_SLOT}
+409|POST /v1/appStoreVersions|${ERR409}
+409|POST /v1/appStoreVersions|${ERR409}
+200|GET /v1/apps/APP/appStoreVersions?limit=50|${V_SLOT}
+200|PATCH /v1/appStoreVersions/vOLD|{\"data\":{\"id\":\"vOLD\"}}"
+  run_ensure APP 1.3.279 MAC_OS
+  [[ $rc -eq 0 && "$out" == "vOLD" ]] || { echo "F7 FAIL rc=$rc out=$out err=$err"; fails=$((fails+1)); }
+  LEFT=$(cat "$ASC_STUB_FILE"); [[ -z "$LEFT" ]] || { echo "F7: $LEFT"; fails=$((fails+1)); }
+
+  if (( fails == 0 )); then echo "self-test: ALL PASS (F1,F2,F2b,F3,F4,F5,F7)"; return 0; fi
   echo "self-test: ${fails} failure(s)" >&2; return 1
 }
 
@@ -382,8 +410,8 @@ done
 
 
 # ---------- fully automated review submission ----------
-# Legacy appStoreVersionSubmissions API (the reviewSubmissions resource has
-# NO cancel endpoint, and filter[appStoreState]=PREPARE_FOR_SUBMISSION is
+# Legacy appStoreVersionSubmissions API (the reviewSubmissions resource
+# gained its own DELETE later - see the draft cleanup below; historically
 # rejected with HTTP 400 on the versions endpoint - run 42355690984 log).
 # Flow: locate version -> developer-reject if WAITING_FOR_REVIEW/IN_REVIEW
 # -> generic What's New -> bind the fresh build -> submit for review.
@@ -483,6 +511,17 @@ refresh_jwt_if_needed
 # the same key in run 42355690984. The 403 is the key's permission matrix
 # on the legacy resource, not a state lock - so submit goes through the
 # new API; only the reject path uses the legacy DELETE.
+# Layer 6 (run 43017322725 + user observation): a leftover UNRESOLVED_ISSUES
+# draft submission (created by an interrupted run, no build attached) locks
+# the app against new-version creation (409 RELATIONSHIP.INVALID on the app
+# relationship). reviewSubmissions DOES have a DELETE endpoint now - clean
+# stale drafts before creating a fresh submission.
+refresh_jwt_if_needed
+DRAFTS=$(asc "-" GET "/v1/apps/${APP_ID}/reviewSubmissions?limit=20")
+for DSID in $(echo "$DRAFTS" | jq -r '.data[] | select(.attributes.state == "UNRESOLVED_ISSUES") | .id'); do
+  asc "delete-draft-submission" DELETE "/v1/reviewSubmissions/${DSID}" > /dev/null
+  echo "stale draft submission ${DSID} deleted"
+done
 refresh_jwt_if_needed
 NRS=$(asc "create-reviewSubmission" POST "/v1/reviewSubmissions" '{"data":{"type":"reviewSubmissions","attributes":{"platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
 NRS_ID=$(echo "$NRS" | jq -r '.data.id // empty')
