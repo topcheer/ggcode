@@ -30,6 +30,7 @@ import (
 	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/runfile"
@@ -1123,6 +1124,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	}, swarmAgentFactory, swarmToolBuilder)
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
 	swarmMgr.SetUsageHandler(repl.SessionUsageHandler())
+	// #5464: teammates must be permission-gated like the primary agent
+	// (ag.SetPermissionPolicy above) - thread the active policy through.
+	swarmMgr.SetPermissionPolicyGetter(func() permission.PermissionPolicy {
+		return policy
+	})
 	swarmMgr.SetSystemPromptBuilder(func(name, teamName, wd string) string {
 		remoteAgentsInfo := ""
 		if a2aRegistry != nil {
