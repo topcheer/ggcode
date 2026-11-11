@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/cron"
 )
 
 type fakeRestartRequester struct {
@@ -108,5 +111,47 @@ func TestRestartToolSchema(t *testing.T) {
 	}
 	if !found {
 		t.Error("reason not in required list")
+	}
+}
+
+// fakeResumeNudger captures the nudge arming call so tests can pin the
+// stable-ID contract on the tool side (#5425).
+type fakeResumeNudger struct {
+	id    string
+	fire  time.Time
+	prom  string
+	queue bool
+}
+
+func (f *fakeResumeNudger) CreateOneShotWithID(id string, fireAt time.Time, prompt string, queueIfBusy bool) (cron.Job, error) {
+	f.id, f.fire, f.prom, f.queue = id, fireAt, prompt, queueIfBusy
+	return cron.Job{ID: id, NextFire: fireAt, Persist: true}, nil
+}
+
+// TestRestartToolArmsStableNudgeID pins that the restart tool arms the resume
+// nudge under the stable RestartResumeNudgeID (replace semantics upstream),
+// so a double restart can never stack duplicate nudges.
+func TestRestartToolArmsStableNudgeID(t *testing.T) {
+	req := &fakeRestartRequester{}
+	nudger := &fakeResumeNudger{}
+	rt := &RestartTool{Requester: req, Nudger: nudger}
+	res, err := rt.Execute(context.Background(), json.RawMessage(`{"reason":"binary updated"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Content)
+	}
+	if nudger.id != cron.RestartResumeNudgeID {
+		t.Errorf("nudge must arm under stable ID %q, got %q", cron.RestartResumeNudgeID, nudger.id)
+	}
+	if !nudger.queue {
+		t.Error("nudge must be queue_if_busy=true")
+	}
+	if nudger.prom != restartResumeNudgePrompt {
+		t.Errorf("nudge prompt = %q, want %q", nudger.prom, restartResumeNudgePrompt)
+	}
+	if d := nudger.fire.Sub(time.Now()); d < 2*time.Minute || d > 4*time.Minute {
+		t.Errorf("nudge fire time should be ~3min out, got %s", d)
 	}
 }
