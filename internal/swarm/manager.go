@@ -10,6 +10,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/task"
@@ -23,6 +24,14 @@ type AgentRunner interface {
 
 type usageHandlerSetter interface {
 	SetUsageHandler(func(provider.TokenUsage))
+}
+
+// permissionPolicySetter is satisfied by agent runners whose tool
+// invocations are permission-gated (AgentRunner wrappers around the main
+// Agent). #5464: teammates previously ran tools unguarded while the
+// primary agent was permission-gated.
+type permissionPolicySetter interface {
+	SetPermissionPolicy(permission.PermissionPolicy)
 }
 
 type ToolBuilder func(allowedTools []string) interface{}
@@ -41,6 +50,11 @@ type Manager struct {
 	toolBuilder  ToolBuilder
 	onUpdate     func(Event)
 	onUsage      func(provider.TokenUsage)
+
+	// policyGetter supplies the active PermissionPolicy for newly spawned
+	// teammates (#5464). Nil = no wiring (teammates keep the factory
+	// default); wired call sites (CLI + desktop) always provide it.
+	policyGetter func() permission.PermissionPolicy
 
 	results map[string]string
 
@@ -102,6 +116,15 @@ func (m *Manager) SetUsageHandler(fn func(provider.TokenUsage)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onUsage = fn
+}
+
+// SetPermissionPolicyGetter wires the permission-policy source used to
+// gate tools on teammates spawned afterwards (#5464). Mirrors the main
+// agent path (Agent.SetPermissionPolicy).
+func (m *Manager) SetPermissionPolicyGetter(fn func() permission.PermissionPolicy) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.policyGetter = fn
 }
 
 func (m *Manager) RootContext() context.Context {
@@ -402,6 +425,19 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 		if onUsage != nil {
 			if usageAware, ok := agent.(usageHandlerSetter); ok {
 				usageAware.SetUsageHandler(onUsage)
+			}
+		}
+		// #5464: gate teammate tools with the active permission policy,
+		// same as the primary agent path. No-op when no getter is wired
+		// (tests / headless runners) or the runner has no policy setter.
+		m.mu.Lock()
+		policyGetter := m.policyGetter
+		m.mu.Unlock()
+		if policyGetter != nil {
+			if pol := policyGetter(); pol != nil {
+				if polSetter, ok := agent.(permissionPolicySetter); ok {
+					polSetter.SetPermissionPolicy(pol)
+				}
 			}
 		}
 

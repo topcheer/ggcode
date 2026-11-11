@@ -1532,6 +1532,11 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		return cloned
 	}
 	swarms := agentruntime.NewSwarmManager(b.cfg.Swarm, p, b.registry, nil, swarmFactory, toolBuilder)
+	// #5464: teammates must be permission-gated like the primary agent
+	// (L1315 policy above) - thread the active policy through.
+	swarms.SetPermissionPolicyGetter(func() permission.PermissionPolicy {
+		return agentruntime.BuildInteractivePermissionPolicy(b.cfg, b.workingDir, false)
+	})
 	b.mu.Lock()
 	b.swarmMgr = swarms
 	b.mu.Unlock()
