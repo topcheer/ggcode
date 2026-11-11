@@ -23,6 +23,7 @@ func newAuditCmd() *cobra.Command {
 		session string
 		pathArg string
 		files   string
+		strict  bool
 	)
 	reportCmd := &cobra.Command{
 		Use:   "report",
@@ -58,12 +59,16 @@ func newAuditCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprint(cmd.OutOrStdout(), d.Render(changed))
+			if strict && !d.VerifyOK {
+				return fmt.Errorf("audit chain verification failed (see TAMPER EVIDENCE above); exit 1")
+			}
 			return nil
 		},
 	}
 	reportCmd.Flags().StringVar(&session, "session", "", "restrict the report to one session ID (default: all sessions)")
 	reportCmd.Flags().StringVar(&pathArg, "path", "", "audit ledger JSONL path (default $"+auditCmdEnv+")")
 	reportCmd.Flags().StringVar(&files, "files", "", "comma-separated changed files, used for the blast-radius review hint")
+	reportCmd.Flags().BoolVar(&strict, "strict", false, "exit non-zero when the ledger fails chain verification (CI gate)")
 
 	cmd.AddCommand(reportCmd)
 	return cmd
