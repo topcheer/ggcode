@@ -155,7 +155,7 @@ root.go:
 
 ### Lifecycle
 
-1. `teammate_spawn` → `Manager.SpawnTeammate()` → creates agent + starts `runTeammateLoop` goroutine
+1. `teammate_spawn` → `Manager.SpawnTeammate()` → creates agent + starts `runTeammateLoop` goroutine; the agent is gated with the active permission policy, same as the primary agent (`SetPermissionPolicy`, #5464) — tool calls inside a teammate go through the same policy checks
 2. Teammate enters idle loop, polls team task board periodically
 3. On task/message received → `handleMessage()` → `executeTask()` → `agent.RunStream()`
 4. Output collected in `strings.Builder`, stored as `LastResult`
