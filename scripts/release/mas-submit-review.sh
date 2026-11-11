@@ -33,13 +33,176 @@ while [[ $# -gt 0 ]]; do
     --build) BUILD_VERSION="$2"; shift 2;;
     --app-id) APP_ID_ARG="$2"; shift 2;;
     --no-submit) NO_SUBMIT=1; shift;;
+    --self-test) SELFTEST=1; shift;;
     *) echo "unknown flag: $1" >&2; exit 2;;
   esac
 done
 
-[[ -n "$BUNDLE_ID" && -n "$VERSION" && -n "$KEY_PATH" && -n "$KEY_ID" && -n "$ISSUER" ]] || {
+[[ "${SELFTEST:-0}" == "1" || ( -n "$BUNDLE_ID" && -n "$VERSION" && -n "$KEY_PATH" && -n "$KEY_ID" && -n "$ISSUER" ) ]] || {
   echo "missing required flags" >&2; exit 2; }
-echo "config: bundle=$BUNDLE_ID version=$VERSION build=${BUILD_VERSION:-<latest>} platform=$PLATFORM app_id_hint=${APP_ID_ARG:-none} issuer=$ISSUER key_id=$KEY_ID"
+[[ "${SELFTEST:-0}" != "1" ]] && echo "config: bundle=$BUNDLE_ID version=$VERSION build=${BUILD_VERSION:-<latest>} platform=$PLATFORM app_id_hint=${APP_ID_ARG:-none} issuer=$ISSUER key_id=$KEY_ID"
+
+# ---------- ensure the appStoreVersion exists (single-slot domain model) ----
+# ASC domain invariants (user-confirmed):
+#   * AT MOST ONE version of an app occupies the review slot at a time.
+#   * WAITING_FOR_REVIEW can be developer-rejected (remove its submission).
+#   * IN_REVIEW CANNOT be developer-rejected - Apple is actively reviewing;
+#     the only option is to wait and re-run after the review completes.
+# Replaces the earlier (wrong) "reject ALL blockers" model - multiple
+# in-review versions cannot exist.
+ensure_appstore_version() { # $1=APP_ID $2=VERSION $3=PLATFORM -> echoes AV_ID
+  local app_id="$1" ver="$2" plat="$3"
+  local vs st id sver state sub sid2 vid avc code w attempt
+  refresh_jwt_if_needed
+  vs=$(asc "-" GET "/v1/apps/${app_id}/appStoreVersions?limit=50")
+  st=$(echo "$vs" | jq -c '[.data[] | select(.attributes.appStoreState == "WAITING_FOR_REVIEW" or .attributes.appStoreState == "IN_REVIEW")][0] // empty')
+  if [[ "$st" != "" && "$st" != "null" ]]; then
+    id=$(echo "$st" | jq -r '.id')
+    sver=$(echo "$st" | jq -r '.attributes.versionString // "?"')
+    state=$(echo "$st" | jq -r '.attributes.appStoreState')
+    if [[ "$state" == "IN_REVIEW" ]]; then
+      echo "::error::version ${sver} is IN_REVIEW (Apple actively reviewing); developer-reject is not allowed - wait for the review to complete, then re-run" >&2
+      return 1
+    fi
+    echo "version ${sver} occupies the review slot (WAITING_FOR_REVIEW) - developer-rejecting" >&2
+    sub=$(asc "-" GET "/v1/appStoreVersions/${id}/appStoreVersionSubmission")
+    sid2=$(echo "$sub" | jq -r '.data.id // empty')
+    if [[ -z "$sid2" ]]; then
+      echo "::error::WAITING_FOR_REVIEW version ${sver} exposes NO legacy appStoreVersionSubmission (likely submitted via the newer reviewSubmissions path, run 43009773754 evidence) - automation cannot cancel it. Resolve in App Store Connect (remove 1.3.276 from review), then re-run this workflow." >&2
+      return 1
+    fi
+    asc "developer-reject-blocker" DELETE "/v1/appStoreVersionSubmissions/${sid2}" > /dev/null
+    for w in $(seq 1 30); do
+      sleep "${MAS_POLL_SLEEP:-10}"
+      refresh_jwt_if_needed
+      vs=$(asc "-" GET "/v1/apps/${app_id}/appStoreVersions?limit=50")
+      state=$(echo "$vs" | jq -r "[.data[] | select(.id == \"${id}\")][0].attributes.appStoreState // empty")
+      [[ "$state" != "WAITING_FOR_REVIEW" && "$state" != "IN_REVIEW" ]] && break
+    done
+    if [[ "$state" == "WAITING_FOR_REVIEW" || "$state" == "IN_REVIEW" ]]; then
+      echo "::error::blocker ${sver} still ${state} 5min after developer-reject - investigate in App Store Connect" >&2
+      return 1
+    fi
+    echo "blocker ${sver} now ${state}; slot free" >&2
+  fi
+  for attempt in 1 2; do
+    avc=$(asc "-" POST "/v1/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${ver}"'","platform":"'"${plat}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${app_id}"'"}}}}}')
+    vid=$(echo "$avc" | jq -r '.data.id // empty')
+    if [[ -n "$vid" ]]; then echo "$vid"; return 0; fi
+    code=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
+    if [[ "$code" == "409" && "$attempt" -eq 1 ]]; then
+      echo "create-version 409 (slot state settling after reject) - one retry in ${MAS_RETRY_SLEEP:-30}s" >&2
+      sleep "${MAS_RETRY_SLEEP:-30}"; refresh_jwt_if_needed; continue
+    fi
+    break
+  done
+  echo "::error::could not create appStoreVersion ${ver} (HTTP ${code:-none}): ${avc:0:400}" >&2
+  return 1
+}
+
+# ---------- local self-test (--self-test): strict fixture verification ------
+# Sequential-consuming ASC stub: every scripted call must be consumed in the
+# exact order the logic issues it; surplus/missing calls fail the case. This
+# is the mandated local verification path for any change to the flow above.
+mas_selftest() {
+  local fails=0 rc out err OF EF
+  MAS_POLL_SLEEP=0 MAS_RETRY_SLEEP=0
+  ASC_STUB_FILE=$(mktemp)
+  refresh_jwt_if_needed() { :; }
+  asc() {
+    # File-backed fixture cursor: every call from ensure_appstore_version runs
+    # inside command substitution $(...), so in-memory ASC_CALLS would never
+    # persist across calls - the FILE is the shared state.
+    local cf="${ASC_STUB_FILE:?}" line code rest resp want
+    line=$(head -1 "$cf" 2>/dev/null || true)
+    printf '%s\n' "$(tail -n +2 "$cf" 2>/dev/null)" > "$cf"
+    if [[ -z "$line" ]]; then
+      echo "STUB-ERROR: unexpected extra asc() call: $1 $2 $3" >&2
+      printf '%s' "500" > /tmp/asc-last-code
+      printf '%s' '{"stub":"exhausted"}'
+      return 0
+    fi
+    code="${line%%|*}"; rest="${line#*|}"; want="${rest%%|*}"; resp="${rest#*|}"
+    if [[ "$want" != "$2 $3" ]]; then
+      echo "STUB-ERROR: call drift: wanted [$want] got [$2 $3] (label $1)" >&2
+      fails=$((fails+1))
+    fi
+    printf '%s' "$code" > /tmp/asc-last-code
+    printf '%s' "$resp"
+    return 0
+  }
+  run_ensure() { # fixtures go through the FILE so $(...) subshells share state
+    printf '%s\n' "$ASC_CALLS" > "$ASC_STUB_FILE"
+    OF=$(mktemp); EF=$(mktemp)
+    if ensure_appstore_version "$1" "$2" "$3" >"$OF" 2>"$EF"; then rc=0; else rc=$?; fi
+    out=$(cat "$OF"); err=$(cat "$EF"); rm -f "$OF" "$EF"
+  }
+  V_CLEAN='{"data":[{"id":"vOTHER","attributes":{"versionString":"1.3.200","appStoreState":"READY_FOR_SALE"}}]}'
+  V_WFR='{"data":[{"id":"vOLD","attributes":{"versionString":"1.3.276","appStoreState":"WAITING_FOR_REVIEW"}}]}'
+  V_IN='{"data":[{"id":"vOLD","attributes":{"versionString":"1.3.276","appStoreState":"IN_REVIEW"}}]}'
+  V_REJ='{"data":[{"id":"vOLD","attributes":{"versionString":"1.3.276","appStoreState":"DEVELOPER_REJECTED"}}]}'
+  CREATED='{"data":{"id":"vNEW"}}'
+  ERR409='{"errors":[{"status":"409"}]}'
+
+  # F1: no blocker -> single create
+  ASC_CALLS="200|GET /v1/apps/APP/appStoreVersions?limit=50|${V_CLEAN}
+200|POST /v1/appStoreVersions|${CREATED}"
+  run_ensure APP 1.3.279 MAC_OS
+  [[ $rc -eq 0 && "$out" == "vNEW" ]] || { echo "F1 FAIL rc=$rc out=$out err=$err"; fails=$((fails+1)); }
+  LEFT=$(cat "$ASC_STUB_FILE"); [[ -z "$LEFT" ]] || { echo "F1 unconsumed: $LEFT"; fails=$((fails+1)); }
+
+  # F2: WAITING blocker WITH legacy submission -> reject, settle, create
+  ASC_CALLS="200|GET /v1/apps/APP/appStoreVersions?limit=50|${V_WFR}
+200|GET /v1/appStoreVersions/vOLD/appStoreVersionSubmission|{\"data\":{\"id\":\"sub1\"}}
+204|DELETE /v1/appStoreVersionSubmissions/sub1|
+200|GET /v1/apps/APP/appStoreVersions?limit=50|${V_REJ}
+200|POST /v1/appStoreVersions|${CREATED}"
+  run_ensure APP 1.3.279 MAC_OS
+  [[ $rc -eq 0 && "$out" == "vNEW" ]] || { echo "F2 FAIL rc=$rc out=$out err=$err"; fails=$((fails+1)); }
+  LEFT=$(cat "$ASC_STUB_FILE"); [[ -z "$LEFT" ]] || { echo "F2 unconsumed: $LEFT"; fails=$((fails+1)); }
+
+  # F2b: WAITING blocker WITHOUT legacy submission (real-ASC case, run 43009773754) -> actionable fail, no create
+  ASC_CALLS="200|GET /v1/apps/APP/appStoreVersions?limit=50|${V_WFR}
+200|GET /v1/appStoreVersions/vOLD/appStoreVersionSubmission|{\"data\":null}"
+  run_ensure APP 1.3.279 MAC_OS
+  [[ $rc -eq 1 ]] || { echo "F2b FAIL rc=$rc (must fail fast)"; fails=$((fails+1)); }
+  [[ "$err" == *"App Store Connect"* ]] || { echo "F2b FAIL error must be actionable: $err"; fails=$((fails+1)); }
+  LEFT=$(cat "$ASC_STUB_FILE"); [[ -z "$LEFT" ]] || { echo "F2b unconsumed: $LEFT"; fails=$((fails+1)); }
+
+  # F3: IN_REVIEW -> fail fast, zero further calls
+  ASC_CALLS="200|GET /v1/apps/APP/appStoreVersions?limit=50|${V_IN}"
+  run_ensure APP 1.3.279 MAC_OS
+  [[ $rc -eq 1 ]] || { echo "F3 FAIL rc=$rc (must fail fast)"; fails=$((fails+1)); }
+  [[ "$err" == *"IN_REVIEW"* ]] || { echo "F3 FAIL wrong message: $err"; fails=$((fails+1)); }
+  LEFT=$(cat "$ASC_STUB_FILE"); [[ -z "$LEFT" ]] || { echo "F3 unconsumed: $LEFT"; fails=$((fails+1)); }
+
+  # F4: reject accepted but state stuck -> bounded fail (2 poll fixtures)
+  local two; two="200|GET /v1/apps/APP/appStoreVersions?limit=50|${V_WFR}"
+  ASC_CALLS="200|GET /v1/apps/APP/appStoreVersions?limit=50|${V_WFR}
+200|GET /v1/appStoreVersions/vOLD/appStoreVersionSubmission|{\"data\":{\"id\":\"sub1\"}}
+204|DELETE /v1/appStoreVersionSubmissions/sub1|
+${two}
+${two}"
+  run_ensure APP 1.3.279 MAC_OS
+  [[ $rc -eq 1 ]] || { echo "F4 FAIL rc=$rc (stuck blocker must fail bounded)"; fails=$((fails+1)); }
+  LEFT=$(cat "$ASC_STUB_FILE"); [[ -z "$LEFT" ]] || { echo "F4 unconsumed (loop must exhaust polls): $LEFT"; fails=$((fails+1)); }
+
+  # F5: create 409 propagation -> exactly one retry, then success
+  ASC_CALLS="200|GET /v1/apps/APP/appStoreVersions?limit=50|${V_CLEAN}
+409|POST /v1/appStoreVersions|${ERR409}
+200|POST /v1/appStoreVersions|${CREATED}"
+  run_ensure APP 1.3.279 MAC_OS
+  [[ $rc -eq 0 && "$out" == "vNEW" ]] || { echo "F5 FAIL rc=$rc out=$out err=$err"; fails=$((fails+1)); }
+  LEFT=$(cat "$ASC_STUB_FILE"); [[ -z "$LEFT" ]] || { echo "F5 unconsumed: $LEFT"; fails=$((fails+1)); }
+
+  if (( fails == 0 )); then echo "self-test: ALL PASS (F1,F2,F2b,F3,F4,F5)"; return 0; fi
+  echo "self-test: ${fails} failure(s)" >&2; return 1
+}
+
+if [[ "${SELFTEST:-0}" == "1" ]]; then
+  mas_selftest
+  exit $?
+fi
 
 # ---------- JWT (ES256, the only scheme ASC accepts for API keys) ----------
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
@@ -252,64 +415,11 @@ if [[ "$AV_STATE" == "WAITING_FOR_REVIEW" || "$AV_STATE" == "IN_REVIEW" ]]; then
   fi
 fi
 
-# create the version if it does not exist yet
+# create the version if it does not exist yet (single-slot domain model,
+# see ensure_appstore_version above; --self-test verifies the full logic)
 if [[ -z "$AV_ID" ]]; then
-  # Layer guard (runs 43003971586/43008544461: HTTP 409 "You cannot create a
-  # new version of the App in the current state"): ANY older version stuck in
-  # WAITING_FOR_REVIEW/IN_REVIEW blocks new-version creation, and rejection
-  # state takes time to propagate. Reject ALL blocking versions (43008544461
-  # rejected only the first and 409 persisted), then wait for a clean slate.
-  reject_all_blockers() {
-    local rounds=0 bvid
-    while (( rounds < 6 )); do
-      refresh_jwt_if_needed
-      local VS; VS=$(asc "-" GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
-      local BLK; BLK=$(echo "$VS" | jq -c '[.data[] | select(.attributes.appStoreState == "WAITING_FOR_REVIEW" or .attributes.appStoreState == "IN_REVIEW")]')
-      local N; N=$(echo "$BLK" | jq 'length')
-      (( N == 0 )) && return 0
-      for row in $(echo "$BLK" | jq -r '.[] | @base64'); do
-        local B; B=$(echo "$row" | base64 -d)
-        local BID BVER
-        BID=$(echo "$B" | jq -r '.id'); BVER=$(echo "$B" | jq -r '.attributes.versionString // "?"')
-        echo "version ${BVER} (${BID}) is in review and blocks new-version creation - developer-rejecting"
-        local SUB; SUB=$(asc "-" GET "/v1/appStoreVersions/${BID}/appStoreVersionSubmission")
-        local SID; SID=$(echo "$SUB" | jq -r '.data.id // empty')
-        if [[ -n "$SID" ]]; then
-          asc "reject-blocker" DELETE "/v1/appStoreVersionSubmissions/${SID}" > /dev/null
-          echo "submission ${SID} removed (Developer Rejected)"
-        else
-          echo "::warning::blocking version ${BVER} has no live submission"
-        fi
-      done
-      rounds=$((rounds+1)); sleep 20
-    done
-    echo "::warning::in-review versions may still block creation after 6 reject rounds"
-  }
-  reject_all_blockers
-
   echo "version ${VERSION} not found on ASC - creating"
-  refresh_jwt_if_needed
-  # Run 42999275069 evidence: POST /v1/apps/{id}/appStoreVersions is 405
-  # METHOD_NOT_ALLOWED - that nested path is GET-only. appStoreVersions
-  # createInstance is a TOP-LEVEL POST /v1/appStoreVersions with a required
-  # app relationship in the body (ASC schema: relationships.app required).
-  # Run 43008544461 evidence: 409 persists briefly AFTER a successful reject
-  # (state propagation) - retry the create with backoff instead of failing.
-  # (#5440 made this call soft ("-" label) so a 409 returns instead of
-  # exiting, keeping the retry branch reachable.)
-  AVC=""
-  for attempt in 1 2 3 4 5 6 7 8; do
-    AVC=$(asc "-" POST "/v1/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
-    AV_ID=$(echo "$AVC" | jq -r '.data.id // empty')
-    [[ -n "$AV_ID" ]] && break
-    CODE=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
-    if [[ "$CODE" == "409" && $attempt -lt 8 ]]; then
-      echo "create-version 409 (attempt ${attempt}/8) - state still settling, retrying in 20s"
-      sleep 20; refresh_jwt_if_needed; continue
-    fi
-    break
-  done
-  [[ -n "$AV_ID" ]] || { echo "::error::could not create appStoreVersion ${VERSION}: ${AVC:0:400}" >&2; exit 1; }
+  AV_ID=$(ensure_appstore_version "$APP_ID" "$VERSION" "$PLATFORM") || exit 1
 fi
 
 # generic What's New across all localizations (MAS_WHATS_NEW overrides)
