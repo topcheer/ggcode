@@ -134,7 +134,16 @@ asc() { # asc_fatal "step-name" METHOD PATH [JSON_BODY] — non-2xx = ::error:: 
 # ---------- locate the app ----------
 refresh_jwt_if_needed
 APP_JSON=$(asc "-" GET "/v1/apps?filter%5BbundleId%5D=${BUNDLE_ID}")
+APP_COUNT=$(echo "$APP_JSON" | jq '.data | length' 2>/dev/null || echo 0)
 APP_ID=$(echo "$APP_JSON" | jq -r '.data[0].id // empty')
+if [[ "$APP_COUNT" -gt 1 && -n "$APP_ID_ARG" ]] && echo "$APP_JSON" | jq -e --arg id "$APP_ID_ARG" '.data[] | select(.id == $id)' >/dev/null 2>&1; then
+  # Multiple apps share this bundleId (legacy + current, #5431): .data[0]
+  # order is not stable and run 42988168677 polled the legacy app for 40 min
+  # while the upload (routed by bundle-id) landed on the real one. The
+  # workflow pins the verified app id - honor it when it is among matches.
+  APP_ID="$APP_ID_ARG"
+  echo "bundleId lookup returned ${APP_COUNT} apps; pinned --app-id ${APP_ID}"
+fi
 if [[ -z "$APP_ID" ]]; then
   # Run 13 evidence: this failure was silent, and the fallback id pointed at a
   # nonexistent resource (build stayed VALID in TestFlight while poll said
@@ -162,15 +171,27 @@ for i in $(seq 1 "$((MAX_WAIT*2))"); do
   # builds-in-app relationship endpoint (HTTP 400 PARAMETER_ERROR.ILLEGAL,
   # one error per parameter) - the 401 chain previously masked this. Fetch a
   # page without filter/sort and match client-side instead.
-  B=$(asc "-" GET "/v1/apps/${APP_ID}/builds?limit=50")
-  if [[ -n "$BUILD_VERSION" ]]; then
-    MATCH=$(echo "$B" | jq -c "[.data[] | select(.attributes.version == \"${BUILD_VERSION}\")] | sort_by(.attributes.uploadedDate) | reverse | .[0]")
-  else
-    MATCH=$(echo "$B" | jq -c '.data | sort_by(.attributes.uploadedDate) | reverse | .[0]')
-  fi
+  # Paginate client-side: first page only truncated at limit=50 (run
+  # 42988168677 saw total=300 nextCursor=Mg and matched nothing, #5431).
+  # ASC rejects filter/sort on this endpoint (see run 42351262813), so walk
+  # meta.paging.next instead. Early-break once the build version matches.
+  PAGE_PATH="/v1/apps/${APP_ID}/builds?limit=50"
+  MATCH=""; N_BUILDS=0; PAGES=0
+  while [[ -n "$PAGE_PATH" && $PAGES -lt 12 ]]; do
+    B=$(asc "-" GET "$PAGE_PATH")
+    PAGES=$((PAGES+1))
+    N_BUILDS=$((N_BUILDS + $(echo "$B" | jq '.data | length' 2>/dev/null || echo 0)))
+    if [[ -n "$BUILD_VERSION" ]]; then
+      PAGE_MATCH=$(echo "$B" | jq -c "[.data[] | select(.attributes.version == \"${BUILD_VERSION}\")] | sort_by(.attributes.uploadedDate) | reverse | .[0] // empty" 2>/dev/null)
+      if [[ -n "$PAGE_MATCH" && "$PAGE_MATCH" != "null" ]]; then MATCH="$PAGE_MATCH"; fi
+    elif [[ $PAGES -eq 1 ]]; then
+      MATCH=$(echo "$B" | jq -c '.data | sort_by(.attributes.uploadedDate) | reverse | .[0] // empty' 2>/dev/null)
+    fi
+    [[ -n "$MATCH" ]] && break
+    PAGE_PATH=$(echo "$B" | jq -r '.links.next // empty' 2>/dev/null)
+  done
   STATE=$(echo "$MATCH" | jq -r '.attributes.processingState // empty' 2>/dev/null)
   BUILD_ID=$(echo "$MATCH" | jq -r '.id // empty' 2>/dev/null)
-  N_BUILDS=$(echo "$B" | jq -r '.data | length' 2>/dev/null)
   LAST_CODE=$(cat /tmp/asc-last-code 2>/dev/null || echo 000)
   if [[ "$LAST_CODE" == "401" ]]; then
     CONSEC_401=$((CONSEC_401 + 1))
