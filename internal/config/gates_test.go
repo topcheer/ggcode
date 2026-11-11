@@ -171,6 +171,33 @@ gates:
 // the unit that actually runs the merge/close action, quote-aware so
 // separators inside string arguments do not split units, and echo units
 // (plain or in a compound) never false-positive.
+// TestMatchMergeGateEnvPrefix pins #5411: leading VAR=value assignments
+// prefix real gh invocations and must be skipped before prefix matching,
+// while echo heads (with or without = in their args) never match.
+func TestMatchMergeGateEnvPrefix(t *testing.T) {
+	def := DefaultMergeGateCommands
+	cases := []struct {
+		cmd     string
+		wantPR  int
+		wantHit bool
+	}{
+		{"GH_TOKEN=x gh pr merge 5356", 5356, true},
+		{"A=1 B=2 gh pr close 42", 42, true},                 // stacked assignments
+		{"GH_TOKEN=x gh pr merge", 0, true},                  // env + selector-less
+		{"cd /d && GH_TOKEN=x gh pr merge 5356", 5356, true}, // env inside compound unit
+		{"echo FOO=1", 0, false},                             // = in an ARG, echo head
+		{"echo gh pr merge 5356", 0, false},                  // classic echo head
+		{"GH_TOKEN=x echo gh pr merge 5356", 0, false},       // env + echo head
+		{"--flag=1 gh pr merge 5356", 0, false},              // flag-shaped = token is not stripped
+	}
+	for _, tc := range cases {
+		pr, hit := MatchMergeGateCommand(tc.cmd, def)
+		if hit != tc.wantHit || (hit && pr != tc.wantPR) {
+			t.Errorf("MatchMergeGateCommand(%q) = %d,%v want %d,%v", tc.cmd, pr, hit, tc.wantPR, tc.wantHit)
+		}
+	}
+}
+
 func TestMatchMergeGateCompoundCommands(t *testing.T) {
 	def := DefaultMergeGateCommands
 	cases := []struct {
@@ -195,7 +222,9 @@ func TestMatchMergeGateCompoundCommands(t *testing.T) {
 		// escaped separator stays inside the unit (no split, no match)
 		{"echo a \\&\\& gh pr merge 5356", 0, false},
 		// leading env assignment prefix stays non-matching (conservative)
-		{"FOO=1 gh pr merge 5356", 0, false},
+		// #5411 flipped: an env assignment prefixes a REAL gh invocation, so
+		// this is now gated (was the deliberate conservative side in #5407).
+		{"FOO=1 gh pr merge 5356", 5356, true},
 	}
 	for _, tc := range cases {
 		pr, hit := MatchMergeGateCommand(tc.cmd, def)
