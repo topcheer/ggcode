@@ -32,6 +32,13 @@ type ResumeNudgeScheduler interface {
 
 type RestartRequester interface {
 	RequestRestart(reason string, debugMode bool)
+	// ExecTargetPath returns the resolved path of the binary the restart will
+	// exec ("" when unavailable). #5367: surfaces the exec target in the arm
+	// announcement so a wrong-path exec is visible at arm time.
+	ExecTargetPath() string
+	// ExecTargetRevision returns the vcs revision of the exec target (""
+	// when unknown).
+	ExecTargetRevision() string
 }
 
 type RestartTool struct {
@@ -98,5 +105,13 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}
 
 	t.Requester.RequestRestart(args.Reason, args.Debug)
-	return Result{Content: "OK: restart armed. The process restarts as soon as this turn finishes (with a short fallback timeout). Do NOT issue any further tool calls — end your turn now. The session resumes automatically after restart." + nudgeNote}, nil
+	// #5367: report the resolved exec target so a wrong-path exec (wrapper,
+	// installed copy, PATH shadow) is visible at arm time, before the swap is
+	// even attempted.
+	execPath := t.Requester.ExecTargetPath()
+	okNote := "OK: restart armed. The process restarts as soon as this turn finishes (with a short fallback timeout). Do NOT issue any further tool calls — end your turn now. The session resumes automatically after restart."
+	if p := execPath; p != "" {
+		okNote += fmt.Sprintf(" Exec target: %s (current revision %s). After restart the startup banner verifies the running image.", p, t.Requester.ExecTargetRevision())
+	}
+	return Result{Content: okNote + nudgeNote}, nil
 }
