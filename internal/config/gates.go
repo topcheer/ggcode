@@ -10,8 +10,12 @@ import (
 
 // DefaultMergeGateCommands lists the lifecycle commands the merge gate
 // protects out of the box. Entries are command prefixes; a concrete
-// invocation matches when its leading tokens equal the pattern and the
-// next token is the PR number (e.g. "gh pr merge 5356").
+// invocation matches when its leading tokens equal the pattern, however
+// the target PR is expressed afterwards - the gh CLI grammar
+// `gh pr merge [<number> | <url> | <branch>] [flags]` allows flags and
+// selectors in any order (e.g. "gh pr merge --auto --squash 5356",
+// "gh pr merge https://o/r/pull/5356", "gh pr merge feature-branch",
+// or no selector at all - the current branch's PR).
 var DefaultMergeGateCommands = []string{"gh pr merge", "gh pr close"}
 
 // DefaultMergeGatePreflightTTL is how long a PREFLIGHT: PASS snapshot
