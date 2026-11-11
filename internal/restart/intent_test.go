@@ -205,3 +205,51 @@ func parseUint(t *testing.T, s string) uint64 {
 	}
 	return v
 }
+
+// TestIntentMatchesRunningIdentityUnavailable pins the Windows CI failure
+// class from PR #5469's first run: when file IDs are unavailable
+// (dev=0/inode=0, e.g. Windows filesystems without a stable file index or
+// GetFileInformationByHandle failing) and the binary carries no vcs
+// revision (test binaries are not VCS-stamped), a same-path intent must
+// verify as MATCHED - not false-alarm "RESTART DID NOT SWAP" - while a
+// wrong-path intent must still mismatch loudly.
+func TestIntentMatchesRunningIdentityUnavailable(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      Intent
+		cur     Identity
+		matched bool
+	}{
+		{
+			name:    "same path, no file ids, no revisions (windows CI shape)",
+			in:      Intent{Path: `C:\build\restart.test.exe`, Dev: 0, Inode: 0, Revision: ""},
+			cur:     Identity{Path: `C:\build\restart.test.exe`, Dev: 0, Inode: 0, Revision: ""},
+			matched: true,
+		},
+		{
+			name:    "wrong path still mismatches without file ids",
+			in:      Intent{Path: `C:\intended\ggcode-rebuilt.exe`, Dev: 0, Inode: 0, Revision: ""},
+			cur:     Identity{Path: `C:\running\ggcode-installed.exe`, Dev: 0, Inode: 0, Revision: ""},
+			matched: false,
+		},
+		{
+			name:    "same path, ids only on intent side, no revisions",
+			in:      Intent{Path: `/bin/ggcode`, Dev: 7, Inode: 9, Revision: ""},
+			cur:     Identity{Path: `/bin/ggcode`, Dev: 0, Inode: 0, Revision: ""},
+			matched: true,
+		},
+		{
+			name:    "same path, revisions differ (rebuild landed as different binary path copy)",
+			in:      Intent{Path: `/bin/ggcode`, Dev: 0, Inode: 0, Revision: "aaa"},
+			cur:     Identity{Path: `/bin/ggcode`, Dev: 0, Inode: 0, Revision: "bbb"},
+			matched: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := intentMatchesRunning(tc.in, tc.cur); got != tc.matched {
+				t.Fatalf("intentMatchesRunning(%+v, %+v) = %v, want %v", tc.in, tc.cur, got, tc.matched)
+			}
+		})
+	}
+}

@@ -113,12 +113,11 @@ func StatIdentity(path string) (id Identity, ok bool) {
 	if err != nil || resolved == "" {
 		resolved = path
 	}
-	st, err := os.Stat(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		return Identity{Path: resolved}, false
 	}
 	id.Path = resolved
-	id.Dev, id.Inode = devInode(st)
+	id.Dev, id.Inode, _ = statDevInode(path)
 	id.Revision = SelfRevision()
 	return id, true
 }
@@ -159,18 +158,34 @@ func StartupVerifyNotice() (notice string, matched bool) {
 	if !ok {
 		return fmt.Sprintf("restart-warn: intended exec target %s could not be compared - running binary identity unavailable (running revision %s)", in.Path, revisionOrUnknown(SelfRevision())), false
 	}
-	sameFile := in.Dev != 0 && cur.Dev == in.Dev && cur.Inode == in.Inode
-	// Rebuild-in-place: same path, new inode - judge by vcs revision when
-	// both sides carry one.
-	if !sameFile && cur.Path == in.Path && cur.Revision != "" && in.Revision != "" {
-		sameFile = cur.Revision == in.Revision
-	}
-	if sameFile {
+	if intentMatchesRunning(in, cur) {
 		return fmt.Sprintf("Restart verified: running image %s (revision %s) matches the restart intent", cur.Path, revisionOrUnknown(cur.Revision)), true
 	}
 	return fmt.Sprintf(
 		"restart-warn: RESTART DID NOT SWAP THE INTENDED IMAGE - running %s (revision %s), intended %s (revision %s, armed %s ago). The previous restart armed OK but exec-ed a different binary; the rebuilt image never went live. Verify how this instance was launched (installed copy, wrapper, PATH shadow) and restart from the intended binary.",
 		cur.Path, revisionOrUnknown(cur.Revision), in.Path, revisionOrUnknown(in.Revision), time.Since(in.ArmedAt).Round(time.Second)), false
+}
+
+// intentMatchesRunning decides whether the running image satisfies the
+// recorded restart intent, in priority order:
+//
+//  1. file identity (dev+inode) when both sides carry one;
+//  2. rebuild-in-place: same path, new inode - judged by vcs revision when
+//     both sides carry one;
+//  3. identity unavailable on this platform/filesystem (dev=0 on the
+//     running side, e.g. Windows filesystems without stable file index)
+//     and no revision to judge by: resolved-path equality stands in, so
+//     the same executable verifies as matched instead of false-alarming
+//     on every restart. A wrong path still mismatches.
+func intentMatchesRunning(in Intent, cur Identity) bool {
+	sameFile := in.Dev != 0 && cur.Dev != 0 && cur.Dev == in.Dev && cur.Inode == in.Inode
+	if !sameFile && cur.Path == in.Path && cur.Revision != "" && in.Revision != "" {
+		sameFile = cur.Revision == in.Revision
+	}
+	if !sameFile && cur.Path == in.Path && (cur.Dev == 0 || in.Dev == 0) && (cur.Revision == "" || in.Revision == "") {
+		sameFile = true
+	}
+	return sameFile
 }
 
 // ConsumeIntent clears the intent env so the notice is shown exactly once.
