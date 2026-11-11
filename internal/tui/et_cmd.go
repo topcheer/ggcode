@@ -22,7 +22,8 @@ type etTunnelReadyMsg struct {
 	url     string
 	suffix  string // "#token=…"（公网访问鉴权必须随 URL；本地 webuiURL 中提取）
 	err     error
-	started bool // false=已激活直接复用
+	started bool   // false=已激活直接复用
+	plan    string // ""=free（随 URL 打 free 限制）；非空=paid 标注（#5395，etTunnelOn 按配置判定）
 }
 
 func (m Model) handleEtTunnelReadyMsg(msg etTunnelReadyMsg) (tea.Model, tea.Cmd) {
@@ -33,7 +34,12 @@ func (m Model) handleEtTunnelReadyMsg(msg etTunnelReadyMsg) (tea.Model, tea.Cmd)
 	if !msg.started {
 		prefix = "⬢ et tunnel (already active)"
 	}
-	m.chatWriteSystem(nextSystemID(), prefix+": "+msg.url+msg.suffix+"  (free plan: 4h lifetime, 1 Mbps)")
+	// #5395: 最终成功消息按实际计划标注——付费隧道不得声称 free 限制。
+	planNote := "  (free plan: 4h lifetime, 1 Mbps)"
+	if msg.plan != "" {
+		planNote = "\n计划: " + msg.plan
+	}
+	m.chatWriteSystem(nextSystemID(), prefix+": "+msg.url+msg.suffix+planNote)
 	return m, nil
 }
 
@@ -138,7 +144,13 @@ func (m Model) etTunnelOn() tea.Cmd {
 		return nil
 	}
 	localAddr := u.Host
-	if cfg.Subdomain != "" && cfg.Token != "" {
+	// #5395: 与 show 分支及 StartTunnelOpts 的付费语义一致——subdomain/token
+	// 任一非空即付费路径（Options 直接透传，见 tunnel_ctl.go）。
+	plan := ""
+	if cfg.Subdomain != "" || cfg.Token != "" {
+		plan = "paid(子域名=" + cfg.Subdomain + " token=" + maskToken(cfg.Token) + ")"
+	}
+	if plan != "" {
 		m.chatWriteSystem(nextSystemID(), "⬢ Opening et tunnel via custom subdomain \""+cfg.Subdomain+"\" …")
 	} else {
 		m.chatWriteSystem(nextSystemID(), "⬢ Opening et tunnel via free plan (random subdomain, ~seconds)。付费定制域名: /et setup <子域名> <token>")
@@ -146,6 +158,6 @@ func (m Model) etTunnelOn() tea.Cmd {
 	return func() tea.Msg {
 		tunnelURL, started, terr := m.webuiTunnel.StartTunnelOpts(localAddr, cfg.Subdomain, cfg.Token)
 		debug.Log("tui", "et tunnel ready: %s started=%v err=%v", tunnelURL, started, terr)
-		return etTunnelReadyMsg{url: tunnelURL, suffix: suffix, err: terr, started: started}
+		return etTunnelReadyMsg{url: tunnelURL, suffix: suffix, err: terr, started: started, plan: plan}
 	}
 }

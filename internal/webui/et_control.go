@@ -95,7 +95,16 @@ func ControlEt(ctl EtunnelController, localURL, subdomain, token string, saveCfg
 		if err != nil {
 			return "", fmt.Errorf("et tunnel failed: %w", err)
 		}
-		return "et tunnel active: " + tunnelURL + tokenSuffix() + "  (free plan: 4h lifetime, 1 Mbps)", nil
+		// #5395: the success message must state the plan that actually
+		// started. StartTunnelOpts runs the paid custom-domain path whenever
+		// subdomain/token are non-empty (see tunnel_ctl.go), so claiming the
+		// free-plan limits unconditionally misleads paid users. Reuse the
+		// same plan() helper the show branch uses.
+		planSuffix := "  (free plan: 4h lifetime, 1 Mbps)"
+		if subdomain != "" || token != "" {
+			planSuffix = "\nplan: " + plan()
+		}
+		return "et tunnel active: " + tunnelURL + tokenSuffix() + planSuffix, nil
 	default:
 		return "usage: /et [on|off|show|setup <subdomain> <token>]", nil
 	}
