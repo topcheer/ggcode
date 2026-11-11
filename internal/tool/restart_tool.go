@@ -5,9 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/debug"
 )
+
+// restartResumeNudgeDelay is how long after the restart the resume nudge
+// fires: long enough for the new process to boot and resume the session,
+// short enough that the follow-up feels immediate.
+const restartResumeNudgeDelay = 3 * time.Minute
+
+// restartResumeNudgePrompt is the prompt enqueued by the resume nudge.
+const restartResumeNudgePrompt = "继续进行之前的任务"
+
+// ResumeNudgeScheduler is the scheduler surface the restart tool needs to
+// arm its post-restart resume nudge (a durable one-shot cron).
+type ResumeNudgeScheduler interface {
+	CreateOneShotAt(fireAt time.Time, prompt string, queueIfBusy bool) (cron.Job, error)
+}
 
 type RestartRequester interface {
 	RequestRestart(reason string, debugMode bool)
@@ -15,6 +31,11 @@ type RestartRequester interface {
 
 type RestartTool struct {
 	Requester RestartRequester
+	// Nudger, when injected, arms a durable one-shot cron firing
+	// restartResumeNudgeDelay after the restart, enqueuing
+	// restartResumeNudgePrompt so the resumed session continues the prior
+	// task. Optional: nil disables the nudge (restart proceeds regardless).
+	Nudger ResumeNudgeScheduler
 }
 
 func (t *RestartTool) Name() string { return "restart" }
@@ -61,6 +82,16 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}
 	debug.Log("restart", "restart tool invoked: reason=%q debug=%v", args.Reason, args.Debug)
 
+	nudgeNote := ""
+	if t.Nudger != nil {
+		if _, err := t.Nudger.CreateOneShotAt(time.Now().Add(restartResumeNudgeDelay), restartResumeNudgePrompt, true); err != nil {
+			debug.Log("restart", "failed to arm resume nudge: %v", err)
+			nudgeNote = fmt.Sprintf(" NOTE: resume nudge scheduling failed (%v); the session still resumes automatically.", err)
+		} else {
+			nudgeNote = fmt.Sprintf(" A resume nudge will fire %s after the restart with prompt %q.", restartResumeNudgeDelay, restartResumeNudgePrompt)
+		}
+	}
+
 	t.Requester.RequestRestart(args.Reason, args.Debug)
-	return Result{Content: "OK: restart armed. The process restarts as soon as this turn finishes (with a short fallback timeout). Do NOT issue any further tool calls — end your turn now. The session resumes automatically after restart."}, nil
+	return Result{Content: "OK: restart armed. The process restarts as soon as this turn finishes (with a short fallback timeout). Do NOT issue any further tool calls — end your turn now. The session resumes automatically after restart." + nudgeNote}, nil
 }
