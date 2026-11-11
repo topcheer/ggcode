@@ -81,26 +81,24 @@ func buildGoPackageSymbolsSection(root string) string {
 
 	var sb strings.Builder
 	sb.WriteString("\n\n## Package symbols\n")
-	sb.WriteString("Key exported declarations per Go package. Use lsp_symbols, lsp_definition, or read_file for details.\n")
-
-	shown := 0
+	// P3 (#5446): counts + largest packages only. Full export lists moved to
+	// the on-demand `symbols` tool (registered with the same extractors).
+	totalSyms := 0
 	for _, pkg := range summaries {
-		if shown >= symbolMapMaxPackages {
-			sb.WriteString("  ... (more packages omitted)\n")
+		totalSyms += len(pkg.symbols)
+	}
+	sort.SliceStable(summaries, func(i, j int) bool { return len(summaries[i].symbols) > len(summaries[j].symbols) })
+	sb.WriteString(fmt.Sprintf("%d Go packages, %d exported symbols. Largest: ", len(summaries), totalSyms))
+	for i, pkg := range summaries {
+		if i >= 8 {
 			break
 		}
-
-		syms := pkg.symbols
-		suffix := ""
-		if len(syms) > symbolMapMaxPerPkg {
-			syms = syms[:symbolMapMaxPerPkg]
-			suffix = ", ..."
+		if i > 0 {
+			sb.WriteString(", ")
 		}
-
-		label := pkg.relPath + "/"
-		sb.WriteString(fmt.Sprintf("  %s (%d files: %s%s)\n", label, pkg.fileCount, strings.Join(syms, ", "), suffix))
-		shown++
+		sb.WriteString(fmt.Sprintf("%s (%d)", pkg.relPath, len(pkg.symbols)))
 	}
+	sb.WriteString("\nQuery the `symbols` tool (matches package paths and symbol names) for a package's exports; use lsp_workspace_symbols/lsp_definition for positions.\n")
 
 	return strings.TrimRight(sb.String(), "\n")
 }

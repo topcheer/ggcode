@@ -109,6 +109,9 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 
 	_ = registry.Register(tool.NewRecallExperienceTool(workingDir))
 
+	// #5446 P3: on-demand package symbols (system prompt carries counts only)
+	_ = registry.Register(tool.SymbolsTool{Provider: workspaceSymbols{root: workingDir}})
+
 	// Session-recall index: own-session writes + sibling-session read-only
 	// aggregation (background prewarm; refresh cadence per manager defaults).
 	if sessDir, err := session.DefaultDir(); err == nil {

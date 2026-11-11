@@ -168,26 +168,24 @@ func buildMultilangSymbolsSection(
 	sb.WriteString("## ")
 	sb.WriteString(sectionTitle)
 	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("Key exported declarations per %s module. Use lsp_symbols, lsp_definition, or read_file for details.\n", langLabel))
-
-	shown := 0
+	// P3 (#5446): counts + largest modules only; full export lists moved to
+	// the on-demand `symbols` tool (same extractors, query by path/symbol).
+	totalSyms := 0
 	for _, pkg := range summaries {
-		if shown >= symbolMapMaxPackages {
-			sb.WriteString("  ... (more modules omitted)\n")
+		totalSyms += len(pkg.symbols)
+	}
+	sort.SliceStable(summaries, func(i, j int) bool { return len(summaries[i].symbols) > len(summaries[j].symbols) })
+	sb.WriteString(fmt.Sprintf("%d %s modules, %d exported symbols. Largest: ", len(summaries), langLabel, totalSyms))
+	for i, pkg := range summaries {
+		if i >= 8 {
 			break
 		}
-
-		syms := pkg.symbols
-		suffix := ""
-		if len(syms) > symbolMapMaxPerPkg {
-			syms = syms[:symbolMapMaxPerPkg]
-			suffix = ", ..."
+		if i > 0 {
+			sb.WriteString(", ")
 		}
-
-		label := pkg.relPath + "/"
-		sb.WriteString(fmt.Sprintf("  %s (%d files: %s%s)\n", label, pkg.fileCount, strings.Join(syms, ", "), suffix))
-		shown++
+		sb.WriteString(fmt.Sprintf("%s (%d)", pkg.relPath, len(pkg.symbols)))
 	}
+	sb.WriteString(fmt.Sprintf("\nQuery the `symbols` tool (language=%s) for a module's exports.\n", langTag))
 
 	return strings.TrimRight(sb.String(), "\n")
 }

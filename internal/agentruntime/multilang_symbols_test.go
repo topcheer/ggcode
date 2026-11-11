@@ -1,11 +1,27 @@
 package agentruntime
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// mlSymbolDump runs the on-demand provider for one language and flattens
+// its output (#5446 P3: extraction semantics now asserted here).
+func mlSymbolDump(t *testing.T, root, lang string) string {
+	t.Helper()
+	pkgs, err := workspaceSymbols{root: root}.Symbols(lang, "", 50)
+	if err != nil {
+		t.Fatalf("provider: %v", err)
+	}
+	var b strings.Builder
+	for _, p := range pkgs {
+		fmt.Fprintf(&b, "%s: %s\n", p.Path, strings.Join(p.Symbols, ", "))
+	}
+	return b.String()
+}
 
 func TestBuildTSSymbolsSection_BasicExports(t *testing.T) {
 	dir := t.TempDir()
@@ -36,9 +52,13 @@ const internal = "not exported";
 		t.Fatal(err)
 	}
 
-	out := buildTSSymbolsSection(dir)
-	if out == "" {
+	sec := buildTSSymbolsSection(dir)
+	if sec == "" {
 		t.Fatal("expected non-empty symbol section for TS project")
+	}
+	out := mlSymbolDump(t, dir, "ts")
+	if out == "" {
+		t.Fatal("expected non-empty provider dump for TS project")
 	}
 
 	checks := map[string]bool{
@@ -74,7 +94,7 @@ func TestBuildTSSymbolsSection_SkipsTestAndDeclFiles(t *testing.T) {
 	mustWriteFile(t, filepath.Join(pkgDir, "api.spec.ts"), "export function alsoNotAppearing() {}\n")
 	mustWriteFile(t, filepath.Join(pkgDir, "types.d.ts"), "export function declarationOnly() {}\n")
 
-	out := buildTSSymbolsSection(dir)
+	out := mlSymbolDump(t, dir, "ts")
 	if !strings.Contains(out, "helper") {
 		t.Errorf("expected 'helper' in output:\n%s", out)
 	}
@@ -119,9 +139,13 @@ class _Internal:
     pass
 `)
 
-	out := buildPythonSymbolsSection(dir)
-	if out == "" {
+	sec := buildPythonSymbolsSection(dir)
+	if sec == "" {
 		t.Fatal("expected non-empty symbol section for Python project")
+	}
+	out := mlSymbolDump(t, dir, "py")
+	if out == "" {
+		t.Fatal("expected non-empty provider dump for Python project")
 	}
 	if !strings.Contains(out, "public_view()") {
 		t.Errorf("expected 'public_view()' in output:\n%s", out)
@@ -148,7 +172,7 @@ func TestBuildPythonSymbolsSection_SkipsTestFiles(t *testing.T) {
 	mustWriteFile(t, filepath.Join(pkgDir, "conftest.py"), "def fixture():\n    pass\n")
 	mustWriteFile(t, filepath.Join(pkgDir, "__init__.py"), "def init_func():\n    pass\n")
 
-	out := buildPythonSymbolsSection(dir)
+	out := mlSymbolDump(t, dir, "py")
 	if !strings.Contains(out, "process") {
 		t.Errorf("expected 'process' in output:\n%s", out)
 	}
