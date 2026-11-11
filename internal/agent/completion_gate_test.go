@@ -52,6 +52,18 @@ func TestMergeGateProtectedCommandRequiresPreflight(t *testing.T) {
 	}
 }
 
+// #5401: bare merge (no PR number) IS gated - requirement demands an explicit PR
+func TestMergeGateBareMergeRequiresExplicitPR(t *testing.T) {
+	s := newTestMergeGate(time.Minute)
+	got := s.checkCommand(permission.SupervisedMode, "run_command", `{"command":"gh pr merge"}`)
+	if got == "" {
+		t.Fatal("bare 'gh pr merge' must trigger the merge gate (issue #5401)")
+	}
+	if !strings.Contains(got, "no PR number can be resolved") || !strings.Contains(got, "explicit PR number") {
+		t.Fatalf("pr=0 requirement must demand an explicit PR restatement, got %q", got)
+	}
+}
+
 func TestMergeGateNonProtectedCommandsPass(t *testing.T) {
 	s := newTestMergeGate(time.Minute)
 	cases := []struct{ tool, args string }{
@@ -59,7 +71,6 @@ func TestMergeGateNonProtectedCommandsPass(t *testing.T) {
 		{"run_command", `{"command":"gh pr view 5356"}`},
 		{"run_command", `{"command":"gh pr merged 5356"}`},
 		{"run_command", `{"command":"go build ./..."}`},
-		{"run_command", `{"command":"gh pr merge"}`},
 		{"edit_file", `{"file_path":"/tmp/x.go"}`},
 		{"read_file", `{"path":"/tmp/x.go"}`},
 	}

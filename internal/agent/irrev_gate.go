@@ -775,6 +775,16 @@ func (s *mergeGateState) checkCommand(mode permission.PermissionMode, toolName, 
 }
 
 func mergeGateRequirement(cmd string, pr int, ttl time.Duration) string {
+	if pr <= 0 {
+		// Bare/branch-form merge (issue #5401): the command IS gated but
+		// no PR number is resolvable, so preflight cannot pin a head.
+		// Require the agent to restate the action with an explicit PR.
+		return "[completion-gate] The command \"" + cmd + "\" is a gated lifecycle action " +
+			"(gates.merge), but no PR number can be resolved from it. REQUIREMENT: restate " +
+			"the command with an explicit PR number (or .../pull/<n> URL), run the " +
+			"merge_preflight tool with {\"pr_number\":<n>} first, confirm PREFLIGHT: PASS, " +
+			"then pin the action with --match-head-commit <head_sha>."
+	}
 	return "[completion-gate] The command \"" + cmd + "\" is a gated lifecycle action " +
 		"(gates.merge). REQUIREMENT before executing it:\n" +
 		"1. Call the merge_preflight tool with {\"pr_number\":" + strconv.Itoa(pr) +

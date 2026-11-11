@@ -130,9 +130,14 @@ func (c *Config) ValidateMergeGateConfig() error {
 
 // MatchMergeGateCommand reports whether command matches any protected
 // pattern and, if so, the PR number it references. A command matches a
-// pattern when the command's leading tokens equal the pattern tokens and
-// the token right after the pattern is a positive integer (the PR number).
-// Matching is exact-token (case-sensitive), so "gh pr merge 5356" matches
+// pattern when the command's leading tokens equal the pattern tokens;
+// everything after the pattern may interleave flags and operands in any
+// order (gh CLI allows that), so the PR number is extracted by scanning
+// the remaining tokens for either a bare positive integer or a
+// .../pull/<n> URL segment. Bare "gh pr merge" (or a branch-name
+// operand) matches with prNumber=0: the lifecycle command IS gated, the
+// gate just cannot pin a head without a resolvable number. Matching is
+// exact-token (case-sensitive), so "gh pr merge 5356" matches
 // "gh pr merge" but "gh pr merged 5356" does not.
 func MatchMergeGateCommand(command string, patterns []string) (prNumber int, matched bool) {
 	fields := strings.Fields(strings.TrimSpace(command))
@@ -141,7 +146,7 @@ func MatchMergeGateCommand(command string, patterns []string) (prNumber int, mat
 	}
 	for _, pat := range patterns {
 		pf := strings.Fields(strings.TrimSpace(pat))
-		if len(pf) == 0 || len(fields) < len(pf)+1 {
+		if len(pf) == 0 || len(fields) < len(pf) {
 			continue
 		}
 		ok := true
@@ -154,11 +159,24 @@ func MatchMergeGateCommand(command string, patterns []string) (prNumber int, mat
 		if !ok {
 			continue
 		}
-		n, err := strconv.Atoi(fields[len(pf)])
-		if err != nil || n <= 0 {
-			continue
-		}
-		return n, true
+		return extractPRNumber(fields[len(pf):]), true
 	}
 	return 0, false
+}
+
+// extractPRNumber scans command tokens after the protected pattern and
+// returns the referenced PR number (0 when none can be resolved): a bare
+// positive integer token, or the numeric tail of a ".../pull/<n>" URL.
+func extractPRNumber(tokens []string) int {
+	for _, tok := range tokens {
+		if n, err := strconv.Atoi(tok); err == nil && n > 0 {
+			return n
+		}
+		if i := strings.LastIndex(tok, "/pull/"); i >= 0 {
+			if n, err := strconv.Atoi(tok[i+len("/pull/"):]); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
 }

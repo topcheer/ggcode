@@ -91,13 +91,17 @@ func TestMatchMergeGateCommand(t *testing.T) {
 		{"gh pr merge 5356 --squash --delete-branch", 5356, true},
 		{"gh pr close 42", 42, true},
 		{"gh pr merged 5356", 0, false},
-		{"gh pr merge", 0, false},          // no PR number
-		{"gh pr merge abc", 0, false},      // non-numeric
+		{"gh pr merge", 0, true},           // bare merge IS gated (pr unresolvable)
+		{"gh pr merge abc", 0, true},       // branch operand IS gated (pr unresolvable)
 		{"git push origin main", 0, false}, // not a protected pattern
-		{"gh pr merge 0", 0, false},        // non-positive
+		{"gh pr merge 0", 0, true},         // malformed number still gates (pr unresolvable)
 		{"echo gh pr merge 5356", 0, false},
 		{"", 0, false},
-		{"gh pr merge -1", 0, false},
+		{"gh pr merge -1", 0, true}, // negative still gates (pr unresolvable)
+		// #5401: flag-first / URL / branch / bare forms must not bypass the gate
+		{"gh pr merge --auto --squash 5356", 5356, true},
+		{"gh pr merge https://github.com/topcheer/ggcode/pull/5356", 5356, true},
+		{"gh pr close --delete-branch 5356", 5356, true},
 	}
 	for _, tc := range cases {
 		pr, hit := MatchMergeGateCommand(tc.cmd, def)
