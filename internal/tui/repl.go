@@ -936,7 +936,7 @@ func (r *REPL) RuntimeStatus() webui.RuntimeStatus {
 		PID:            os.Getpid(),
 		Workspace:      r.workingDir,
 		AgentBusy:      r.agentBusy.Load(),
-		PermissionMode: r.model.mode.String(),
+		PermissionMode: r.liveModeString(),
 	}
 	if r.cfg != nil {
 		m.Vendor = r.cfg.Vendor
@@ -1174,6 +1174,16 @@ func (s *replModeSwitcher) RestoreMode(fallback permission.PermissionMode) permi
 
 type modeChangeMsg struct {
 	Mode permission.PermissionMode
+}
+
+// liveModeString reports the permission mode for webui snapshots (#5454):
+// prefer the cross-copy live store (kept current by every m.mode write
+// site); fall back to the boot-time value when the store is absent.
+func (r *REPL) liveModeString() string {
+	if m, ok := r.model.modeLive.get(); ok {
+		return m.String()
+	}
+	return r.model.mode.String()
 }
 
 func (r *REPL) SetAskUserTool(tools *tool.Registry) {
@@ -1781,6 +1791,7 @@ func (r *REPL) loadSession(id string) {
 			cp.SetMode(sessionMode)
 		}
 		r.model.mode = sessionMode
+		r.model.modeLive.set(sessionMode) // cross-copy publish (#5454)
 		debug.Log("repl", "loadSession: restored permission mode %s from session", sessionMode)
 	}
 

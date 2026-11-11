@@ -361,6 +361,7 @@ func (d tuiSlashDeps) SwitchMode(name string) error {
 		return fmt.Errorf("switching to %s over IM requires the im.remote_dangerous_commands opt-in (config yaml) - refusing zero-confirmation privilege escalation (#2185)", newMode)
 	}
 	d.m.mode = newMode
+	d.m.modeLive.set(newMode) // cross-copy publish (#5454)
 	if cp, ok := d.m.policy.(*permission.ConfigPolicy); ok {
 		cp.SetMode(newMode)
 	}

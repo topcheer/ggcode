@@ -172,6 +172,7 @@ func init() {
 	})
 	regUpdatePlain(func(m Model, msg modeChangeMsg) (tea.Model, tea.Cmd) {
 		m.mode = msg.Mode
+		m.modeLive.set(msg.Mode) // publish to the cross-copy store (#5454): webui reads modeLive
 		return m, nil
 	})
 	regUpdatePlain(func(m Model, msg cronPromptMsg) (tea.Model, tea.Cmd) { return m.handleCronPromptMsg(msg) })
