@@ -293,10 +293,13 @@ type IdleConfig struct {
 }
 
 type Config struct {
-	Vendor              string                    `yaml:"vendor" json:"vendor"`
-	Endpoint            string                    `yaml:"endpoint" json:"endpoint"`
-	Model               string                    `yaml:"model" json:"model"`
-	AuxModel            string                    `yaml:"aux_model,omitempty" json:"aux_model,omitempty"`
+	Vendor   string `yaml:"vendor" json:"vendor"`
+	Endpoint string `yaml:"endpoint" json:"endpoint"`
+	Model    string `yaml:"model" json:"model"`
+	AuxModel string `yaml:"aux_model,omitempty" json:"aux_model,omitempty"`
+	// DisableHandoff turns off the #shift-handoff brief (Previous Session
+	// Handoff section) injected into fresh sessions. Default: enabled.
+	DisableHandoff      bool                      `yaml:"disable_handoff,omitempty" json:"disable_handoff,omitempty"`
 	Language            string                    `yaml:"language" json:"language"`
 	UI                  UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
 	IM                  IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
