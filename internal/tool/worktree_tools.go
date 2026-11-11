@@ -107,6 +107,17 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: fmt.Sprintf("not a git repository: %v", err)}, nil
 	}
 
+	// #5413: inside a worktree created by this tool, .git is a FILE
+	// (gitdir pointer), so findGitRoot stops at the worktree itself and a
+	// second enter_worktree nests .ggcode/worktrees one level deeper
+	// (6-deep chains observed). Resolve back to the MAIN tree root so
+	// sibling worktrees always land at <main>/.ggcode/worktrees/.
+	if isWorktreeCheckout(gitRoot) {
+		if main, merr := findGitRootFromWorktree(gitRoot); merr == nil {
+			gitRoot = main
+		}
+	}
+
 	worktreesDir := filepath.Join(gitRoot, ".ggcode", "worktrees")
 	if err := os.MkdirAll(worktreesDir, 0755); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error creating worktrees dir: %v", err)}, nil
@@ -495,6 +506,11 @@ func isInsideWorktree(gitDir string) (bool, string, error) {
 		return false, "", nil
 	}
 	return true, absPath, nil
+}
+
+func isWorktreeCheckout(dir string) bool {
+	fi, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil && !fi.IsDir()
 }
 
 func findGitRootFromWorktree(worktreePath string) (string, error) {

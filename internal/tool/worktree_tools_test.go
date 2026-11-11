@@ -578,3 +578,46 @@ func Test1710WorktreeNameRejectsPathComponents(t *testing.T) {
 		}
 	}
 }
+
+// Pin for issue #5413: enter_worktree called from INSIDE a worktree must
+// create the new worktree under the MAIN tree's .ggcode/worktrees/, not
+// nested inside the current worktree (6-deep chains observed in real
+// sessions, with project-memory index pollution).
+func TestEnterWorktree_FromInsideWorktreeLandsInMainTree(t *testing.T) {
+	mainDir := initTestGitRepo(t)
+	first := EnterWorktree{WorkingDir: mainDir}
+	res1, err := first.Execute(context.Background(), json.RawMessage(`{"name":"wt-a"}`))
+	if err != nil || res1.IsError {
+		t.Fatalf("first enter_worktree failed: %v %s", err, res1.Content)
+	}
+	wtA := res1.SuggestedWorkingDir
+	if wtA == "" {
+		t.Fatal("first enter_worktree returned empty SuggestedWorkingDir")
+	}
+
+	// Second call with WorkingDir INSIDE the first worktree: the new
+	// worktree must land in <main>/.ggcode/worktrees/, not <wtA>/.ggcode/...
+	second := EnterWorktree{WorkingDir: wtA}
+	res2, err := second.Execute(context.Background(), json.RawMessage(`{"name":"wt-b"}`))
+	if err != nil || res2.IsError {
+		t.Fatalf("nested enter_worktree failed: %v %s", err, res2.Content)
+	}
+	wtB := res2.SuggestedWorkingDir
+	// macOS: t.TempDir() yields /var/... while git rev-parse resolves
+	// symlinks to /private/var/... - compare on eval'd paths (#5413 test).
+	wantBase := filepath.Join(mainDir, ".ggcode", "worktrees")
+	realWant, werr := filepath.EvalSymlinks(wantBase)
+	if werr != nil {
+		t.Fatalf("eval wantBase: %v", werr)
+	}
+	realGot, gerr := filepath.EvalSymlinks(wtB)
+	if gerr != nil {
+		t.Fatalf("eval wtB: %v", gerr)
+	}
+	if filepath.Dir(realGot) != realWant {
+		t.Fatalf("wt-b must live under main-tree worktrees dir %s, got %s (issue #5413 nesting)", realWant, realGot)
+	}
+	if strings.Contains(wtB, "wt-a") {
+		t.Fatalf("wt-b must not be nested inside wt-a (issue #5413), got %s", wtB)
+	}
+}
