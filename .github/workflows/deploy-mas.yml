@@ -208,7 +208,13 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KC_PASSWORD}" "${KC}" 2>&1 | tail -2
           echo "=== identity gate ==="
           security find-identity -v -p codesigning "${KC}" 2>&1
-          wails build -clean -tags goolm -platform darwin/universal
+          # -skipbindings mirrors the proven DMG lane (scripts/release/build-desktop-darwin.sh):
+          # binding generation compiles the Go package first and go:embed
+          # "all:frontend/dist" fails when dist is not built yet (tag checkout
+          # has no committed dist; wails@latest >=2.17 orders bindgen before the
+          # frontend build). Skipping bindings lets the frontend build produce
+          # dist before the final embed compile.
+          wails build -clean -skipbindings -tags goolm -platform darwin/universal
           APP="build/bin/GGCode Desktop.app"
           plutil -replace CFBundleIdentifier -string "gg.ai.ggcode" "$APP/Contents/Info.plist"
           plutil -replace CFBundleShortVersionString -string "${MAS_SHORT_VERSION}" "$APP/Contents/Info.plist"
