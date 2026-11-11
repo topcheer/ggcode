@@ -262,6 +262,28 @@ if [[ -z "$AV_ID" ]]; then
   # app relationship in the body (ASC schema: relationships.app required).
   AVC=$(asc "create-version" POST "/v1/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
   AV_ID=$(echo "$AVC" | jq -r '.data.id // empty')
+  # L3 (run 43003971586): 409 "cannot create a new version of the App in
+  # the current state" means the single editable slot is occupied by an
+  # UNRELATED stuck version (user-confirmed case: 1.3.276 sitting in
+  # WAITING_FOR_REVIEW since May). Developer-reject any blocker version,
+  # wait for the state to settle, then retry the create once.
+  if [[ -z "$AV_ID" ]] && echo "$AVC" | grep -q "cannot create a new version"; then
+    echo "editable slot occupied - developer-rejecting blocker versions"
+    refresh_jwt_if_needed
+    BLOCKERS=$(asc "-" GET "/v1/apps/${APP_ID}/appStoreVersions?limit=50")
+    for BID in $(echo "$BLOCKERS" | jq -r --arg v "${VERSION}" '.data[] | select(.attributes.versionString != $v and (.attributes.appStoreState == "WAITING_FOR_REVIEW" or .attributes.appStoreState == "IN_REVIEW")) | .id'); do
+      BSUB=$(asc "-" GET "/v1/appStoreVersions/${BID}/appStoreVersionSubmission")
+      BSUB_ID=$(echo "$BSUB" | jq -r '.data.id // empty')
+      if [[ -n "$BSUB_ID" ]]; then
+        asc "developer-reject-blocker" DELETE "/v1/appStoreVersionSubmissions/${BSUB_ID}" > /dev/null
+        echo "blocker version ${BID} developer-rejected (submission ${BSUB_ID} removed)"
+      fi
+    done
+    sleep 30
+    refresh_jwt_if_needed
+    AVC=$(asc "create-version" POST "/v1/appStoreVersions" '{"data":{"type":"appStoreVersions","attributes":{"versionString":"'"${VERSION}"'","platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
+    AV_ID=$(echo "$AVC" | jq -r '.data.id // empty')
+  fi
   [[ -n "$AV_ID" ]] || { echo "::error::could not create appStoreVersion ${VERSION}: ${AVC:0:400}" >&2; exit 1; }
 fi
 
