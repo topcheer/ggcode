@@ -419,6 +419,25 @@ func (s *Scheduler) CreateOneShotAt(fireAt time.Time, prompt string, queueIfBusy
 
 	now := time.Now()
 	s.mu.Lock()
+	// Idempotent re-arm (#5425): a restart within the nudge window used to
+	// leave TWO pending nudges (every arm takes a fresh unique ID, and
+	// Load adopts both), so the resumed session received the prompt twice.
+	// OneShotAt is documented for cross-restart nudges - replacing the
+	// still-pending job with the same prompt keeps the newest fire time
+	// and drops the stale duplicate.
+	for oid, oj := range s.jobs {
+		if oj != nil && !oj.Recurring && oj.Prompt == prompt {
+			if timer, ok := s.timers[oid]; ok {
+				timer.Stop()
+				delete(s.timers, oid)
+			}
+			delete(s.jobs, oid)
+			// knownIDs entry is deliberately KEPT: save()'s on-disk merge
+			// guard skips jobs whose ID is still known-but-absent in
+			// memory, so the stale nudge already persisted by the earlier
+			// arm is not resurrected into the store (#5425).
+		}
+	}
 	s.nextID++
 	id := fmt.Sprintf("cron-%d-%s", s.nextID, cronIDSuffix())
 	job := &Job{

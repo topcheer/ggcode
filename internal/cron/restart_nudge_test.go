@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -173,5 +174,44 @@ func TestVolatileOneShotNotPersisted(t *testing.T) {
 		if !j.Recurring {
 			t.Errorf("volatile one-shot %s leaked to disk", j.ID)
 		}
+	}
+}
+
+// Pin for issue #5425: re-arming the resume nudge (two restarts inside the
+// 3-minute window - common during binary-rebuild ops) must REPLACE the
+// still-pending nudge, not stack a second one. Before the fix every arm
+// took a fresh unique ID, both jobs were adopted by Load, and both fired -
+// the resumed session received the prompt twice.
+func TestCreateOneShotAtIdempotentRearm(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "cron.json")
+
+	fired := make(chan string, 4)
+	s := NewScheduler(func(prompt string, _ bool) { fired <- prompt }, store)
+
+	prompt := "继续进行之前的任务"
+	if _, err := s.CreateOneShotAt(time.Now().Add(3*time.Minute), prompt, true); err != nil {
+		t.Fatalf("first arm: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond) // let the first timer settle
+	job2, err := s.CreateOneShotAt(time.Now().Add(2*time.Minute), prompt, true)
+	if err != nil {
+		t.Fatalf("second arm: %v", err)
+	}
+
+	// Exactly ONE pending nudge may remain, and it is the newest arm.
+	if got := len(s.List()); got != 1 {
+		t.Fatalf("expected exactly 1 pending nudge after re-arm (issue #5425), got %d", got)
+	}
+	if s.List()[0].ID != job2.ID {
+		t.Fatalf("surviving nudge must be the newest arm %s, got %s", job2.ID, s.List()[0].ID)
+	}
+
+	// On-disk store must agree (durable duplicate would resurrect on Load).
+	data, err := os.ReadFile(store)
+	if err != nil {
+		t.Fatalf("read store: %v", err)
+	}
+	if got := strings.Count(string(data), prompt); got != 1 {
+		t.Fatalf("store must contain exactly one nudge prompt, got %d occurrences", got)
 	}
 }
