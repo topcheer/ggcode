@@ -203,6 +203,14 @@ var rmWrapperWords = map[string]bool{
 	"stdbuf": true, "setsid": true, "doas": true,
 }
 
+// wrapperValuelessFlags lists wrapper flags that take NO value (#5456):
+// xargs -0/--null (NUL separator), env -i (empty environment). Tokens not
+// in this table keep the legacy value-consuming behavior, so -u root and
+// nice -n 5 still work.
+var wrapperValuelessFlags = map[string]bool{
+	"-0": true, "--null": true, "-i": true,
+}
+
 // isNumericToken reports whether s is a pure number (timeout 30 style
 // wrapper arguments).
 func isNumericToken(s string) bool {
@@ -254,10 +262,36 @@ func firstRmCommandSegment(cmd string) string {
 				fields = fields[1:]
 				continue
 			}
-			if seenWrapper && (strings.HasPrefix(h, "-") || isNumericToken(h) || prevWasFlag) {
-				prevWasFlag = strings.HasPrefix(h, "-") && !isNumericToken(h)
-				fields = fields[1:]
-				continue
+			if seenWrapper {
+				// #5456: three token shapes after a wrapper word do NOT
+				// consume a following value:
+				//   self-valued long flags (--preserve-env=PATH) - the
+				//     '=' carries the value inside the token itself;
+				//   known valueless flags (xargs -0/--null, env -i);
+				//   env-assignment tokens (env VAR=1 nice -n 5 rm ...)
+				//     - assignments may interleave anywhere after
+				//       wrapper words, and skipping them keeps the real
+				//       command head reachable. Over-consuming a pseudo
+				//       assignment here is fail-safe: this loop only
+				//       locates the rm head, and a false assignment
+				//       never looks like "rm".
+				if strings.HasPrefix(h, "-") && strings.Contains(fields[0], "=") {
+					fields = fields[1:]
+					continue
+				}
+				if wrapperValuelessFlags[h] {
+					fields = fields[1:]
+					continue
+				}
+				if !strings.HasPrefix(h, "-") && !isNumericToken(h) && !strings.HasPrefix(h, "$") && strings.Contains(fields[0], "=") {
+					fields = fields[1:]
+					continue
+				}
+				if strings.HasPrefix(h, "-") || isNumericToken(h) || prevWasFlag {
+					prevWasFlag = strings.HasPrefix(h, "-") && !isNumericToken(h)
+					fields = fields[1:]
+					continue
+				}
 			}
 			break
 		}
