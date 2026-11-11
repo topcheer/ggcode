@@ -133,19 +133,28 @@ asc() { # asc_fatal "step-name" METHOD PATH [JSON_BODY] — non-2xx = ::error:: 
 
 # ---------- locate the app ----------
 refresh_jwt_if_needed
-APP_JSON=$(asc "-" GET "/v1/apps?filter%5BbundleId%5D=${BUNDLE_ID}")
-APP_ID=$(echo "$APP_JSON" | jq -r '.data[0].id // empty')
-if [[ -z "$APP_ID" ]]; then
-  # Run 13 evidence: this failure was silent, and the fallback id pointed at a
-  # nonexistent resource (build stayed VALID in TestFlight while poll said
-  # last=none for 40 min). Always surface the raw response for diagnosis.
-  echo "::warning::bundleId lookup returned no app; raw response: ${APP_JSON:0:400}"
-fi
-if [[ -z "$APP_ID" && -n "$APP_ID_ARG" ]]; then
-  echo "::warning::falling back to --app-id ${APP_ID_ARG}"
+# Run 42988168677 evidence (2026-11-11): ASC filter[bundleId]=gg.ai.ggcode is a
+# PREFIX match - it returns BOTH gg.ai.ggcode (MAS desktop, 6771007556) and
+# gg.ai.ggcode.mobile (iOS, 6770855612), and .data[0] happened to be the iOS
+# app. The poll then watched the iOS build pool for 40 min while the real MAS
+# build sat VALID in the desktop app => "build not VALID" false failure on
+# every release since 275. Fix: trust the caller's --app-id (the workflow pins
+# the owner-provided desktop id) and, only when no hint is given, require an
+# EXACT bundleId match instead of blindly taking .data[0].
+if [[ -n "$APP_ID_ARG" ]]; then
   APP_ID="$APP_ID_ARG"
+  echo "app id: ${APP_ID} (from --app-id; bundleId lookup skipped to avoid prefix-match ambiguity)"
+else
+  APP_JSON=$(asc "-" GET "/v1/apps?filter%5BbundleId%5D=${BUNDLE_ID}&fields%5Bapps%5D=bundleId")
+  APP_ID=$(echo "$APP_JSON" | jq -r --arg b "$BUNDLE_ID" '[.data[] | select(.attributes.bundleId == $b)][0].id // empty')
+  if [[ -z "$APP_ID" ]]; then
+    # Run 13 evidence: this failure was silent, and the fallback id pointed at a
+    # nonexistent resource (build stayed VALID in TestFlight while poll said
+    # last=none for 40 min). Always surface the raw response for diagnosis.
+    echo "::warning::exact bundleId lookup returned no app; raw response: ${APP_JSON:0:400}"
+  fi
+  [[ -n "$APP_ID" ]] || { echo "::error::no ASC app for bundleId ${BUNDLE_ID}: ${APP_JSON}" >&2; exit 1; }
 fi
-[[ -n "$APP_ID" ]] || { echo "::error::no ASC app for bundleId ${BUNDLE_ID}: ${APP_JSON}" >&2; exit 1; }
 echo "app id: ${APP_ID}"
 
 # ---------- poll the build through processing ----------
