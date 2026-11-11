@@ -613,6 +613,8 @@ func jaCatalog(key string) string {
 		return "対応形式: PNG, JPEG, GIF, WebP（最大20MB）\n\n"
 	case "image.clipboard_failed":
 		return "クリップボードから画像を貼り付けできませんでした: %v"
+	case "image.clipboard_no_image":
+		return "クリップボードに画像が見つかりません。"
 	case "image.clipboard_no_image_windows":
 		return "クリップボードに画像が見つかりません。WindowsではCtrl+Vが端末に遮断されることがあります。Ctrl+Shift+Vまたは/image pasteを試してください。"
 	case "slash.help":

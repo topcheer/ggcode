@@ -724,6 +724,8 @@ func zhCatalog(key string) string {
 		return "支持格式：PNG、JPEG、GIF、WebP（最大 20MB）\n\n"
 	case "image.clipboard_failed":
 		return "无法从剪贴板粘贴图片：%v"
+	case "image.clipboard_no_image":
+		return "剪贴板中没有找到图片。"
 	case "image.clipboard_no_image_windows":
 		return "剪贴板中没有找到图片。Windows 终端通常会拦截 Ctrl+V，请尝试 Ctrl+Shift+V 或输入 /image paste。"
 	case "cron.firing":

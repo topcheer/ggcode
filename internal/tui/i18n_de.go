@@ -606,6 +606,8 @@ func deCatalog(key string) string {
 		return "Unterstützte Formate: PNG, JPEG, GIF, WebP (max. 20MB)\n\n"
 	case "image.clipboard_failed":
 		return "Bild konnte nicht aus der Zwischenablage eingefügt werden: %v"
+	case "image.clipboard_no_image":
+		return "Kein Bild in der Zwischenablage gefunden."
 	case "image.clipboard_no_image_windows":
 		return "Kein Bild in der Zwischenablage gefunden. Unter Windows wird Ctrl+V oft vom Terminal abgefangen. Versuchen Sie Ctrl+Shift+V oder /image paste."
 

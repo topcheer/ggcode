@@ -487,11 +487,10 @@ func (m *Model) handleClipboardPaste() tea.Cmd {
 		if err != nil {
 
 			if errors.Is(err, image.ErrClipboardImageUnavailable) {
-
 				if runtime.GOOS == "windows" {
 					return systemNotifyMsg{Text: m.t("image.clipboard_no_image_windows")}
 				}
-				return nil
+				return systemNotifyMsg{Text: m.t("image.clipboard_no_image")}
 			}
 
 			return systemNotifyMsg{Text: fmt.Sprintf(m.t("image.clipboard_failed"), err)}
@@ -510,7 +509,7 @@ func (m *Model) handleClipboardPasteFallback(original tea.PasteMsg) tea.Cmd {
 		if err == nil {
 			return msg
 		}
-		if errors.Is(err, image.ErrClipboardImageUnavailable) {
+		if errors.Is(err, image.ErrClipboardImageUnavailable) || strings.TrimSpace(original.Content) != "" {
 			return textPasteMsg{Content: original.Content}
 		}
 		return systemNotifyMsg{Text: fmt.Sprintf(m.t("image.clipboard_failed"), err)}

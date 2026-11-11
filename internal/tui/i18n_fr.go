@@ -574,6 +574,8 @@ func frCatalog(key string) string {
 		return "Formats supportes: PNG, JPEG, GIF, WebP (max 20MB)\n\n"
 	case "image.clipboard_failed":
 		return "Impossible de coller une imâge du presse-papiers: %v"
+	case "image.clipboard_no_image":
+		return "Aucune image trouvée dans le presse-papiers."
 	case "image.clipboard_no_image_windows":
 		return "Aucune imâge dans le presse-papiers. Sous Windows, Ctrl+V est souvent intercepte par le terminal. Essayez Ctrl+Shift+V ou /imâge paste."
 	case "slash.help":

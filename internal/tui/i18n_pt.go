@@ -319,6 +319,8 @@ func ptCatalog(key string) string {
 
 	case "image.clipboard_failed":
 		return "Não foi possível colar uma imagem da área de transferência: %v"
+	case "image.clipboard_no_image":
+		return "Nenhuma imagem encontrada na área de transferência."
 	case "image.clipboard_no_image_windows":
 		return "Nenhuma imagem encontrada na área de transferência. No Windows, Ctrl+V é frequentemente interceptado pelo terminal. Tente Ctrl+Shift+V ou /image paste."
 	case "image.formats":
