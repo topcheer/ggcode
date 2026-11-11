@@ -382,8 +382,8 @@ done
 
 
 # ---------- fully automated review submission ----------
-# Legacy appStoreVersionSubmissions API (the reviewSubmissions resource has
-# NO cancel endpoint, and filter[appStoreState]=PREPARE_FOR_SUBMISSION is
+# Legacy appStoreVersionSubmissions API (the reviewSubmissions resource
+# gained its own DELETE later - see the draft cleanup below; historically
 # rejected with HTTP 400 on the versions endpoint - run 42355690984 log).
 # Flow: locate version -> developer-reject if WAITING_FOR_REVIEW/IN_REVIEW
 # -> generic What's New -> bind the fresh build -> submit for review.
@@ -483,6 +483,17 @@ refresh_jwt_if_needed
 # the same key in run 42355690984. The 403 is the key's permission matrix
 # on the legacy resource, not a state lock - so submit goes through the
 # new API; only the reject path uses the legacy DELETE.
+# Layer 6 (run 43017322725 + user observation): a leftover UNRESOLVED_ISSUES
+# draft submission (created by an interrupted run, no build attached) locks
+# the app against new-version creation (409 RELATIONSHIP.INVALID on the app
+# relationship). reviewSubmissions DOES have a DELETE endpoint now - clean
+# stale drafts before creating a fresh submission.
+refresh_jwt_if_needed
+DRAFTS=$(asc "-" GET "/v1/apps/${APP_ID}/reviewSubmissions?limit=20")
+for DSID in $(echo "$DRAFTS" | jq -r '.data[] | select(.attributes.state == "UNRESOLVED_ISSUES") | .id'); do
+  asc "delete-draft-submission" DELETE "/v1/reviewSubmissions/${DSID}" > /dev/null
+  echo "stale draft submission ${DSID} deleted"
+done
 refresh_jwt_if_needed
 NRS=$(asc "create-reviewSubmission" POST "/v1/reviewSubmissions" '{"data":{"type":"reviewSubmissions","attributes":{"platform":"'"${PLATFORM}"'"},"relationships":{"app":{"data":{"type":"apps","id":"'"${APP_ID}"'"}}}}}')
 NRS_ID=$(echo "$NRS" | jq -r '.data.id // empty')
