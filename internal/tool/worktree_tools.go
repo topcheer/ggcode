@@ -102,20 +102,9 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: fmt.Sprintf("invalid worktree name %q: must not be a path component ('.', '..') or contain separators", name)}, nil
 	}
 
-	gitRoot, err := findGitRoot(ctx, t.WorkingDir)
+	gitRoot, err := resolveMainTreeRoot(ctx, t.WorkingDir)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("not a git repository: %v", err)}, nil
-	}
-
-	// #5413: inside a worktree created by this tool, .git is a FILE
-	// (gitdir pointer), so findGitRoot stops at the worktree itself and a
-	// second enter_worktree nests .ggcode/worktrees one level deeper
-	// (6-deep chains observed). Resolve back to the MAIN tree root so
-	// sibling worktrees always land at <main>/.ggcode/worktrees/.
-	if isWorktreeCheckout(gitRoot) {
-		if main, merr := findGitRootFromWorktree(gitRoot); merr == nil {
-			gitRoot = main
-		}
 	}
 
 	worktreesDir := filepath.Join(gitRoot, ".ggcode", "worktrees")
@@ -199,7 +188,12 @@ func worktreeHoldingBranch(ctx context.Context, gitRoot, branchName string) stri
 }
 
 func createAgentWorktree(ctx context.Context, workingDir, agentID string) (string, string, error) {
-	gitRoot, err := findGitRoot(ctx, workingDir)
+	// #5420: agent isolation worktrees must resolve the same MAIN tree
+	// root as enter_worktree (single helper) - the old bare findGitRoot
+	// call spawned from inside a worktree created a NESTED
+	// <worktree>/.ggcode/worktrees/agent-... tree instead of a sibling
+	// in <main>/.ggcode/worktrees/.
+	gitRoot, err := resolveMainTreeRoot(ctx, workingDir)
 	if err != nil {
 		return "", "", fmt.Errorf("not a git repository: %w", err)
 	}
@@ -458,6 +452,27 @@ func isSafeWorktreeName(name string) bool {
 		return false
 	}
 	return true
+}
+
+// resolveMainTreeRoot finds the repository root for dir and, when that
+// root is itself a worktree checkout, resolves back to the MAIN tree root.
+// #5413: inside a worktree created by this tool, .git is a FILE (gitdir
+// pointer), so findGitRoot stops at the worktree itself and a second
+// worktree creation nests .ggcode/worktrees one level deeper (6-deep
+// chains observed). #5420: both entry points (enter_worktree and
+// createAgentWorktree) share this single resolution so the two paths
+// cannot drift apart again.
+func resolveMainTreeRoot(ctx context.Context, dir string) (string, error) {
+	gitRoot, err := findGitRoot(ctx, dir)
+	if err != nil {
+		return "", err
+	}
+	if isWorktreeCheckout(gitRoot) {
+		if main, merr := findGitRootFromWorktree(gitRoot); merr == nil {
+			return main, nil
+		}
+	}
+	return gitRoot, nil
 }
 
 func findGitRoot(ctx context.Context, dir string) (string, error) {

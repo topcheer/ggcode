@@ -621,3 +621,47 @@ func TestEnterWorktree_FromInsideWorktreeLandsInMainTree(t *testing.T) {
 		t.Fatalf("wt-b must not be nested inside wt-a (issue #5413), got %s", wtB)
 	}
 }
+
+// TestCreateAgentWorktreeFromInsideWorktree pins #5420: spawn_agent
+// isolation worktrees created from INSIDE an existing worktree must land
+// as siblings in <main>/.ggcode/worktrees/, not nested inside the current
+// worktree. Before the fix createAgentWorktree used bare findGitRoot,
+// which stops at the worktree itself (.git is a gitdir FILE) and nests.
+func TestCreateAgentWorktreeFromInsideWorktree(t *testing.T) {
+	dir := initTestGitRepo(t)
+	// macOS: git resolves /var/folders to /private/var/folders; normalize
+	// both sides before comparing prefixes.
+	if resolved, rerr := filepath.EvalSymlinks(dir); rerr == nil {
+		dir = resolved
+	}
+	tool := EnterWorktree{WorkingDir: dir}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"outer-wt"}`))
+	if err != nil || result.IsError {
+		t.Fatalf("enter outer worktree: err=%v result=%s", err, result.Content)
+	}
+	wtPath := filepath.Join(dir, ".ggcode", "worktrees", "outer-wt")
+	if _, statErr := os.Stat(wtPath); statErr != nil {
+		t.Fatalf("outer worktree not created at %s: %v", wtPath, statErr)
+	}
+
+	// spawn an agent isolation worktree from INSIDE the outer worktree
+	agentPath, branch, err := createAgentWorktree(context.Background(), wtPath, "testagent")
+	if err != nil {
+		t.Fatalf("createAgentWorktree from inside worktree: %v", err)
+	}
+
+	// the agent worktree must be a SIBLING under the MAIN tree's
+	// .ggcode/worktrees, not nested under the outer worktree
+	if !strings.HasPrefix(agentPath, filepath.Join(dir, ".ggcode", "worktrees")) {
+		t.Errorf("agent worktree must land in <main>/.ggcode/worktrees, got %s", agentPath)
+	}
+	if strings.Contains(agentPath, filepath.Join("outer-wt", ".ggcode")) {
+		t.Errorf("agent worktree must not nest inside the outer worktree, got %s", agentPath)
+	}
+	if branch == "" || !strings.HasPrefix(branch, "agent-testagent") {
+		t.Errorf("expected agent-testagent* branch, got %q", branch)
+	}
+	if _, statErr := os.Stat(agentPath); statErr != nil {
+		t.Errorf("agent worktree not created: %v", statErr)
+	}
+}
