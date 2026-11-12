@@ -1256,6 +1256,14 @@ func (a *Agent) SetWorkingDir(dir string) {
 		a.refusalLedger = newRefusalLedger(dir)
 	}
 
+	// #5498: anchorStore was pinned to the process cwd at construction
+	// (AnchorPath(".")); on cwd != workspace deployments (ACP/A2A/daemon)
+	// it persisted to the startup dir and shared one store across
+	// workspaces. Rebind on dir change, same pattern as the ledgers.
+	if a.anchorStore == nil || a.anchorStore.path != AnchorPath(dir) {
+		a.anchorStore = LoadAnchorStore(AnchorPath(dir))
+	}
+
 	if a.unreadEdit != nil {
 		a.unreadEdit.baseDir = dir
 	}
