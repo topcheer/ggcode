@@ -20,3 +20,12 @@ Top-8。需要某个包的完整导出时用 `symbols` 工具按需查询：
 
 提取器与旧内联版完全同源（同一套跳过 test/spec/vendor/unexported 的规则），
 仅注入方式从"常驻"改为"按需"。
+
+## LLM Curator Sweep（#5512）
+
+global 记忆的语义化裁决轮（机制层，LLM 调用由席主/cron 驱动，见 `internal/memory/curator.go`）：
+
+- **载荷**：`BuildCuratorPayload`——条目全文+元数据围栏为 untrusted data（注入隔离：body 内指令式文本一律视为内容）
+- **裁决 schema**：keep/archive/rewrite/unpin/split + 强制 rationale（无理由裁决解析期拒绝）+ confidence + rewrite_content
+- **自动执行**（`ApplyCuratorReport`）：archive 走既有 .history+墓碑（可恢复，幂等）；rewrite 走 Save 历史（旧版保留）；unpin/split 暂为 deferred 审计（无全局 pin 存储）；预算 K=20/轮，低置信顺延下轮不丢弃；flock 并发时整轮跳过
+- **安全栏**：dry-run 默认（首轮只报告不动记忆）；审计 JSONL（actor/rationale/verdicts 全程可溯）；rubric R1-R5 见 issue #5512
