@@ -2,7 +2,6 @@ package agent
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"unicode"
 
@@ -15,6 +14,11 @@ type planDriftState struct {
 	items    []planItem
 
 	adherence planAdherenceTrend
+
+	// Escalation bookkeeping (#plan-repair-verdict): stallStreak counts
+	// consecutive drifted checks, verdictCount caps emitted verdicts.
+	stallStreak  int
+	verdictCount int
 }
 
 type planItem struct {
@@ -232,11 +236,9 @@ func isAlpha(s string) bool {
 }
 
 func (p *planDriftState) checkPlanDrift(runStats *RunStats, _ string) string {
-	if !p.captured || p.fired || len(p.items) == 0 {
+	if !p.captured || p.verdictCount >= pdMaxVerdicts || len(p.items) == 0 {
 		return ""
 	}
-
-	p.fired = true
 
 	workCorpus := buildPlanWorkCorpus(runStats)
 
@@ -259,30 +261,24 @@ func (p *planDriftState) checkPlanDrift(runStats *RunStats, _ string) string {
 		}
 	}
 
-	if len(unaddressed) == 0 {
-		return ""
-	}
-
 	totalItems := len(p.items)
 	unaddrRatio := float64(len(unaddressed)) / float64(totalItems)
-	if len(unaddressed) < 2 && unaddrRatio < 0.5 {
+	drifted := len(unaddressed) >= 2 || unaddrRatio >= 0.5
+
+	// Fix of the fire-once bug: the old code set p.fired before evaluating,
+	// so a clean first check burned the only warning for the whole run.
+	if !drifted {
+		p.stallStreak = 0
 		return ""
 	}
+	p.stallStreak++
 
-	var b strings.Builder
-	b.WriteString("[Plan Drift Detection] ")
-	if len(unaddressed) <= 3 {
-		b.WriteString(fmt.Sprintf("%d of %d plan items appear unaddressed:\n", len(unaddressed), totalItems))
-	} else {
-		b.WriteString(fmt.Sprintf("%d of %d plan items appear unaddressed (showing first 3):\n", len(unaddressed), totalItems))
-		unaddressed = unaddressed[:3]
+	v := planVerdictFor(p.stallStreak)
+	p.verdictCount++
+	if p.verdictCount >= pdMaxVerdicts {
+		p.fired = true // terminal verdict emitted; stop watching
 	}
-	for _, item := range unaddressed {
-		b.WriteString(fmt.Sprintf("  - %s\n", item))
-	}
-	b.WriteString("\nReview these plan items and address any gaps before completing.")
-
-	return b.String()
+	return renderPlanVerdict(v, unaddressed, totalItems)
 }
 
 func buildPlanWorkCorpus(runStats *RunStats) string {

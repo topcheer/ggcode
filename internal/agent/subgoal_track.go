@@ -15,7 +15,9 @@ const (
 	sgMinSubgoals       = 3
 	sgMinIterGap        = 3
 	sgUnaddressedThresh = 0.4
-	sgMaxWarns          = 1
+	// #plan-repair-verdict: raised from 1 - repeated nudges are cheap and
+	// the persistent-drift escalation now lives in plan_drift/plan_repair.
+	sgMaxWarns = 3
 )
 
 type subgoalEntry struct {
