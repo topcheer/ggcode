@@ -95,14 +95,17 @@ func TestCheckPlanDrift_NoPlan(t *testing.T) {
 }
 
 func TestCheckPlanDrift_AlreadyFired(t *testing.T) {
+	// #plan-repair-verdict: `fired` is now only set after the terminal
+	// (abandon) verdict; monitoring escalates instead of fire-once. The
+	// silence contract is pinned on the verdict cap instead.
 	s := newPlanDriftState()
 	s.captured = true
-	s.fired = true
+	s.verdictCount = pdMaxVerdicts // cap reached: terminal verdict emitted
 	s.items = []planItem{{Text: "test", Keywords: []string{"foo"}}}
 	stats := newRunStats("test")
 	msg := s.checkPlanDrift(stats, "")
 	if msg != "" {
-		t.Error("expected empty message when already fired")
+		t.Error("expected empty message after verdict cap")
 	}
 }
 
