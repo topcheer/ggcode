@@ -151,8 +151,14 @@ func TestIssue2741_LoadSessionBumpsGenerationOnInstall(t *testing.T) {
 	bridge.mu.Lock()
 	genAfter := bridge.runGeneration
 	bridge.mu.Unlock()
-	if genAfter != genBefore+1 {
-		t.Fatalf("install path runGeneration = %d, want exactly before+1 (%d)", genAfter, genBefore+1)
+	// #5483: the exact before+1 assertion raced with unrelated bridge
+	// activity (background event pump bumps) in the window between the
+	// genBefore read and LoadSession - CI reruns showed exactly this
+	// shape. The pin's target (#2741) is that LoadSession BUMPS the
+	// generation on the install path; extra bumps from unrelated activity
+	// do not invalidate it.
+	if genAfter < genBefore+1 {
+		t.Fatalf("install path runGeneration = %d, want at least before+1 (%d)", genAfter, genBefore+1)
 	}
 	if got := issue2741CurrentSessionID(bridge); got != "sess2741c" {
 		t.Fatalf("currentSes = %q, want sess2741c", got)
