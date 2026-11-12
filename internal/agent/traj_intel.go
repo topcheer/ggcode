@@ -755,6 +755,7 @@ type teammateExperienceEntry struct {
 	TeamID   string    `json:"team_id"`
 	Teammate string    `json:"teammate"`
 	Digest   string    `json:"digest"`
+	Outcome  string    `json:"outcome,omitempty"`
 }
 
 const (
@@ -892,12 +893,19 @@ func (s *trajIntelState) ingestTeammateExperience(workingDir string) {
 		if !e.Ts.After(newest) {
 			continue
 		}
+		// Legacy entries carry no outcome and must not be counted as wins
+		// (they used to be hardcoded Success:true, poisoning the trust score).
+		success := e.Outcome == "success"
+		insight := "teammate experience: " + truncateTask(e.Digest, 300)
+		if e.Outcome == "" {
+			insight = "(unverified outcome) " + insight
+		}
 		fresh = append(fresh, trajectoryLearning{
 			Timestamp: e.Ts,
 			Type:      "teammate",
 			Task:      truncateTask("swarm/"+e.Teammate, 120),
-			Success:   true,
-			Insight:   "teammate experience: " + truncateTask(e.Digest, 300),
+			Success:   success,
+			Insight:   insight,
 			Category:  "teammate_experience",
 		})
 	}

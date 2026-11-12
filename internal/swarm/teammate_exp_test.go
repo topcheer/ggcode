@@ -11,8 +11,8 @@ import (
 
 func TestAppendTeammateExperience_Basics(t *testing.T) {
 	dir := t.TempDir()
-	appendTeammateExperience(dir, "team-1", "tm-1", "coder", "fixed the login bug")
-	appendTeammateExperience(dir, "team-1", "tm-1", "coder", "fixed the signup bug")
+	appendTeammateExperience(dir, "team-1", "tm-1", "coder", "fixed the login bug", "success")
+	appendTeammateExperience(dir, "team-1", "tm-1", "coder", "fixed the signup bug", "success")
 
 	data, err := os.ReadFile(teammateExpPath(dir))
 	if err != nil {
@@ -37,7 +37,7 @@ func TestAppendTeammateExperience_Basics(t *testing.T) {
 func TestAppendTeammateExperience_DigestTruncated(t *testing.T) {
 	dir := t.TempDir()
 	long := strings.Repeat("x", 900)
-	appendTeammateExperience(dir, "t", "tm", "", long)
+	appendTeammateExperience(dir, "t", "tm", "", long, "success")
 	data, _ := os.ReadFile(teammateExpPath(dir))
 	var e teammateExperienceEntry
 	if json.Unmarshal(data, &e) != nil {
@@ -51,7 +51,7 @@ func TestAppendTeammateExperience_DigestTruncated(t *testing.T) {
 func TestAppendTeammateExperience_RollingBound(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < maxTeammateExpEntries+25; i++ {
-		appendTeammateExperience(dir, "t", "tm", "", "task "+strings.Repeat("a", i%10))
+		appendTeammateExperience(dir, "t", "tm", "", "task "+strings.Repeat("a", i%10), "success")
 	}
 	data, _ := os.ReadFile(teammateExpPath(dir))
 	got := len(splitJSONL(data))
@@ -59,7 +59,7 @@ func TestAppendTeammateExperience_RollingBound(t *testing.T) {
 		t.Fatalf("rolling window broken: %d entries", got)
 	}
 
-	appendTeammateExperience(dir, "", "tm", "", "x")
+	appendTeammateExperience(dir, "", "tm", "", "x", "failed")
 }
 
 func TestSplitJSONL_DropsPartialTrailingLine(t *testing.T) {
@@ -71,7 +71,7 @@ func TestSplitJSONL_DropsPartialTrailingLine(t *testing.T) {
 
 func TestLedgerAtomicNoResidue(t *testing.T) {
 	dir := t.TempDir()
-	appendTeammateExperience(dir, "t", "tm", "", "hello")
+	appendTeammateExperience(dir, "t", "tm", "", "hello", "success")
 	entries, _ := os.ReadDir(filepath.Join(dir, ".ggcode"))
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), ".tmp") {
