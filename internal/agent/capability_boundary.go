@@ -103,6 +103,9 @@ func (a *Agent) maybeWarnCapabilityBoundary(text string) string {
 	}
 
 	a.capBoundary.warnings++
+	if a.selfModel != nil {
+		a.selfModel.addLimit(SelfModelPath("."), fmt.Sprintf("approach pivots x%d + %d fails", len(a.capBoundary.pivots), a.capBoundary.failErrors))
+	}
 
 	var excerpts []string
 	for idx, ph := range a.capBoundary.pivots {
