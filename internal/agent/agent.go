@@ -1452,44 +1452,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	startWorkDir := a.workingDir
 	a.mu.RUnlock()
 	if len(startHookCfg.OnSessionStart) > 0 {
-		a.mu.Lock()
-		firstTurn := !a.sessionStartFired
-		a.sessionStartFired = true
-		a.mu.Unlock()
-		if firstTurn {
-			source := "startup"
-
-			if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
-				for _, msg := range cm.Messages() {
-					if msg.Role != "system" {
-						source = "resume"
-						break
-					}
-				}
-			}
-			ssRes := hooks.RunSessionStartHooks(startHookCfg, hooks.HookEnv{
-				Event:         hooks.EventOnSessionStart,
-				SessionID:     sid,
-				Workspace:     startWorkDir,
-				WorkingDir:    startWorkDir,
-				SessionSource: source,
-			})
-			if !ssRes.Allowed {
-				onEvent(provider.StreamEvent{
-					Type:  provider.StreamEventError,
-					Error: fmt.Errorf("%s", ssRes.Output),
-				})
-
-				MarkCompleted(sid, false, 0, 0)
-				return fmt.Errorf("session start blocked by hook: %s", ssRes.Output)
-			}
-			if out := strings.TrimSpace(ssRes.Output); out != "" && a.contextManager != nil {
-				a.contextManager.Add(provider.Message{
-					Role:    "system",
-					Content: []provider.ContentBlock{{Type: "text", Text: "[Session start hooks]\n" + out}},
-				})
-				debug.Log("agent", "injected session-start hook output (%d chars)", len(out))
-			}
+		if err := a.fireSessionStartHooks(sid, startHookCfg, startWorkDir, onEvent); err != nil {
+			return err
 		}
 	}
 
@@ -1556,79 +1520,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		debug.Log("agent", "injected environment drift warning")
 	}
 	defer func() {
-
-		MarkCompleted(sid, err == nil, runStats.Iterations, len(runStats.FilesEdited))
-		runStats.finalize(err)
-		a.mu.Lock()
-		a.lastRunStats = runStats
-		a.mu.Unlock()
-
-		isCancelled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-			errors.Is(err, ErrSessionTimeout) || errors.Is(err, ErrSessionBudgetExhausted) ||
-			(err == nil && ctx.Err() != nil && (errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded)))
-		if !isCancelled {
-			a.maybeReflect(runStats)
-
-			a.recordFailureAttribution(runStats)
-		} else {
-			debug.Log("agent", "skipping reflection/ratchet on cancellation")
-
-			MarkInterrupted(sid, InterruptSnapshot{
-				Timestamp:    time.Now(),
-				LastTool:     a.lastTool,
-				Iterations:   runStats.Iterations,
-				FilesTouched: len(runStats.FilesEdited),
-			})
-		}
-
-		if a.trajIntel != nil {
-
-			a.trajIntel.ingestTeammateExperience(a.WorkingDir())
-
-			if !isCancelled {
-				a.trajIntel.recordInjectionOutcome(a.WorkingDir(), runStats.Success)
-
-				a.trajIntel.recordHoldoutOutcome(a.WorkingDir(), runStats.Success)
-			} else {
-
-				a.trajIntel.clearInjectedRun()
-			}
-			a.trajIntel.maybeExtractAndPersist(a.WorkingDir(), runStats)
-
-			a.maybeDistillPolicies(a.WorkingDir())
-
-			a.maybeExportTrainingSample(a.WorkingDir(), runStats)
-		}
-
-		recordPerfBaseline(a.WorkingDir(), runStats)
-		a.mu.RLock()
-		fn := a.onRunResult
-		a.mu.RUnlock()
-		if fn != nil {
-			fn(content, err)
-		}
-
-		a.mu.RLock()
-		healthFn := a.onRunHealth
-		a.mu.RUnlock()
-		if healthFn != nil {
-			healthFn(err)
-		}
-
-		if t, ok := a.tools.Get("todo_write"); ok {
-			if tw, ok := t.(*tool.TodoWrite); ok {
-				tw.ClearTodos()
-			}
-		}
-
-		if asyncVerifyStats != nil && err == nil && !isCancelled {
-			statsCopy := *asyncVerifyStats
-			safego.Go("asyncVerify", func() {
-				a.asyncVerify(a.shutdownCtx, &statsCopy)
-			})
-		}
-
-		a.maybeFallbackCheckpoint()
+		a.runStreamEpilogue(ctx, content, err, sid, runStats, asyncVerifyStats)
 	}()
 	userTurn := provider.Message{
 		Role:    "user",
@@ -3200,10 +3092,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		waitPreExecuted := a.preExecuteWaitTools(ctx, toolCalls)
 
 		batchConflictWarnings := detectBatchEditConflicts(toolCalls)
-		type dedupKey struct {
-			tool string
-			args string
-		}
 		seenReadOnly := make(map[dedupKey]int)
 
 		if depWarn := a.recordToolCallBatch(toolCalls, i+1); depWarn != "" {
@@ -4663,6 +4551,141 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		return err
 	}
 	return nil
+}
+
+// dedupKey identifies an in-turn read-only tool call for speculative
+// deduplication (tool name + raw args).
+type dedupKey struct {
+	tool string
+	args string
+}
+
+// fireSessionStartHooks runs the one-shot session-start hook volley for the
+// first turn of a session (startup vs resume detection included) and
+// surfaces hook output as a system message. Extracted verbatim from
+// RunStreamWithContent (#5521 PR1, mechanical).
+func (a *Agent) fireSessionStartHooks(sid string, hookCfg hooks.HookConfig, workDir string, onEvent func(provider.StreamEvent)) error {
+	a.mu.Lock()
+	firstTurn := !a.sessionStartFired
+	a.sessionStartFired = true
+	a.mu.Unlock()
+	if !firstTurn {
+		return nil
+	}
+	source := "startup"
+
+	if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
+		for _, msg := range cm.Messages() {
+			if msg.Role != "system" {
+				source = "resume"
+				break
+			}
+		}
+	}
+	ssRes := hooks.RunSessionStartHooks(hookCfg, hooks.HookEnv{
+		Event:         hooks.EventOnSessionStart,
+		SessionID:     sid,
+		Workspace:     workDir,
+		WorkingDir:    workDir,
+		SessionSource: source,
+	})
+	if !ssRes.Allowed {
+		onEvent(provider.StreamEvent{
+			Type:  provider.StreamEventError,
+			Error: fmt.Errorf("%s", ssRes.Output),
+		})
+
+		MarkCompleted(sid, false, 0, 0)
+		return fmt.Errorf("session start blocked by hook: %s", ssRes.Output)
+	}
+	if out := strings.TrimSpace(ssRes.Output); out != "" && a.contextManager != nil {
+		a.contextManager.Add(provider.Message{
+			Role:    "system",
+			Content: []provider.ContentBlock{{Type: "text", Text: "[Session start hooks]\n" + out}},
+		})
+		debug.Log("agent", "injected session-start hook output (%d chars)", len(out))
+	}
+	return nil
+}
+
+// runStreamEpilogue is the deferred end-of-run bookkeeping: stats
+// persistence, cancellation classification, reflection/trajectory
+// intelligence, perf baseline, run-result callbacks, todo cleanup, async
+// verification kick-off and the fallback checkpoint. Extracted verbatim
+// from RunStreamWithContent's defer body (#5521 PR1, mechanical).
+func (a *Agent) runStreamEpilogue(ctx context.Context, content []provider.ContentBlock, err error, sid string, runStats *RunStats, asyncVerifyStats *RunStats) {
+	MarkCompleted(sid, err == nil, runStats.Iterations, len(runStats.FilesEdited))
+	runStats.finalize(err)
+	a.mu.Lock()
+	a.lastRunStats = runStats
+	a.mu.Unlock()
+
+	isCancelled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrSessionTimeout) || errors.Is(err, ErrSessionBudgetExhausted) ||
+		(err == nil && ctx.Err() != nil && (errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded)))
+	if !isCancelled {
+		a.maybeReflect(runStats)
+
+		a.recordFailureAttribution(runStats)
+	} else {
+		debug.Log("agent", "skipping reflection/ratchet on cancellation")
+
+		MarkInterrupted(sid, InterruptSnapshot{
+			Timestamp:    time.Now(),
+			LastTool:     a.lastTool,
+			Iterations:   runStats.Iterations,
+			FilesTouched: len(runStats.FilesEdited),
+		})
+	}
+
+	if a.trajIntel != nil {
+
+		a.trajIntel.ingestTeammateExperience(a.WorkingDir())
+
+		if !isCancelled {
+			a.trajIntel.recordInjectionOutcome(a.WorkingDir(), runStats.Success)
+
+			a.trajIntel.recordHoldoutOutcome(a.WorkingDir(), runStats.Success)
+		} else {
+
+			a.trajIntel.clearInjectedRun()
+		}
+		a.trajIntel.maybeExtractAndPersist(a.WorkingDir(), runStats)
+
+		a.maybeDistillPolicies(a.WorkingDir())
+
+		a.maybeExportTrainingSample(a.WorkingDir(), runStats)
+	}
+
+	recordPerfBaseline(a.WorkingDir(), runStats)
+	a.mu.RLock()
+	fn := a.onRunResult
+	a.mu.RUnlock()
+	if fn != nil {
+		fn(content, err)
+	}
+
+	a.mu.RLock()
+	healthFn := a.onRunHealth
+	a.mu.RUnlock()
+	if healthFn != nil {
+		healthFn(err)
+	}
+
+	if t, ok := a.tools.Get("todo_write"); ok {
+		if tw, ok := t.(*tool.TodoWrite); ok {
+			tw.ClearTodos()
+		}
+	}
+
+	if asyncVerifyStats != nil && err == nil && !isCancelled {
+		statsCopy := *asyncVerifyStats
+		safego.Go("asyncVerify", func() {
+			a.asyncVerify(a.shutdownCtx, &statsCopy)
+		})
+	}
+
+	a.maybeFallbackCheckpoint()
 }
 
 func (a *Agent) injectPendingInterruptions(iter int) (bool, InterruptionKind) {
