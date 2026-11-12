@@ -220,6 +220,34 @@ func detectChangedFilesFromCommand(snapshot map[string]time.Time) string {
 	}
 	sort.Strings(changed)
 
+	// Worktree namespace routing (#5524): paths under .ggcode/worktrees/
+	// belong to an isolated worktree, not the main tree. Reporting them in
+	// the main-tree advisory misdirects fixes/stashes toward files that
+	// are already isolated by design; summarize them per-worktree instead.
+	mainChanged := make([]string, 0, len(changed))
+	wtCount := map[string]int{}
+	for _, p := range changed {
+		if i := strings.Index(p, "/.ggcode/worktrees/"); i >= 0 {
+			rest := p[i+len("/.ggcode/worktrees/"):]
+			name := rest
+			if j := strings.Index(rest, "/"); j >= 0 {
+				name = rest[:j]
+			}
+			wtCount[name]++
+			continue
+		}
+		mainChanged = append(mainChanged, p)
+	}
+	if len(mainChanged) == 0 {
+		var names []string
+		for n := range wtCount {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		return fmt.Sprintf("\n[files changed by command] only in isolated worktree(s) %s - main tree clean", strings.Join(names, ", "))
+	}
+
+	changed = mainChanged
 	shown := changed
 	more := ""
 	if len(shown) > 20 {
@@ -230,6 +258,16 @@ func detectChangedFilesFromCommand(snapshot map[string]time.Time) string {
 	sb.WriteString(fmt.Sprintf("\n[files changed by command] %d file(s) modified on disk%s - re-read before editing:", len(changed), more))
 	for _, p := range shown {
 		sb.WriteString("\n  " + p)
+	}
+	if len(wtCount) > 0 {
+		var names []string
+		total := 0
+		for n, c := range wtCount {
+			names = append(names, n)
+			total += c
+		}
+		sort.Strings(names)
+		sb.WriteString(fmt.Sprintf("\n  (%d more path(s) changed in isolated worktree(s) %s - not part of the main tree)", total, strings.Join(names, ", ")))
 	}
 	return sb.String()
 }
