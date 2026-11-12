@@ -22,6 +22,25 @@ type StartupAssets struct {
 	ConsolidationFindings []string
 }
 
+// startupConsolidationSkipWindow: a boot re-scan within this window of the
+// previous run is skipped entirely (#5519 - fleet boots stop re-scanning
+// the same store 12x). Package var for testability.
+var startupConsolidationSkipWindow = 6 * time.Hour
+
+// shouldSkipStartupConsolidation decides whether the boot scan runs:
+// skip when the last run is fresh within the window (zero time = never ran
+// = scan).
+func shouldSkipStartupConsolidation(last, now time.Time) (skip bool, since time.Duration) {
+	if last.IsZero() {
+		return false, 0
+	}
+	since = now.Sub(last)
+	if since < 0 {
+		since = 0
+	}
+	return since < startupConsolidationSkipWindow, since
+}
+
 func LoadInteractiveStartupAssets(
 	workingDir string,
 	autoMem *memory.AutoMemory,
@@ -40,7 +59,9 @@ func LoadInteractiveStartupAssets(
 		start := time.Now()
 		autoMem.GarbageCollect()
 
-		if report := autoMem.Consolidate(workingDir); report.HasFindings() {
+		if skip, since := shouldSkipStartupConsolidation(autoMem.LastConsolidationRun(), time.Now()); skip {
+			debug.Log("memory", "startup consolidation skipped: last run %.1fh ago", since.Hours())
+		} else if report := autoMem.Consolidate(workingDir); report.HasFindings() {
 			debug.Log("memory", "startup consolidation: %s", report.String())
 			for _, w := range report.Warnings {
 				debug.Log("memory", "startup consolidation: %s", w)

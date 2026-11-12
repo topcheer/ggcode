@@ -740,6 +740,17 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 				if !cfg.MemoryCuratorSweepEnabled() {
 					continue
 				}
+				// #5519: decorrelate the fleet - every instance (including
+				// the first post-boot tick) sleeps a random jitter BEFORE
+				// contending for the flock slot; losers exit the round
+				// silently inside RunMemorySweep.
+				jitter := agentruntime.SweepJitterDuration()
+				debug.Log("root", "sweep tick fired: jittering %s before slot contention", jitter)
+				select {
+				case <-sweepStop:
+					return
+				case <-time.After(jitter):
+				}
 				judge := agentruntime.SweepJudgeFunc(func(jctx context.Context, prompt string) (string, error) {
 					resp, cerr := curatorProv.Chat(jctx, []provider.Message{{
 						Role:    "user",

@@ -217,6 +217,21 @@ func readEntryHead(dir, key string) ([]byte, error) {
 	return buf[:n], nil
 }
 
+// LastConsolidationRun reports when the last Consolidate scan completed
+// (zero time when never run or the state is unreadable). Startup paths use
+// it to skip re-scans that ran recently (#5519).
+func (am *AutoMemory) LastConsolidationRun() time.Time {
+	st := am.loadConsolidationState()
+	if st == nil || st.LastRun == "" {
+		return time.Time{}
+	}
+	ts, err := time.Parse(time.RFC3339, st.LastRun)
+	if err != nil {
+		return time.Time{}
+	}
+	return ts
+}
+
 func (am *AutoMemory) loadConsolidationState() *consolidationState {
 	data, err := os.ReadFile(filepath.Join(am.dir, consolidationStateFile))
 	if err != nil {
