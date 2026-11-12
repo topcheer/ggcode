@@ -59,7 +59,7 @@ func TestBoardPersistenceRoundTrip(t *testing.T) {
 	}
 
 	m.EmitBoardUpdated(team.ID)
-	boardFile := boardPersistPath(team.ID)
+	boardFile := m.boardPersistPath(team.ID)
 	if !waitForFile(t, boardFile, 3*time.Second) {
 		t.Fatalf("board snapshot never landed at %s", boardFile)
 	}
@@ -91,7 +91,7 @@ func TestBoardPersistenceRoundTrip(t *testing.T) {
 func TestBoardPersistenceCorruptFileStartsEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	path := boardPersistPath("team-99")
+	path := newBoardTestManager(t).boardPersistPath("team-99")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestBoardPersistenceCorruptFileStartsEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tm := loadTeamBoard("team-99")
+	tm := newBoardTestManager(t).loadTeamBoard("team-99")
 	if tasks := tm.List(); len(tasks) != 0 {
 		t.Errorf("corrupt board should start empty, got %d task(s)", len(tasks))
 	}
@@ -107,7 +107,7 @@ func TestBoardPersistenceCorruptFileStartsEmpty(t *testing.T) {
 
 func TestBoardPersistenceMissingFileStartsEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	tm := loadTeamBoard("team-404")
+	tm := newBoardTestManager(t).loadTeamBoard("team-404")
 	if tasks := tm.List(); len(tasks) != 0 {
 		t.Errorf("missing board should start empty, got %d task(s)", len(tasks))
 	}
