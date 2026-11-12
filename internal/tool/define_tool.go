@@ -163,6 +163,15 @@ func (t *DefineTool) doDefine(name, description string, schema json.RawMessage, 
 		if len(s.Args) > 0 && !jsonIsObject(s.Args) {
 			return Result{IsError: true, Content: fmt.Sprintf("step %d: args must be a JSON object", i+1)}, nil
 		}
+		// #P0 step-output refs: {{steps[N].key}} may only look backward, so a
+		// definition can never contain a forward reference or a cycle.
+		for _, m := range stepOutRefRe.FindAllStringSubmatch(string(s.Args), -1) {
+			refIdx := -1
+			fmt.Sscanf(m[1], "%d", &refIdx)
+			if refIdx < 0 || refIdx >= i {
+				return Result{IsError: true, Content: fmt.Sprintf("step %d: step reference {{steps[%s].%s}} must point to an earlier step (0..%d) - forward/self references are rejected at define time", i+1, m[1], m[2], i-1)}, nil
+			}
+		}
 	}
 
 	t.mu.Lock()
@@ -232,12 +241,17 @@ func (t *DefineTool) doCall(ctx context.Context, name string, params map[string]
 
 	var b strings.Builder
 	total := 0
+	stepOutputs := make([]map[string]interface{}, len(def.Steps)) // captured per step for {{steps[N].key}} refs
 	for i, s := range def.Steps {
 
 		if _, ok := readOnlyToolNames[s.Tool]; !ok {
 			return Result{IsError: true, Content: fmt.Sprintf("step %d: tool %q is not read-only. This definition was not created via the define action (the on-disk store allows arbitrary content) - refusing to execute a write-capable nested step without the normal per-call approval flow.", i+1, s.Tool)}, nil
 		}
-		resolved, err := substituteParamPlaceholders(s.Args, params)
+		resolved, err := resolveStepRefs(s.Args, stepOutputs, i)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("step %d: %v", i+1, err)}, nil
+		}
+		resolved, err = substituteParamPlaceholders(resolved, params)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("step %d: %v", i+1, err)}, nil
 		}
@@ -250,6 +264,7 @@ func (t *DefineTool) doCall(ctx context.Context, name string, params map[string]
 			return Result{IsError: true, Content: fmt.Sprintf("step %d (%s) failed: %v", i+1, s.Tool, err)}, nil
 		}
 		stepOut := clampRunes(out.Content, macroStepOutMax)
+		stepOutputs[i] = captureStepOutput(out.Content, stepOut)
 		fmt.Fprintf(&b, "--- step %d: %s ---\n%s\n", i+1, s.Tool, stepOut)
 		total += len(stepOut)
 		if out.IsError {
@@ -468,4 +483,82 @@ func (t *DefineTool) persistLocked(store *definedToolStore) error {
 		return err
 	}
 	return os.WriteFile(t.storePath(), data, 0o644)
+}
+
+// stepOutRefRe matches backward step-output references: {{steps[0].path}}.
+// Validated at define time (backward-only) and resolved at call time.
+var stepOutRefRe = regexp.MustCompile(`\{\{\s*steps\[(\d+)\]\.([a-zA-Z0-9_.]+)\s*\}\}`)
+
+// captureStepOutput stores one step's output for later {{steps[N].key}}
+// lookup: "raw" keeps the clamped text, JSON-object outputs additionally
+// expose their top-level (and nested, via dotted paths) keys.
+func captureStepOutput(rawContent, clamped string) map[string]interface{} {
+	m := map[string]interface{}{"raw": clamped}
+	var obj map[string]interface{}
+	if err := json.Unmarshal([]byte(rawContent), &obj); err == nil && obj != nil {
+		for k, v := range obj {
+			m[k] = v
+		}
+	}
+	return m
+}
+
+// lookupStepKey resolves a dotted key path ("items.0.name") against a step
+// output map; maps are traversed by string key, slices by decimal index.
+func lookupStepKey(out map[string]interface{}, key string) (interface{}, bool) {
+	cur := interface{}(out)
+	for _, part := range strings.Split(key, ".") {
+		switch node := cur.(type) {
+		case map[string]interface{}:
+			var ok bool
+			cur, ok = node[part]
+			if !ok {
+				return nil, false
+			}
+		case []interface{}:
+			idx := -1
+			fmt.Sscanf(part, "%d", &idx)
+			if idx < 0 || idx >= len(node) {
+				return nil, false
+			}
+			cur = node[idx]
+		default:
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
+// resolveStepRefs replaces {{steps[N].key}} placeholders in a step's args
+// with outputs captured from earlier steps. N must be < curStep (define
+// time already rejects forward/self references; this is the belt to the
+// suspenders).
+func resolveStepRefs(args json.RawMessage, stepOutputs []map[string]interface{}, curStep int) (json.RawMessage, error) {
+	s := string(args)
+	if !strings.Contains(s, "{{steps[") {
+		return args, nil
+	}
+	resolved := stepOutRefRe.ReplaceAllStringFunc(s, func(match string) string {
+		m := stepOutRefRe.FindStringSubmatch(match)
+		refIdx := -1
+		fmt.Sscanf(m[1], "%d", &refIdx)
+		if refIdx < 0 || refIdx >= curStep || refIdx >= len(stepOutputs) || stepOutputs[refIdx] == nil {
+			return match // leave marker; flagged below
+		}
+		v, ok := lookupStepKey(stepOutputs[refIdx], m[2])
+		if !ok {
+			return match
+		}
+		switch val := v.(type) {
+		case string:
+			return val
+		default:
+			b, _ := json.Marshal(val)
+			return string(b)
+		}
+	})
+	if strings.Contains(resolved, "{{steps[") {
+		return nil, fmt.Errorf("unresolvable step reference(s): outputs from earlier steps do not contain the referenced key (or the reference does not point backward)")
+	}
+	return json.RawMessage(resolved), nil
 }

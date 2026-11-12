@@ -49,3 +49,21 @@
 
 - [command-snippets.md](command-snippets.md) — shell 命令复用（宏组合的是**工具调用**，snippet 复用的是**shell 命令**）
 - [code_execution](../design/) — 即时 JS 沙箱批量调用（每次写代码；宏是命名持久资产）
+
+## 步骤输出引用（Step Output References）
+
+宏工具步骤间可传递数据：`{{steps[N].key}}` 将第 N 步的输出注入后续步骤参数。
+
+- `key` 支持 JSON 字段（点路径，如 `items.0.name`）；`raw` 取整段文本
+- **仅可后向引用**（N < 当前步）：define 时静态拒绝前向/自引用，杜绝环
+- 引用键不存在时 call 失败并报 `unresolvable step reference`（显式失败优于静默空值）
+
+示例：
+
+```json
+{"action":"define","name":"find_then_read","description":"定位后读取",
+ "steps":[
+  {"tool":"search_files","args":{"pattern":"{{symbol}}"}},
+  {"tool":"read_file","args":{"path":"{{steps[0].path}}"}}
+ ]}
+```
