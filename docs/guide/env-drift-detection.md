@@ -60,3 +60,12 @@ The agent can then proactively inform the user or set placeholder values before 
 | **ggcode** | **Automatic, zero-config** |
 
 Missing-env is one of the most common causes of silent build/test failures in AI coding agents. ggcode is the first to detect this proactively.
+
+## 环境指纹漂移（Environment Fingerprint，#34）
+
+变量存在性检查之外，agent 现在还维护**环境指纹基线**（`internal/agent/env_fingerprint.go`）：
+
+- 指纹 = sha256{go.mod + go.sum 内容摘要 + `go version` 输出}
+- 每 run 开始时与 `.ggcode/env-fingerprint.json` 持久基线比对（跨进程/重启有效）
+- 首轮静默建档；漂移时注入一次性警示「先前 build/test 观测可能过期，依赖前需复验」，基线随即更新（inform-only 不阻塞）
+- 意义：防止「依赖已升级/工具链已换，agent 沿用旧结论」类失败（环境观测模型过期的事前预告）
