@@ -55,6 +55,10 @@ func (a *Agent) auditToolResult(name string, args json.RawMessage, status, errMs
 	if len(invariantID) > 0 {
 		ev.InvariantID = invariantID[0]
 	}
+	if a != nil && a.pendingAuditRationale != "" {
+		ev.Rationale = a.pendingAuditRationale
+		a.pendingAuditRationale = ""
+	}
 	if a != nil {
 		ev.Session = a.SessionID()
 	}

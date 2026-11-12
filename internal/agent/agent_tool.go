@@ -764,6 +764,9 @@ func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessa
 		return *r, nil
 	}
 
+	// #decision-audit: persist the rationale the model attached (it is
+	// about to be stripped from args and would otherwise be lost).
+	a.pendingAuditRationale = extractArgRationale(args)
 	args = stripArgRationale(args)
 
 	if res, err, handled := a.replayToolCall(t.Name(), args); handled {

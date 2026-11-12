@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -66,6 +68,62 @@ func TestAuditToolExecutionWritesChain(t *testing.T) {
 
 var errPanicky = &auditTestError{"panic recovered"}
 
+// TestAuditToolResultConsumesRationale pins the #decision-audit wiring:
+// pendingAuditRationale flows into the ledger Event once and is cleared.
+func TestAuditToolResultConsumesRationale(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	lg, err := audit.Open(path, "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	a := &Agent{auditLedger: &auditLedgerState{ledger: lg}, sessionID: "sess-10"}
+
+	a.pendingAuditRationale = "fix login bug: stale token cache"
+	a.auditToolResult("edit_file", json.RawMessage(`{"path":"a.go"}`), "ok", "", time.Millisecond)
+	if a.pendingAuditRationale != "" {
+		t.Fatalf("rationale not consumed: %q", a.pendingAuditRationale)
+	}
+	a.auditToolResult("grep", json.RawMessage(`{"pattern":"x"}`), "ok", "", time.Millisecond)
+
+	if err := lg.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	entries, err := readAuditEntries(path)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("want 2 entries, got %d", len(entries))
+	}
+	if entries[0].Rationale != "fix login bug: stale token cache" {
+		t.Fatalf("first entry rationale = %q", entries[0].Rationale)
+	}
+	if entries[1].Rationale != "" {
+		t.Fatalf("second entry must not carry stale rationale: %q", entries[1].Rationale)
+	}
+}
+
 type auditTestError struct{ msg string }
 
 func (e *auditTestError) Error() string { return e.msg }
+
+// readAuditEntries parses ledger JSONL lines directly (Entry is exported
+// with json tags; the audit package's scanEntries is internal).
+func readAuditEntries(path string) ([]audit.Entry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var entries []audit.Entry
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var e audit.Entry
+		if err := json.Unmarshal(line, &e); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, nil
+}

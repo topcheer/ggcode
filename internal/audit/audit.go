@@ -38,6 +38,11 @@ type Event struct {
 	InvariantID string
 	Peer        string
 	TaskID      string
+	// Rationale carries the arg_rationale the model attached to a
+	// heavy-parameter tool call (the "why" behind the decision). It is
+	// stripped from the args before execution, so persisting it here is
+	// the only place it survives (#decision-audit).
+	Rationale string
 }
 
 type Entry struct {
@@ -52,6 +57,7 @@ type Entry struct {
 	InvariantID string `json:"invariant_id,omitempty"`
 	Peer        string `json:"peer,omitempty"`
 	TaskID      string `json:"task_id,omitempty"`
+	Rationale   string `json:"rationale,omitempty"`
 	PrevHash    string `json:"prev_hash"`
 	Hash        string `json:"hash"`
 }
@@ -80,6 +86,13 @@ func hashEntry(e Entry) string {
 		writeTagged(1, e.InvariantID)
 		writeTagged(2, e.Peer)
 		writeTagged(3, e.TaskID)
+	}
+	// Tagged 4: rationale. Kept in a separate conditional so legacy
+	// entries (no rationale) hash byte-identically - the chain Verify
+	// over pre-existing ledgers stays valid.
+	if e.Rationale != "" {
+		b.WriteByte(4)
+		writeField(e.Rationale)
 	}
 	writeField(e.PrevHash)
 	sum := sha256.Sum256([]byte(b.String()))
@@ -185,6 +198,7 @@ func (l *Ledger) Append(e Event) (Entry, error) {
 		InvariantID: e.InvariantID,
 		Peer:        e.Peer,
 		TaskID:      e.TaskID,
+		Rationale:   e.Rationale,
 		PrevHash:    l.prev,
 	}
 	entry.Hash = hashEntry(entry)
