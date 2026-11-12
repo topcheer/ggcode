@@ -3398,7 +3398,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 				result = cmdCached
 			} else {
+				execStart := time.Now()
 				result = a.executeToolWithPermission(ctx, tc)
+				if isWaitClassTool(tc.Name) {
+					runStats.addWaitTime(time.Since(execStart))
+				}
 
 				a.storeCommandResult(tc.Name, tc.Arguments, result)
 
