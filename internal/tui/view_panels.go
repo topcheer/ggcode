@@ -87,11 +87,15 @@ func (m Model) renderContextPanel() string {
 		}
 		present := describeTool(m.currentLanguage(), m.pendingApproval.ToolName, m.pendingApproval.Input)
 		toolLine := formatToolInline(present.DisplayName, present.Detail)
-		body := fmt.Sprintf(" %s   %s\n %s  %s\n\n%s\n%s",
+		subtitle, preview := approvalCommandPreview(m.pendingApproval.Input)
+		inputLines := []string{m.t("label.input"), preview}
+		if subtitle != "" {
+			inputLines = []string{m.t("label.input"), subtitle, preview}
+		}
+		body := fmt.Sprintf(" %s   %s\n\n%s\n%s\n%s",
 			m.t("label.tool"),
 			toolLine,
-			m.t("label.input"),
-			util.Truncate(compactToolArgsPreview(strings.ReplaceAll(m.pendingApproval.Input, "\n", " ")), 500),
+			strings.Join(inputLines, "\n "),
 			m.renderApprovalOptions(m.approvalOptions, m.approvalCursor),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/j/k move • Enter confirm • y/n/a shortcuts"),
 		)
@@ -274,4 +278,36 @@ func (m Model) renderAuxColumn() string {
 		return m.renderSidebar()
 	}
 	return ""
+}
+
+// approvalCommandPreview renders a pending-approval command preserving line
+// structure (#5526): flattening newlines and truncating at 500 chars turned
+// the approval panel - the last human checkpoint in bypass mode - into
+// rubber-stamp theater for long commands. A leading "# comment" line
+// (arg_rationale convention) is returned as the subtitle; the preview keeps
+// the first 8 and last 2 lines with a "[... +K more lines]" signal between.
+// One-liners render unchanged (single line, still capped at 500 chars).
+func approvalCommandPreview(input string) (subtitle, preview string) {
+	if input == "" {
+		return "", ""
+	}
+	lines := strings.Split(strings.TrimRight(input, "\n"), "\n")
+	// Subtitle: leading comment line, per the arg_rationale convention.
+	if len(lines) > 1 && strings.HasPrefix(strings.TrimSpace(lines[0]), "#") {
+		subtitle = strings.TrimSpace(lines[0])
+		lines = lines[1:]
+	}
+	const headN, tailN = 8, 2
+	const maxChars = 500
+	if len(lines) <= headN+tailN {
+		preview = strings.Join(lines, "\n")
+	} else {
+		preview = strings.Join(lines[:headN], "\n") +
+			fmt.Sprintf("\n[... +%d more lines]", len(lines)-headN-tailN) +
+			"\n" + strings.Join(lines[len(lines)-tailN:], "\n")
+	}
+	if len(preview) > maxChars {
+		preview = util.Truncate(preview, maxChars)
+	}
+	return subtitle, preview
 }
