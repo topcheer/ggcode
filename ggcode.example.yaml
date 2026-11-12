@@ -710,6 +710,10 @@ memory:
   curator:
     enabled: true         # resident background curator (default true)
     model: ""             # curator LLM; empty = current provider default model
+    sweep: false          # #5512 autonomous LLM curator sweep (default off): a
+                          # weekly adjudication round over global memory + manual
+                          # `ggcode memory sweep [--gate]`; read live at each tick,
+                          # so toggling needs no restart
 
 hooks:
   # Before user message reaches the LLM - sync, can block.
