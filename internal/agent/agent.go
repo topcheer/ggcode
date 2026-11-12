@@ -202,6 +202,7 @@ type Agent struct {
 	toolMemo                     *toolMemo
 	confidence                   *confidenceState
 	selfModel                    *AgentSelfModel
+	anchorStore                  *AnchorStore
 	verifDebt                    *verificationDebtState
 	undoBlind                    *undoBlindState
 	editAbandon                  *editAbandonState
@@ -479,6 +480,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolMemo:               newToolMemo(),
 		confidence:             newConfidenceState(),
 		selfModel:              LoadSelfModel(SelfModelPath(".")),
+		anchorStore:            LoadAnchorStore(AnchorPath(".")),
 		verifDebt:              newVerificationDebtState(),
 		undoBlind:              newUndoBlindState(),
 		editAbandon:            newEditAbandonState(),
@@ -3202,6 +3204,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				return err
 			}
 			var undoBlindHint string
+			if a.anchorStore != nil {
+				if v := a.anchorStore.CheckViolation(tc.Name, extractTarget(tc.Name, []byte(tc.Arguments))); v != "" {
+					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: v})
+				}
+			}
 			if ub := a.undoBlind.recordToolCall(tc.Name, tc.Arguments); ub != "" {
 				debug.Log("agent", "Iteration %d: undo-blind mutation detected (pre-execution)", i+1)
 				undoBlindHint = ub
