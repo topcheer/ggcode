@@ -59,7 +59,7 @@ func TestLoadCommandFileTaxonomyRoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(taxonomySkill), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd, ok := loadCommandFile(filepath.Join(skillDir, "SKILL.md"), "deploy-taxonomy", loadTarget{Source: SourceProject, LoadedFrom: LoadedFromSkills})
+	cmd, ok := loadCommandFile(filepath.Join(skillDir, "SKILL.md"), "deploy-taxonomy", loadTarget{Source: SourceProject, LoadedFrom: LoadedFromSkills}, nil)
 	if !ok {
 		t.Fatal("loadCommandFile returned false")
 	}

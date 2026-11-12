@@ -43,7 +43,8 @@ type SkillFailureMode struct {
 }
 
 type Loader struct {
-	targets []loadTarget
+	targets    []loadTarget
+	projectDir string
 }
 
 func NewLoader(projectDir string) *Loader {
@@ -58,7 +59,8 @@ func NewLoader(projectDir string) *Loader {
 	}
 	targets := dedupeLoadTargets(append(agentPluginSkillTargets(projectDir), native...))
 	return &Loader{
-		targets: targets,
+		targets:    targets,
+		projectDir: projectDir,
 	}
 }
 
@@ -87,8 +89,9 @@ func canonicalTargetDir(dir string) string {
 
 func (l *Loader) Load() map[string]*Command {
 	cmds := make(map[string]*Command)
+	lockState := newSkillLockState(l.projectDir)
 	for _, target := range l.targets {
-		loadFromDir(target, cmds)
+		loadFromDir(target, lockState, cmds)
 	}
 	return cmds
 }
@@ -119,13 +122,13 @@ func (l *Loader) List() []*Command {
 	return out
 }
 
-func loadFromDir(target loadTarget, cmds map[string]*Command) {
+func loadFromDir(target loadTarget, lockState *skillLockState, cmds map[string]*Command) {
 	entries, err := os.ReadDir(target.Dir)
 	if err != nil {
 		return
 	}
 	if target.LoadedFrom == LoadedFromSkills {
-		loadSkillsFromDir(target, entries, cmds)
+		loadSkillsFromDir(target, lockState, entries, cmds)
 		return
 	}
 	for _, e := range entries {
@@ -136,13 +139,13 @@ func loadFromDir(target loadTarget, cmds map[string]*Command) {
 		if name == "" {
 			continue
 		}
-		if cmd, ok := loadCommandFile(filepath.Join(target.Dir, e.Name()), name, target); ok {
+		if cmd, ok := loadCommandFile(filepath.Join(target.Dir, e.Name()), name, target, lockState); ok {
 			cmds[name] = cmd
 		}
 	}
 }
 
-func loadSkillsFromDir(target loadTarget, entries []os.DirEntry, cmds map[string]*Command) {
+func loadSkillsFromDir(target loadTarget, lockState *skillLockState, entries []os.DirEntry, cmds map[string]*Command) {
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -152,13 +155,16 @@ func loadSkillsFromDir(target loadTarget, entries []os.DirEntry, cmds map[string
 			continue
 		}
 		path := filepath.Join(target.Dir, name, "SKILL.md")
-		if cmd, ok := loadCommandFile(path, name, target); ok {
+		if cmd, ok := loadCommandFile(path, name, target, lockState); ok {
 			cmds[name] = cmd
 		}
 	}
 }
 
-func loadCommandFile(path, name string, target loadTarget) (*Command, bool) {
+func loadCommandFile(path, name string, target loadTarget, lockState *skillLockState) (*Command, bool) {
+	if lockState != nil && !lockState.allow(path, name, string(target.Source)) {
+		return nil, false
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, false
