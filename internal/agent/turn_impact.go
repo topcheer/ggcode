@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -106,9 +107,35 @@ func (r *turnImpactReport) render() string {
 	fmt.Fprintf(&b, "## Turn Impact (previous run, informational only)\n")
 	fmt.Fprintf(&b, "Risk tier: %s\n", r.RiskTier)
 	if len(r.Files) > 0 {
-		fmt.Fprintf(&b, "Files touched (%d):\n", len(r.Files))
+		// Route worktree-resident paths to their worktree so changes made in
+		// an isolated .ggcode/worktrees/<name> checkout are never attributed
+		// to the main tree (#5524). Main-tree files keep the original format
+		// byte-for-byte; a worktree-only run produces zero main-tree lines.
+		var mainFiles []string
+		worktreeFiles := map[string][]string{}
 		for _, p := range r.Files {
-			fmt.Fprintf(&b, "- %s (via %s)\n", p, r.FirstTools[p])
+			if name, _, ok := worktreeSegment(p); ok {
+				worktreeFiles[name] = append(worktreeFiles[name], p)
+				continue
+			}
+			mainFiles = append(mainFiles, p)
+		}
+		if len(mainFiles) > 0 {
+			fmt.Fprintf(&b, "Files touched (%d):\n", len(r.Files))
+			for _, p := range mainFiles {
+				fmt.Fprintf(&b, "- %s (via %s)\n", p, r.FirstTools[p])
+			}
+		}
+		wtNames := make([]string, 0, len(worktreeFiles))
+		for name := range worktreeFiles {
+			wtNames = append(wtNames, name)
+		}
+		sort.Strings(wtNames)
+		for _, name := range wtNames {
+			fmt.Fprintf(&b, "Files touched in worktree %s (isolated checkout under .ggcode/worktrees - NOT the main tree):\n", name)
+			for _, p := range worktreeFiles[name] {
+				fmt.Fprintf(&b, "- %s (via %s)\n", p, r.FirstTools[p])
+			}
 		}
 	}
 	if r.ShellCount > 0 {
@@ -119,6 +146,46 @@ func (r *turnImpactReport) render() string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// resolveImpactPath anchors relative edit paths against the session working
+// directory so files changed inside a worktree keep their worktree
+// provenance (#5524). Absolute paths are cleaned only.
+func resolveImpactPath(workingDir, p string) string {
+	if p == "" {
+		return p
+	}
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	if workingDir == "" {
+		return filepath.Clean(p)
+	}
+	return filepath.Join(workingDir, p)
+}
+
+// worktreeSegment reports whether a changed path lives inside a ggcode-
+// managed worktree (<repo>/.ggcode/worktrees/<name>/...). It returns the
+// worktree name and the path relative to the repo root; ok is false for
+// main-tree paths.
+func worktreeSegment(p string) (name, repoRel string, ok bool) {
+	const marker = ".ggcode/worktrees/"
+	norm := filepath.ToSlash(p)
+	i := strings.Index(norm, marker)
+	if i < 0 {
+		return "", "", false
+	}
+	rest := norm[i+len(marker):]
+	j := strings.Index(rest, "/")
+	if j <= 0 {
+		return "", "", false
+	}
+	name = rest[:j]
+	repoRel = norm[:i] + ".ggcode/worktrees/" + rest
+	if name == "" || repoRel == "" {
+		return "", "", false
+	}
+	return name, repoRel, true
 }
 
 // shellDestructiveRe is a conservative keyword check: over-reporting is

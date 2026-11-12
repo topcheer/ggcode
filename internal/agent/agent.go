@@ -3457,7 +3457,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.fileFreshness.recordWrite(p)
 					a.readHash.recordWriteHash(p)
 					if a.turnImpact != nil {
-						a.turnImpact.recordFileEdit(tc.Name, p)
+						a.turnImpact.recordFileEdit(tc.Name, resolveImpactPath(a.WorkingDir(), p))
 					}
 				}
 
