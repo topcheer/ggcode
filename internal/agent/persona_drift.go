@@ -156,6 +156,35 @@ func forbiddenKeywords(anchorText string) []string {
 	return kws
 }
 
+// matchesWholeWord reports whether kw appears in s as a whole word: every
+// character directly adjacent to the match (if any) is not a letter or
+// digit. Regex-free to keep the hot path cheap.
+func matchesWholeWord(s, kw string) bool {
+	if kw == "" {
+		return false
+	}
+	for start := 0; ; {
+		idx := strings.Index(s[start:], kw)
+		if idx < 0 {
+			return false
+		}
+		at := start + idx
+		end := at + len(kw)
+		before := byte(' ')
+		if at > 0 {
+			before = s[at-1]
+		}
+		after := byte(' ')
+		if end < len(s) {
+			after = s[end]
+		}
+		if !isWordByte(before) && !isWordByte(after) {
+			return true
+		}
+		start = at + 1
+	}
+}
+
 // CheckViolation scans one tool call's target against prohibition anchors.
 // Returns an advisory when a forbidden keyword appears in the target.
 func (s *AnchorStore) CheckViolation(toolName, target string) string {
@@ -168,7 +197,12 @@ func (s *AnchorStore) CheckViolation(toolName, target string) string {
 	for i := range s.Anchors {
 		a := &s.Anchors[i]
 		for _, kw := range forbiddenKeywords(a.Text) {
-			if strings.Contains(lower, kw) {
+			// #5514: bare substring matching fired on unrelated prose that
+			// merely contained the keyword as a word stem (e.g. anchor
+			// "Test conclusion" vs a tool call whose arguments mention
+			// "unit tests"). Require the keyword as a whole word: the
+			// characters around the match must not be letters or digits.
+			if matchesWholeWord(lower, kw) {
 				a.Violations++
 				s.save()
 				return fmt.Sprintf(
