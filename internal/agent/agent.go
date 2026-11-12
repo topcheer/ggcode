@@ -3575,87 +3575,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 
-			if idempWarn := a.buildIdempot.recordToolCall(tc.Name, tc.Arguments, i+1); idempWarn != "" {
-				debug.Log("agent", "Iteration %d: build idempotency violation detected", i+1)
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: idempWarn}},
-				})
-				msgs = a.contextManager.Messages()
-			}
-
-			if taintWarn := a.taintInfluence.checkInfluence(tc.Name, string(tc.Arguments)); taintWarn != "" {
-				debug.Log("agent", "Iteration %d: tainted data influence detected on %s", i+1, tc.Name)
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: taintWarn}},
-				})
-				msgs = a.contextManager.Messages()
-			}
-
-			if pseudoWarn := a.taintInfluence.checkPseudoDirectiveArgs(tc.Name, string(tc.Arguments)); pseudoWarn != "" {
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: pseudoWarn}},
-				})
-				msgs = a.contextManager.Messages()
-			}
-
-			// #28 SLO error budget: sliding-window success-rate guard. Fast
-			// burn warns once; exhausting the budget trips the breaker and
-			// escalates to ask_user instead of letting the agent keep
-			// burning retries (budget layer vs compounding_failure's hint layer).
-			if a.errorBudget != nil {
-				if budgetMsg := a.errorBudget.evaluate(!result.IsError); budgetMsg != "" {
-					debug.Log("agent", "Iteration %d: error budget event", i+1)
-					a.contextManager.Add(provider.Message{
-						Role:    "user",
-						Content: []provider.ContentBlock{{Type: "text", Text: budgetMsg}},
-					})
-					msgs = a.contextManager.Messages()
-				}
-			}
-
-			if exfilWarn := a.exfilChain.checkExfilChain(tc.Name, string(tc.Arguments)); exfilWarn != "" {
-				debug.Log("agent", "Iteration %d: exfiltration chain detected on %s", i+1, tc.Name)
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: exfilWarn}},
-				})
-				msgs = a.contextManager.Messages()
-			}
-
-			a.serialRead.recordToolCall(tc.Name)
-			a.reasoningRedund.recordReasoning("", true)
-
-			if covWarn := a.editCoverage.recordToolCall(tc.Name, string(tc.Arguments)); covWarn != "" {
-				debug.Log("agent", "Iteration %d: verification coverage gap detected", i+1)
-
-				if cmd := extractCommandFromToolCall(tc.Arguments); cmd != "" {
-					a.scopeNarrow.lastCoverageWarnedCmd = cmd
-				}
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: covWarn}},
-				})
-				msgs = a.contextManager.Messages()
-			}
-
-			if a.selfModel != nil {
-				if result.IsError {
-					a.selfModel.Record(SelfModelPath(a.WorkingDir()), tc.Name, false, result.Content)
-				} else {
-					a.selfModel.Record(SelfModelPath(a.WorkingDir()), tc.Name, true, "")
-				}
-			}
-			if effGuidance := a.toolEff.recordCall(tc.Name, result.Content, result.IsError); effGuidance != "" {
-				debug.Log("agent", "Iteration %d: tool effectiveness guidance for %s", i+1, tc.Name)
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: effGuidance}},
-				})
-				msgs = a.contextManager.Messages()
-			}
+			msgs = a.runGuardZoneWatchers(tc, result, i+1, msgs)
 
 			if result.IsError {
 				a.usageHints.recordFailure(tc.Name, result.Content)
@@ -4374,15 +4294,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 			if speculativeSafeTools[tc.Name] && !result.IsError {
 				seenReadOnly[dedupK] = len(toolResults) - 1
-			} else if !speculativeSafeTools[tc.Name] && (!result.IsError || partialEditWroteDespiteError(tc.Name, result.Content, result.IsError)) {
-				// #5153: a tool that errored but still wrote (multi_file_edit
-				// partial_success) mutated the source tree, so cached
-				// read-only results must be dropped here too - same
-				// condition as the toolMemo invalidation at the
-				// mutatesSourceTree site (#2991). Otherwise a same-batch
-				// re-read replays stale pre-edit content with IsError
-				// false and no staleness marker.
-
+			} else if dedupInvalidation.MutatedSource(tc, result) {
+				// #5153/#3851: source mutation (success or wrote-despite-error,
+				// non-speculative) drops cached read-only results - same
+				// condition as the toolMemo invalidation (#2991).
 				if len(seenReadOnly) > 0 {
 					debug.Log("agent", "in-turn dedup invalidated: %s mutated state, %d cached read-only results dropped", tc.Name, len(seenReadOnly))
 					seenReadOnly = make(map[dedupKey]int)
