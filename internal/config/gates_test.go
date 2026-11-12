@@ -255,9 +255,10 @@ func TestMatchMergeGateWrapperPrefix(t *testing.T) {
 		// echo heads stay ungated in every wrapper shape
 		{"env echo gh pr merge 5356", 0, false},
 		{"sudo echo FOO=1", 0, false},
-		// timeout WITH an argument keeps the argument (selector-shaped
-		// token, not a wrapper) - deliberately non-matching by design
-		{"timeout 30 gh pr merge 5356", 0, false},
+		// timeout WITH a duration argument: #5418 consumes the duration so
+		// the unit heads with the real gh invocation (was wantHit:false
+		// before #5418's fix - QA table row flipped with the fix)
+		{"timeout 30 gh pr merge 5356", 5356, true},
 	}
 	for _, tc := range cases {
 		pr, hit := MatchMergeGateCommand(tc.cmd, def)
