@@ -201,6 +201,7 @@ type Agent struct {
 	speculator                   *speculator
 	toolMemo                     *toolMemo
 	confidence                   *confidenceState
+	selfModel                    *AgentSelfModel
 	verifDebt                    *verificationDebtState
 	undoBlind                    *undoBlindState
 	editAbandon                  *editAbandonState
@@ -477,6 +478,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		speculator:             newSpeculator(),
 		toolMemo:               newToolMemo(),
 		confidence:             newConfidenceState(),
+		selfModel:              LoadSelfModel(SelfModelPath(".")),
 		verifDebt:              newVerificationDebtState(),
 		undoBlind:              newUndoBlindState(),
 		editAbandon:            newEditAbandonState(),
@@ -3649,6 +3651,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				msgs = a.contextManager.Messages()
 			}
 
+			if a.selfModel != nil {
+				if result.IsError {
+					a.selfModel.Record(SelfModelPath("."), tc.Name, false, result.Content)
+				} else {
+					a.selfModel.Record(SelfModelPath("."), tc.Name, true, "")
+				}
+			}
 			if effGuidance := a.toolEff.recordCall(tc.Name, result.Content, result.IsError); effGuidance != "" {
 				debug.Log("agent", "Iteration %d: tool effectiveness guidance for %s", i+1, tc.Name)
 				a.contextManager.Add(provider.Message{
