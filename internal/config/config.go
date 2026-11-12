@@ -374,6 +374,10 @@ type MemoryCuratorConfig struct {
 	// Model selects the LLM the curator uses; empty means the current
 	// provider default model.
 	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+	// Sweep enables the #5512 autonomous LLM curator sweep (weekly
+	// adjudication round over global memory). Defaults to false (off);
+	// read live at each trigger so toggling takes effect without restart.
+	Sweep *bool `yaml:"sweep,omitempty" json:"sweep,omitempty"`
 }
 
 // MemoryCuratorEnabled reports whether the memory curator should start.
@@ -383,6 +387,15 @@ func (c *Config) MemoryCuratorEnabled() bool {
 		return true
 	}
 	return *c.Memory.Curator.Enabled
+}
+
+// MemoryCuratorSweepEnabled reports whether the autonomous curator sweep
+// (#5512) is on. Defaults to false (opt-in).
+func (c *Config) MemoryCuratorSweepEnabled() bool {
+	if c == nil || c.Memory.Curator.Sweep == nil {
+		return false
+	}
+	return *c.Memory.Curator.Sweep
 }
 
 type LSPServerConfig struct {

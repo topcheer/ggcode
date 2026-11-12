@@ -37,6 +37,13 @@ func NewAutoMemory() *AutoMemory {
 	return &AutoMemory{dir: dir}
 }
 
+// NewAutoMemoryAt builds an AutoMemory rooted at an explicit directory
+// (tests, sweeps over isolated stores).
+func NewAutoMemoryAt(dir string) *AutoMemory {
+	_ = os.MkdirAll(dir, 0755)
+	return &AutoMemory{dir: dir}
+}
+
 func NewProjectAutoMemory(workingDir string) *AutoMemory {
 	home := config.HomeDir()
 
@@ -245,6 +252,12 @@ type MemoryEntryInfo struct {
 	// UpdatedAt is the entry file's modification time, i.e. when the entry
 	// content was last written.
 	UpdatedAt time.Time
+}
+
+// Metas exposes full entry metadata (category/created/uses/source/outcome)
+// for adjudication layers (curator sweep). Read-only snapshot.
+func (am *AutoMemory) Metas() ([]MemoryMeta, error) {
+	return am.collectMetas()
 }
 
 func (am *AutoMemory) ListDetailed() ([]MemoryEntryInfo, error) {
