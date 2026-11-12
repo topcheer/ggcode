@@ -300,7 +300,7 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 
 		Errors:      stats.ErrorCount,
 		FilesEdited: len(stats.FilesEdited),
-		DurationSec: int(stats.Duration.Round(time.Second).Seconds()),
+		DurationSec: int(stats.ActiveDuration().Round(time.Second).Seconds()),
 		Compactions: stats.CompactionCount,
 		ContextPeak: stats.ContextPeakTokens,
 		Success:     stats.Success,

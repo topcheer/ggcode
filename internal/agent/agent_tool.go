@@ -136,6 +136,12 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	result := a.executeToolWithTimeout(ctx, tc)
 	toolDur := time.Since(toolStart)
 
+	// Deliberate wait windows (sleep/wait_agent/wait_command) are excluded
+	// from the run-duration perf baseline (#5523).
+	if isWaitToolName(tc.Name) && a.activeRunStats != nil {
+		a.activeRunStats.AddWaitToolDuration(toolDur)
+	}
+
 	if toolDur > slowToolThreshold {
 		debug.Log("agent", "slow tool: %s took %v", tc.Name, toolDur)
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -51,6 +52,13 @@ type RunStats struct {
 	CompactionCount int
 
 	TotalTokens int
+
+	// WaitToolNanos accumulates wall time spent in pure wait tools (sleep,
+	// wait_agent, wait_command). That time is idle-by-design: it must not
+	// count toward run-duration perf baselines (#5523) or the regression
+	// banner reports phantom multi-x slowdowns for rounds that simply
+	// waited on a sub-agent or a rate-limit sleep.
+	WaitToolNanos int64
 
 	startTime time.Time
 
@@ -99,6 +107,33 @@ func (s *RunStats) recordToolCall(toolName string) {
 		s.ToolCalls = make(map[string]int)
 	}
 	s.ToolCalls[toolName]++
+}
+
+// waitToolNames are tools whose entire execution window is deliberate
+// waiting, not tool work.
+var waitToolNames = map[string]bool{
+	"sleep":        true,
+	"wait_agent":   true,
+	"wait_command": true,
+}
+
+func isWaitToolName(name string) bool { return waitToolNames[name] }
+
+// AddWaitToolDuration accumulates a wait-tool execution window.
+func (s *RunStats) AddWaitToolDuration(d time.Duration) {
+	if d > 0 {
+		atomic.AddInt64(&s.WaitToolNanos, int64(d))
+	}
+}
+
+// ActiveDuration is wall duration minus deliberate wait windows: the
+// tool-work time the perf baseline should compare across runs (#5523).
+func (s *RunStats) ActiveDuration() time.Duration {
+	d := s.Duration - time.Duration(atomic.LoadInt64(&s.WaitToolNanos))
+	if d < 0 {
+		return 0
+	}
+	return d
 }
 
 func (s *RunStats) recordFileEdit(path string) {

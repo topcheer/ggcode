@@ -432,6 +432,7 @@ type Agent struct {
 	researchPlanSubs         []ResearchSubQuery
 	falsePremise             *falsePremiseState
 	perfBaseline             *perfBaselineState
+	activeRunStats           *RunStats // wait-window accumulation hook (#5523)
 	lastRunStats             *RunStats
 	qualityScorer            *ResponseQualityScorer
 	systemPromptInjector     func() string
@@ -1505,6 +1506,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	a.goalDriftCtx.initFromUserMessage(userPromptForStats)
 	runStats := newRunStats(userPromptForStats)
+	a.activeRunStats = runStats // executeToolCall records wait windows here (#5523)
 
 	if a.contextManager != nil {
 
