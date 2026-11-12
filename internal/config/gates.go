@@ -215,8 +215,18 @@ func MatchMergeGateCommand(command string, patterns []string) (prNumber int, mat
 func stripCommandPrefixes(fields []string) []string {
 	i := 0
 	for i < len(fields) {
-		if tok := fields[i]; isEnvAssignmentToken(tok) || isWrapperPrefixToken(tok) {
+		tok := fields[i]
+		if isEnvAssignmentToken(tok) || isWrapperPrefixToken(tok) {
 			i++
+			// #5418: timeout carries a duration argument before the real
+			// command (`timeout 30 gh ...`, suffixed `30s/2m/1h`); consume
+			// it so the unit heads with the real invocation. A leading flag
+			// (`timeout -k 5 30 gh ...`) is not a duration and stops the
+			// strip at the conservative side - same known-limit class as
+			// sudo-with-argument (#5342), pinned in the test table.
+			if tok == "timeout" && i < len(fields) && isTimeoutDurationToken(fields[i]) {
+				i++
+			}
 			continue
 		}
 		break
@@ -230,10 +240,41 @@ func isEnvAssignmentToken(tok string) bool {
 
 func isWrapperPrefixToken(tok string) bool {
 	switch tok {
-	case "sudo", "nohup", "env", "xargs", "timeout":
+	// #5418: `command` is POSIX-shell transparent (`command gh ...` runs gh);
+	// `command -v gh` strips only the wrapper and stops at `-v` because the
+	// loop breaks at the first non-wrapper token - flags are never added here.
+	case "sudo", "nohup", "env", "xargs", "timeout", "command":
 		return true
 	}
 	return false
+}
+
+// isTimeoutDurationToken reports whether tok could be a timeout duration
+// argument: digits, or digits with a single time-unit suffix (s/m/h/d),
+// optionally fractional (1.5s). Anything else - including flag forms (-k,
+// --foreground) and non-numeric words - is not a duration.
+func isTimeoutDurationToken(tok string) bool {
+	if tok == "" || tok[0] == '-' || tok[0] == '+' {
+		return false
+	}
+	if unit := tok[len(tok)-1]; unit == 's' || unit == 'm' || unit == 'h' || unit == 'd' {
+		tok = tok[:len(tok)-1]
+	}
+	if tok == "" {
+		return false
+	}
+	hasDigit := false
+	for _, c := range tok {
+		if c >= '0' && c <= '9' {
+			hasDigit = true
+			continue
+		}
+		if c == '.' {
+			continue
+		}
+		return false
+	}
+	return hasDigit
 }
 
 // splitCommandUnits splits a (possibly compound) shell command into its
