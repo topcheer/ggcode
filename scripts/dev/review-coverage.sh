@@ -82,13 +82,38 @@ case "${1:-status}" in
     # path (issue #5390).
     ledger_lock; trap ledger_unlock EXIT
     touch "$LEDGER"
+    marked=''
     for p in "$@"; do
-      line=$(git ls-files -s -- "$p" || true)
+      # #5483: `git ls-files ... || true` swallowed transient fork/exec
+      # failures under CI memory pressure - the mark silently became a
+      # "skip (not tracked)" and exited 0, losing the entry (observed as
+      # "mark of pkg/fh.go lost" with every cmd green). Retry transient
+      # failures; only an exit-0-but-empty result is a genuine skip.
+      line=$(git ls-files -s -- "$p" 2>/dev/null) && git_ok=1 || git_ok=0
+      for _try in 1 2 3; do
+        [ "$git_ok" = 1 ] && break
+        sleep 0.2
+        line=$(git ls-files -s -- "$p" 2>/dev/null) && git_ok=1 || git_ok=0
+      done
+      if [ "$git_ok" != 1 ]; then
+        echo "mark: git ls-files failed for $p (transient, gave up after retries)" >&2
+        exit 1
+      fi
       if [ -z "$line" ]; then echo "skip (not tracked): $p" >&2; continue; fi
       tmp=$(mktemp "${LEDGER}.XXXXXX")
       { grep -vF "$(printf '\t')$p" "$LEDGER" || true; } > "$tmp"
       printf '%s\n' "$line" >> "$tmp"
       mv "$tmp" "$LEDGER"
+      marked="$marked $p"
+    done
+    # #5483 belt: every path actually written must be present in the ledger
+    # on exit - any silent write loss becomes a loud failure instead of a
+    # lost mark. Skipped (untracked) paths are intentionally exempt.
+    for p in $marked; do
+      if ! grep -qF "$(printf '\t')$p" "$LEDGER"; then
+        echo "mark: $p missing from ledger after write" >&2
+        exit 1
+      fi
     done
     ;;
   prune)
