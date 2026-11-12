@@ -49,7 +49,13 @@ type dangerPattern struct {
 	reason string
 }
 
-const rmCmdAnchor = `(?:^|[|;&\n` + "`" + `("']\s*|(?:sudo|doas|xargs|nohup|env|nice)\s+)`
+// #5474: wrapper words may carry their own flags before reaching rm -
+// valueless (`xargs -0`), inline-valued (`sudo --preserve-env=PATH`),
+// numeric (`nice -n 5`) and KEY=VALUE env assignments (`env VAR=1 nice`).
+// The old anchor required exactly one bare whitespace after the wrapper, so
+// those shapes fell outside the anchor and their trailing `rm -rf` went
+// unanchored (agent-layer parity fix was #5456/#5460).
+const rmCmdAnchor = `(?:^|[|;&\n` + "`" + `("']\s*|(?:sudo|doas|xargs|nohup|env|nice)(?:\s+(?:-{1,2}[A-Za-z][\w-]*(?:=[^\s;|&` + "`" + `]*|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')?|[A-Za-z_][A-Za-z0-9_]*=[^\s;|&` + "`" + `]*|-\d|\d+))*\s+)`
 
 func NewDangerousDetector() *DangerousDetector {
 	d := &DangerousDetector{}
