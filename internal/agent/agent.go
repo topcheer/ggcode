@@ -229,7 +229,6 @@ type Agent struct {
 	toolMemo                     *toolMemo
 	confidence                   *confidenceState
 	selfModel                    *AgentSelfModel
-	anchorStore                  *AnchorStore
 	verifDebt                    *verificationDebtState
 	undoBlind                    *undoBlindState
 	editAbandon                  *editAbandonState
@@ -508,7 +507,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolMemo:               newToolMemo(),
 		confidence:             newConfidenceState(),
 		selfModel:              nil, // lazily bound in SetWorkingDir (#5498: cwd != workspace)
-		anchorStore:            nil, // lazily bound in SetWorkingDir (#5498: cwd != workspace)
 		verifDebt:              newVerificationDebtState(),
 		undoBlind:              newUndoBlindState(),
 		editAbandon:            newEditAbandonState(),
@@ -1288,14 +1286,11 @@ func (a *Agent) SetWorkingDir(dir string) {
 	// #5498: both persistent stores were previously pinned to the process
 	// working directory ("."), so in ACP/daemon deployments (cwd != workspace)
 	// every read/write landed beside the binary. Rebind on workspace change,
-	// same pattern as the ledgers above.
+	// same pattern as the ledgers above. (The anchor-store half was removed
+	// wholesale in #5514.)
 	if a.selfModel == nil || a.selfModel.boundDir != dir {
 		a.selfModel = LoadSelfModel(SelfModelPath(dir))
 		a.selfModel.boundDir = dir
-	}
-	if a.anchorStore == nil || a.anchorStore.boundDir != dir {
-		a.anchorStore = LoadAnchorStore(AnchorPath(dir))
-		a.anchorStore.boundDir = dir
 	}
 
 	if a.unreadEdit != nil {
@@ -3274,11 +3269,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				return err
 			}
 			var undoBlindHint string
-			if a.anchorStore != nil {
-				if v := a.anchorStore.CheckViolation(tc.Name, extractTarget(tc.Name, []byte(tc.Arguments))); v != "" {
-					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: v})
-				}
-			}
 			if ub := a.undoBlind.recordToolCall(tc.Name, tc.Arguments); ub != "" {
 				debug.Log("agent", "Iteration %d: undo-blind mutation detected (pre-execution)", i+1)
 				undoBlindHint = ub

@@ -50,7 +50,6 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"guidancePromoter":          "loaded lazily from rule store (guarded)",
 		"ruleStore":                 "loaded lazily via SetRuleStore (guarded)",
 		"selfModel":                 "lazily bound to the workspace in SetWorkingDir (#5498: NewAgent runs before the workspace is known)",
-		"anchorStore":               "lazily bound to the workspace in SetWorkingDir (#5498: NewAgent runs before the workspace is known)",
 		"userEditObs":               "r444 user-edit observer, built lazily on the rule store via getUserEditObserver (guarded)",
 		"ruleInjectCount":           "lazily initialized at first use (verify.go)",
 		"checkpoints":               "checkpoint manager, injected via setter (guarded)",
