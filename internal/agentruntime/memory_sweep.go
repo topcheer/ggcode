@@ -76,6 +76,15 @@ type SweepOptions struct {
 	// sweep-state.json (the memory dir in production).
 	AuditBase string
 	Now       func() time.Time
+
+	// DryRunRounds is the #5527 opt-in observation window: the first N
+	// rounds produce a verdict table (audit records marked dry_run) with
+	// zero store mutation; round N+1 onward applies normally. Zero keeps
+	// existing behavior byte-identical. Counts persist in sweep-state.json.
+	DryRunRounds int
+	// ForceDryRun pins observe-only mode regardless of rounds (debug).
+	// Unsetting it returns to the schedule.
+	ForceDryRun bool
 }
 
 func (o *SweepOptions) fill() {
@@ -109,6 +118,7 @@ type SweepReport struct {
 	Noop      int      // idempotent no-ops (already applied)
 	Deferred  []string // keys deferred to the next round (low confidence / budget)
 	Skipped   bool     // concurrency slot held elsewhere
+	DryRun    bool     // observe-only round (#5527): judged, audit-marked, store untouched
 	AuditPath string
 }
 
@@ -187,7 +197,7 @@ func RunMemorySweepGate(ctx context.Context, am *memory.AutoMemory, judge SweepJ
 	if err != nil {
 		return nil, false, fmt.Errorf("gate apply: %w", err)
 	}
-	if aerr := appendSweepAudit(opts.auditPath(), final, opts.Now()); aerr != nil {
+	if aerr := appendSweepAudit(opts.auditPath(), final, opts.Now(), false); aerr != nil {
 		debug.Log("memory", "sweep gate audit write failed: %v", aerr)
 	}
 	rep.Applied, rep.Kept, rep.Noop, rep.Deferred = res.Applied, res.Kept, res.Noop, res.Deferred
@@ -475,9 +485,11 @@ func SweepGateConsistency(run1, run2 []SweepVerdict, maxDivergence float64) (boo
 // ---- concurrency slot -------------------------------------------------------
 
 type sweepSlotState struct {
-	Running   bool      `json:"running"`
-	StartedAt time.Time `json:"started_at"`
-	LastRun   time.Time `json:"last_run"`
+	Running         bool      `json:"running"`
+	StartedAt       time.Time `json:"started_at"`
+	LastRun         time.Time `json:"last_run"`
+	CompletedRounds int       `json:"completed_rounds,omitempty"`
+	DryRoundsDone   int       `json:"dry_rounds_done,omitempty"`
 }
 
 const sweepSlotStaleAfter = 10 * time.Minute
@@ -526,9 +538,13 @@ func acquireSweepSlot(statePath string, now func() time.Time) (release func(), h
 		if unlock, lerr := util.FileLock(statePath + ".lock"); lerr == nil {
 			defer unlock()
 		}
-		st.Running = false
-		st.LastRun = now()
-		_ = writeSweepSlot(statePath, st)
+		// Re-read fresh state: recordSweepRound may have advanced the
+		// round counters between acquire and release; a blind write of
+		// the captured struct would clobber them (#5527).
+		fresh := readSweepSlotState(statePath)
+		fresh.Running = false
+		fresh.LastRun = now()
+		_ = writeSweepSlot(statePath, fresh)
 	}, false, nil
 }
 
@@ -551,11 +567,13 @@ type sweepAuditRecord struct {
 	Key       string    `json:"key"`
 	Action    string    `json:"action"`
 	Rationale string    `json:"rationale"`
+	DryRun    bool      `json:"dry_run,omitempty"`
 }
 
 // appendSweepAudit appends one record per verdict to the audit log (the
-// post-hoc queryable provenance trail).
-func appendSweepAudit(path string, verdicts []SweepVerdict, ts time.Time) error {
+// post-hoc queryable provenance trail). dryRun marks observe-only rounds
+// (#5527): the verdicts were judged but NOT applied.
+func appendSweepAudit(path string, verdicts []SweepVerdict, ts time.Time, dryRun bool) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -565,7 +583,7 @@ func appendSweepAudit(path string, verdicts []SweepVerdict, ts time.Time) error 
 	}
 	defer f.Close()
 	for _, v := range verdicts {
-		rec := sweepAuditRecord{Timestamp: ts, Actor: sweepAuditActor, Key: v.Key, Action: string(v.Action), Rationale: v.Rationale}
+		rec := sweepAuditRecord{Timestamp: ts, Actor: sweepAuditActor, Key: v.Key, Action: string(v.Action), Rationale: v.Rationale, DryRun: dryRun}
 		line, _ := json.Marshal(rec)
 		if _, err := f.Write(append(line, '\n')); err != nil {
 			return err
@@ -593,6 +611,11 @@ func RunMemorySweep(ctx context.Context, am *memory.AutoMemory, judge SweepJudge
 		return rep, nil
 	}
 	defer release()
+
+	// #5527 dry-run decision: observe-only while the persisted count of
+	// completed rounds is inside the configured window (or force-pinned).
+	st := readSweepSlotState(opts.statePath())
+	dryRun := opts.ForceDryRun || (opts.DryRunRounds > 0 && st.DryRoundsDone < opts.DryRunRounds)
 
 	metas, err := am.Metas()
 	if err != nil {
@@ -622,15 +645,52 @@ func RunMemorySweep(ctx context.Context, am *memory.AutoMemory, judge SweepJudge
 	if err != nil {
 		return nil, fmt.Errorf("sweep verdicts invalid - failing the round loud: %w", err)
 	}
+	if dryRun {
+		// Observe-only: judge + validate + verdict table, but the store is
+		// left untouched and the audit trail records the round as dry_run
+		// (#5527). The round still counts toward sweep scheduling.
+		if aerr := appendSweepAudit(opts.auditPath(), verdicts, opts.Now(), true); aerr != nil {
+			debug.Log("memory", "sweep dry-run audit write failed: %v", aerr)
+		}
+		rep.DryRun = true
+		rep.Kept = len(verdicts) // verdict table visibility: all judged, none applied
+		debug.Log("memory", "sweep DRY-RUN digest: %d entries judged, 0 applied (verdict table in audit; %d/%d dry rounds consumed)",
+			rep.Entries, st.DryRoundsDone+1, opts.DryRunRounds)
+		recordSweepRound(opts.statePath(), true)
+		return rep, nil
+	}
 	res, err := applySweepVerdicts(am, verdicts, opts)
 	if err != nil {
 		return nil, fmt.Errorf("sweep apply - failing the round loud: %w", err)
 	}
-	if aerr := appendSweepAudit(opts.auditPath(), verdicts, opts.Now()); aerr != nil {
+	if aerr := appendSweepAudit(opts.auditPath(), verdicts, opts.Now(), false); aerr != nil {
 		debug.Log("memory", "sweep audit write failed (round already applied): %v", aerr)
 	}
 	rep.Applied, rep.Kept, rep.Noop, rep.Deferred = res.Applied, res.Kept, res.Noop, res.Deferred
+	recordSweepRound(opts.statePath(), false)
 	debug.Log("memory", "sweep digest: %d entries judged, %d applied, %d kept, %d noop, %d deferred (audit: %s)",
 		rep.Entries, rep.Applied, rep.Kept, rep.Noop, len(rep.Deferred), rep.AuditPath)
 	return rep, nil
+}
+
+// readSweepSlotState returns the persisted round counters (zero state when
+// absent/corrupt - the count restarts, which is the safe default).
+func readSweepSlotState(statePath string) sweepSlotState {
+	st := sweepSlotState{}
+	if data, rerr := os.ReadFile(statePath); rerr == nil {
+		_ = json.Unmarshal(data, &st)
+	}
+	return st
+}
+
+// recordSweepRound advances the persisted counters after a completed round:
+// completed rounds always increment; dry rounds additionally consume one
+// window slot (#5527).
+func recordSweepRound(statePath string, dry bool) {
+	st := readSweepSlotState(statePath)
+	st.CompletedRounds++
+	if dry {
+		st.DryRoundsDone++
+	}
+	_ = writeSweepSlot(statePath, st)
 }

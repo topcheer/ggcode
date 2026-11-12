@@ -326,7 +326,7 @@ func TestSweepAuditTrail(t *testing.T) {
 	err := appendSweepAudit(auditPath, []SweepVerdict{
 		{Key: "a", Action: SweepKeep, Rationale: "valid lesson, illustrative paths only", Confidence: 0.9},
 		{Key: "b", Action: SweepArchive, Rationale: "machine-specific ops", Confidence: 0.95},
-	}, time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC))
+	}, time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC), false)
 	if err != nil {
 		t.Fatalf("audit: %v", err)
 	}
