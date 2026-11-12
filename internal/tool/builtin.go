@@ -59,6 +59,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		Glob{SandboxCheck: readSandboxFor("glob")},
 		CodeSearch{SandboxCheck: readSandboxFor("code_search"), Index: codeIndex},
 		SessionRecall{Registry: registry, Workspace: workingDir},
+		Why{Registry: registry, Workspace: workingDir},
 	}
 	tools = append(tools, NewLSPTools(workingDir, readSandboxFor("read_file"), sandboxFor("edit_file"))...)
 	tools = append(tools,
