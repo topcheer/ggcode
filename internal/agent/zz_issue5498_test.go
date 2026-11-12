@@ -2,15 +2,16 @@ package agent
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 )
 
-// TestAnchorStoreBindsWorkspace pins #5498: stores are lazily bound to the
-// agent's workspace (NOT the process cwd) on SetWorkingDir, and rebind when
-// the workspace changes. The live deployment shape is cwd != workspace (ACP
-// server: cwd=/, workspace=project dir).
-func TestAnchorStoreBindsWorkspace(t *testing.T) {
+// TestSelfModelBindsWorkspace pins the surviving half of #5498: the selfModel
+// store is lazily bound to the agent's workspace (NOT the process cwd) on
+// SetWorkingDir, and rebinds when the workspace changes. The live deployment
+// shape is cwd != workspace (ACP server: cwd=/, workspace=project dir).
+// The anchor-store half of the #5498/#5500 binding was removed wholesale in
+// #5514; git history covers it.
+func TestSelfModelBindsWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	procDir := t.TempDir() // pretend this is the process cwd
 	if procDir == workspace {
@@ -28,30 +29,17 @@ func TestAnchorStoreBindsWorkspace(t *testing.T) {
 	a := &Agent{} // minimal agent; NewAgent wiring covered by field checks
 	a.SetWorkingDir(workspace)
 
-	if a.anchorStore == nil {
-		t.Fatal("SetWorkingDir must lazily bind anchorStore")
+	if a.selfModel == nil {
+		t.Fatal("SetWorkingDir must lazily bind selfModel")
 	}
-	if a.anchorStore.boundDir != workspace {
-		t.Fatalf("anchorStore must bind to workspace %q, got %q", workspace, a.anchorStore.boundDir)
-	}
-	if a.selfModel == nil || a.selfModel.boundDir != workspace {
-		t.Fatalf("selfModel must bind to workspace %q", workspace)
-	}
-
-	// Record through the agent-facing write path: the JSON must land under
-	// the workspace, not the process cwd.
-	a.anchorStore.ObserveUserMessage("Never push directly to main.")
-	if _, err := os.Stat(filepath.Join(workspace, ".ggcode", "anchors.json")); err != nil {
-		t.Fatalf("anchors.json must live under the workspace: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(procDir, ".ggcode", "anchors.json")); err == nil {
-		t.Fatal("cwd must NOT receive anchors.json (the #5498 regression)")
+	if a.selfModel.boundDir != workspace {
+		t.Fatalf("selfModel must bind to workspace %q, got %q", workspace, a.selfModel.boundDir)
 	}
 
 	// Rebind on workspace change.
 	workspace2 := t.TempDir()
 	a.SetWorkingDir(workspace2)
-	if a.anchorStore.boundDir != workspace2 {
-		t.Fatalf("anchorStore must rebind on SetWorkingDir, got %q", a.anchorStore.boundDir)
+	if a.selfModel.boundDir != workspace2 {
+		t.Fatalf("selfModel must rebind on SetWorkingDir, got %q", a.selfModel.boundDir)
 	}
 }

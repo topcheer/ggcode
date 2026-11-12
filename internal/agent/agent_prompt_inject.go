@@ -58,13 +58,6 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 	}
 
 	if workingDir := a.WorkingDir(); workingDir != "" {
-		if a.anchorStore != nil {
-			a.anchorStore.ObserveUserMessage(runPrompt)
-			if sec := a.anchorStore.RenderAnchorsSection(); sec != "" {
-				dynamicParts = append(dynamicParts, sec)
-				debug.Log("agent", "Injected persisted constraint anchors into system prompt")
-			}
-		}
 		if pb := NewPlaybook(workingDir); pb != nil {
 			playbookText := pb.HintsForPrompt(runPrompt, 3)
 			if playbookText != "" {
