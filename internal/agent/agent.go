@@ -319,6 +319,7 @@ type Agent struct {
 	effortAdapter                *adaptiveEffortState
 	branchGuard                  *branchGuardState
 	destructiveGuard             *gitDestructiveState
+	turnImpact                   *turnImpactRecorder
 	shellNativeHint              *shellNativeHintState
 	monorepoScoper               *monorepoScoperState
 	bgOrphan                     *bgOrphanState
@@ -541,6 +542,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		artifactGuard:          newGeneratedArtifactState(),
 		branchGuard:            newBranchGuardState(),
 		destructiveGuard:       newGitDestructiveState(),
+		turnImpact:             newTurnImpactRecorder(),
 		shellNativeHint:        newShellNativeHintState(),
 		monorepoScoper:         newMonorepoScoperState(),
 		approvalMemory:         permission.NewApprovalMemory(),
@@ -1524,6 +1526,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	syncVerifyRetries := 0
 
 	a.resetTurnDetectors()
+	// #turn-dryrun: surface the previous run's blast radius as a read-only
+	// observation (inform-only, per the predictive-guardrail lesson of
+	// arXiv:2611.02815 - never block).
+	if a.turnImpact != nil {
+		if rep := a.turnImpact.report(); rep != nil {
+			if a.contextManager != nil {
+				if txt := rep.render(); txt != "" {
+					a.contextManager.Add(provider.Message{
+						Role:    "system",
+						Content: []provider.ContentBlock{{Type: "text", Text: txt}},
+					})
+					debug.Log("agent", "injected turn impact report (%d files, tier=%s)", len(rep.Files), rep.RiskTier)
+				}
+			}
+			a.turnImpact.reset()
+		}
+	}
 	defer func() {
 
 		MarkCompleted(sid, err == nil, runStats.Iterations, len(runStats.FilesEdited))
@@ -3423,6 +3442,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.tunnelVision.recordFile(p)
 					a.fileFreshness.recordWrite(p)
 					a.readHash.recordWriteHash(p)
+					if a.turnImpact != nil {
+						a.turnImpact.recordFileEdit(tc.Name, p)
+					}
 				}
 
 				a.recurringErrorRecordEdit()
@@ -3441,6 +3463,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.redundantReverify.recordShellSourceMutation()
 
 					a.getUserEditObserver().RestampBaseline()
+					if a.turnImpact != nil {
+						a.turnImpact.recordShellMutation(cmd, shellDestructive(cmd))
+					}
 					debug.Log("agent", "shell source mutation %q (failed cmd included): invalidated command/speculator/memo caches", cmd)
 				}
 			}
