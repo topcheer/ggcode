@@ -37,7 +37,7 @@ func SelfModelPath(workspace string) string {
 	return filepath.Join(workspace, ".ggcode", "self_model.json")
 }
 
-func loadSelfModel(path string) *AgentSelfModel {
+func LoadSelfModel(path string) *AgentSelfModel {
 	m := &AgentSelfModel{Skills: make(map[string]*SkillStat)}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -70,7 +70,7 @@ func (m *AgentSelfModel) save(path string) {
 }
 
 // record upserts one tool outcome and persists.
-func (m *AgentSelfModel) record(path, tool string, ok bool, failExcerpt string) {
+func (m *AgentSelfModel) Record(path, tool string, ok bool, failExcerpt string) {
 	if m == nil || tool == "" {
 		return
 	}
@@ -92,7 +92,7 @@ func (m *AgentSelfModel) record(path, tool string, ok bool, failExcerpt string) 
 
 // addLimit appends a declared limitation (capability-boundary escalations)
 // and persists. Capped to keep the card small.
-func (m *AgentSelfModel) addLimit(path, line string) {
+func (m *AgentSelfModel) AddLimit(path, line string) {
 	if m == nil || strings.TrimSpace(line) == "" {
 		return
 	}

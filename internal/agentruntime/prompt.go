@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/memory"
@@ -200,6 +201,10 @@ func BuildSubAgentSystemPrompt(ctx SubAgentPromptContext, task, agentType string
 		prompt += "Use workspace-relative paths with real line ranges (from your reads). These lines are parsed so the parent agent can issue targeted reads; free text alone is not enough.\n"
 	}
 
+	if card := agent.LoadSelfModel(agent.SelfModelPath(ctx.WorkingDir)).DelegationContext(); card != "" {
+		prompt += "\n\n" + card
+	}
+
 	prompt += "\n\n## Task\nComplete the following task independently:\n" + task
 
 	return prompt
@@ -208,6 +213,10 @@ func BuildSubAgentSystemPrompt(ctx SubAgentPromptContext, task, agentType string
 func BuildTeammateSystemPrompt(ctx SubAgentPromptContext, name, teamName string) string {
 
 	prompt := buildSharedAgentPrompt(ctx, "")
+
+	if card := agent.LoadSelfModel(agent.SelfModelPath(ctx.WorkingDir)).DelegationContext(); card != "" {
+		prompt += "\n\n" + card
+	}
 
 	prompt += "\n\n## Teammate Constraints\n"
 	prompt += fmt.Sprintf("You are a teammate named %q in team %q.\n", name, teamName)

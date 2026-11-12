@@ -478,7 +478,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		speculator:             newSpeculator(),
 		toolMemo:               newToolMemo(),
 		confidence:             newConfidenceState(),
-		selfModel:              loadSelfModel(SelfModelPath(".")),
+		selfModel:              LoadSelfModel(SelfModelPath(".")),
 		verifDebt:              newVerificationDebtState(),
 		undoBlind:              newUndoBlindState(),
 		editAbandon:            newEditAbandonState(),
@@ -3653,9 +3653,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 			if a.selfModel != nil {
 				if result.IsError {
-					a.selfModel.record(SelfModelPath("."), tc.Name, false, result.Content)
+					a.selfModel.Record(SelfModelPath("."), tc.Name, false, result.Content)
 				} else {
-					a.selfModel.record(SelfModelPath("."), tc.Name, true, "")
+					a.selfModel.Record(SelfModelPath("."), tc.Name, true, "")
 				}
 			}
 			if effGuidance := a.toolEff.recordCall(tc.Name, result.Content, result.IsError); effGuidance != "" {

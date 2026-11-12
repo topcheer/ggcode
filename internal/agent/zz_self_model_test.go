@@ -14,13 +14,13 @@ func TestSelfModelPersistReloadMerge(t *testing.T) {
 	dir := t.TempDir()
 	path := SelfModelPath(dir)
 
-	m := loadSelfModel(path)
-	m.record(path, "grep", false, "invalid pattern")
-	m.record(path, "grep", true, "")
-	m.record(path, "edit_file", true, "")
+	m := LoadSelfModel(path)
+	m.Record(path, "grep", false, "invalid pattern")
+	m.Record(path, "grep", true, "")
+	m.Record(path, "edit_file", true, "")
 
 	// Reload as a fresh session would.
-	m2 := loadSelfModel(path)
+	m2 := LoadSelfModel(path)
 	st := m2.Skills["grep"]
 	if st == nil || st.Success != 1 || st.Fail != 1 {
 		t.Fatalf("reload must keep grep stats, got %+v", st)
@@ -29,8 +29,8 @@ func TestSelfModelPersistReloadMerge(t *testing.T) {
 		t.Fatalf("last-fail excerpt must persist, got %q", st.LastFail)
 	}
 	// Merge semantics: further records accumulate.
-	m2.record(path, "grep", true, "")
-	m3 := loadSelfModel(path)
+	m2.Record(path, "grep", true, "")
+	m3 := LoadSelfModel(path)
 	if m3.Skills["grep"].Success != 2 {
 		t.Fatalf("merge must accumulate across sessions, got %+v", m3.Skills["grep"])
 	}
@@ -41,9 +41,9 @@ func TestSelfModelPersistReloadMerge(t *testing.T) {
 func TestSelfModelLimitCap(t *testing.T) {
 	dir := t.TempDir()
 	path := SelfModelPath(dir)
-	m := loadSelfModel(path)
+	m := LoadSelfModel(path)
 	for i := 0; i < 25; i++ {
-		m.addLimit(path, "pivot limit "+string(rune('a'+i%26)))
+		m.AddLimit(path, "pivot limit "+string(rune('a'+i%26)))
 	}
 	if len(m.DeclaredLimits) != 20 {
 		t.Fatalf("limits must cap at 20, got %d", len(m.DeclaredLimits))
@@ -58,17 +58,17 @@ func TestSelfModelLimitCap(t *testing.T) {
 func TestSelfModelDelegationContext(t *testing.T) {
 	dir := t.TempDir()
 	path := SelfModelPath(dir)
-	m := loadSelfModel(path)
+	m := LoadSelfModel(path)
 	if got := m.DelegationContext(); got != "" {
 		t.Fatalf("empty model must render empty card, got %q", got)
 	}
 	for i := 0; i < 9; i++ {
-		m.record(path, "grep", true, "")
+		m.Record(path, "grep", true, "")
 	}
 	for i := 0; i < 4; i++ {
-		m.record(path, "browser", false, "js wall")
+		m.Record(path, "browser", false, "js wall")
 	}
-	m.addLimit(path, "approach-pivot x3 on frontend work")
+	m.AddLimit(path, "approach-pivot x3 on frontend work")
 	card := m.DelegationContext()
 	if !strings.Contains(card, "grep 100%") {
 		t.Fatalf("card must rank strengths, got %q", card)
@@ -85,8 +85,8 @@ func TestSelfModelDelegationContext(t *testing.T) {
 func TestSelfModelFileContract(t *testing.T) {
 	dir := t.TempDir()
 	path := SelfModelPath(dir)
-	m := loadSelfModel(path)
-	m.record(path, "run_command", false, "boom")
+	m := LoadSelfModel(path)
+	m.Record(path, "run_command", false, "boom")
 	if _, err := os.Stat(filepath.Join(dir, ".ggcode", "self_model.json")); err != nil {
 		t.Fatalf("self_model.json must exist under .ggcode: %v", err)
 	}
