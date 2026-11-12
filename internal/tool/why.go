@@ -84,21 +84,31 @@ func (t Why) Execute(ctx context.Context, input json.RawMessage) (Result, error)
 		if out := t.fromCheckpoints(path); out != "" {
 			return Result{Content: out}, nil
 		}
+	} else if t.Registry != nil {
+		if cp := t.Registry.Checkpoints(); cp != nil {
+			if out := t.fromCheckpointsOn(cp, path); out != "" {
+				return Result{Content: out}, nil
+			}
+		}
 	}
 	return Result{Content: t.fromTranscripts(path)}, nil
 }
 
 func (t Why) fromCheckpoints(path string) string {
+	return t.fromCheckpointsOn(t.Checkpoints, path)
+}
+
+func (t Why) fromCheckpointsOn(cpMgr *checkpoint.Manager, path string) string {
 	type hit struct {
 		checkpoint.TaskSummary // anonymous: TaskID/TaskDesc/Edits/Files promoted
 		rationale              string
 	}
 	var matches []hit
-	for _, ts := range t.Checkpoints.TasksWithEdits() {
+	for _, ts := range cpMgr.TasksWithEdits() {
 		for _, f := range ts.Files {
 			if whyPathMatches(f, path) {
 				rationale := ""
-				for _, cp := range t.Checkpoints.EditsForTask(ts.TaskID) {
+				for _, cp := range cpMgr.EditsForTask(ts.TaskID) {
 					if whyPathMatches(cp.FilePath, path) && cp.Intent.Rationale != "" {
 						rationale = cp.Intent.Rationale
 					}

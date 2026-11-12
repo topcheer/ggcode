@@ -1111,6 +1111,11 @@ func (a *Agent) SetCheckpointManager(m *checkpoint.Manager) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.checkpoints = m
+	// Keep provenance tools (why) resolvable: mirror the manager onto the
+	// registry the same way sessionidx is attached.
+	if a.tools != nil {
+		a.tools.SetCheckpoints(m)
+	}
 }
 
 func (a *Agent) CheckpointManager() *checkpoint.Manager {

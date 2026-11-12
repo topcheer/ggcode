@@ -62,6 +62,30 @@ func TestWhyGracefulDegradationNoWiring(t *testing.T) {
 	}
 }
 
+func TestWhyLazyCheckpointViaRegistry(t *testing.T) {
+	// Production wiring shape: checkpoints attached to the registry (as
+	// Agent.SetCheckpointManager now does); the Why tool resolves them
+	// lazily at call time.
+	mgr := checkpoint.NewManager(50)
+	mgr.StartRun("run-r")
+	mgr.SetActiveIntent(checkpoint.EditIntent{
+		TaskID:   "task-lazy",
+		TaskDesc: "Wire why via registry",
+	})
+	mgr.SaveWithExistence("pkg/service.go", "old", "new", "edit_file", true)
+
+	reg := NewRegistry()
+	reg.SetCheckpoints(mgr)
+	w := Why{Registry: reg}
+	res, err := w.Execute(context.Background(), json.RawMessage(`{"target":"pkg/service.go"}`))
+	if err != nil || res.IsError {
+		t.Fatalf("execute failed: %v / %+v", err, res)
+	}
+	if !strings.Contains(res.Content, "task-lazy") {
+		t.Fatalf("lazy registry lookup must resolve provenance:\n%s", res.Content)
+	}
+}
+
 func TestWhyUnwiredCheckpointsFallsThrough(t *testing.T) {
 	// Checkpoints wired but no provenance for the path -> falls through to
 	// transcript search; with no session index in-process it must still be
