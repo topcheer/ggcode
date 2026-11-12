@@ -21,3 +21,5 @@ ggcode 的 8 类会话内 drift 检测（goal/scope/criteria/plan/env/doc + cons
 ## 测试
 
 `zz_persona_drift_test.go`（3 段，-race 通过）：ExtractPersist（EN+CN 提取→持久化→重载→去重）/Violation（词级命中告警引用锚点原文+计数跨会话持久+良性目标静默）/PromptSection（空库零渲染+锚文本列出）。agent 全套件 `-tags goolm` 绿（46.7s）。
+
+> 部署注记（#5500）：锚点/self-model 存储按 **workspace** 路径解析（SetWorkingDir 惰性绑定），非 process cwd——ACP/daemon 形态（cwd=/）下文件仍落在项目 `.ggcode/` 下。
