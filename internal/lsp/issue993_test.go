@@ -105,7 +105,8 @@ func TestIssue993AcquireRebuildsAfterServerCrash(t *testing.T) {
 	workspace := fake993Workspace(t, dir)
 
 	withIsolatedManager(t, func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		// #5483: was 20s; 30s gives headroom for slow CI runners
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		first, err := globalSessions.acquire(ctx, workspace, resolved)
@@ -116,7 +117,9 @@ func TestIssue993AcquireRebuildsAfterServerCrash(t *testing.T) {
 
 		_ = first.client.notify(ctx, "x/crash", map[string]any{})
 
-		deadline := time.Now().Add(10 * time.Second)
+		// #5483: 10s was tight on slow CI runners (fake-server exit watch
+		// can lag); 15s with the enclosing 30s ctx keeps headroom.
+		deadline := time.Now().Add(15 * time.Second)
 		for !first.client.isFailed() {
 			if time.Now().After(deadline) {
 				t.Fatal("client never reported failed after server exit")

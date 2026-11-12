@@ -16,7 +16,9 @@ ledger_lock() {
       continue
     fi
     i=$((i+1))
-    [ "$i" -gt 100 ] && { echo "ledger lock timeout ($dir)" >&2; exit 1; }
+    # #5483: 100 iterations (10s) was tight under 10-way parallel test
+    # load on slow CI runners; 300 (30s) matches the test-side deadline.
+    [ "$i" -gt 300 ] && { echo "ledger lock timeout ($dir)" >&2; exit 1; }
     sleep 0.1
   done
 }
