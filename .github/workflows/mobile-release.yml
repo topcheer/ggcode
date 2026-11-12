@@ -33,8 +33,40 @@ env:
   FLUTTER_VERSION: '3.47.9'
 
 jobs:
+  dedup:
+    name: Tag fan-out dedup guard (#5480)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WF_FILE: mobile-release.yml
+        run: |
+          set -eu
+          # #5480: a tag push fans out to four release pipelines; re-pushing
+          # the same tag (runner recovery, sibling-chain recovery) must not
+          # redo pipelines that already completed for that tag. Manual
+          # dispatch is an explicit redo request and never skips.
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          prior=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WF_FILE/runs?event=push&per_page=30" \
+            --jq '.workflow_runs[] | select(.head_branch == "${{ github.ref_name }}" and .status == "completed" and .conclusion == "success" and .id != ${{ github.run_id }}) | .id' | head -n1 || true)
+          if [ -n "$prior" ]; then
+            echo "prior successful run #$prior for tag ${{ github.ref_name }} - skipping duplicate fan-out"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
   changes:
     name: Detect mobile changes
+    needs: dedup
+    if: needs.dedup.outputs.skip != 'true'
     runs-on: ubuntu-latest
     outputs:
       mobile: ${{ steps.filter.outputs.mobile }}
