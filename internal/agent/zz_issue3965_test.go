@@ -11,7 +11,12 @@ func TestIssue3965RateLimitWarningEmitsEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read agent.go: %v", err)
 	}
-	text := string(src)
+	streamSrc, err := os.ReadFile("stream_chat.go")
+	if err != nil {
+		t.Fatalf("read stream_chat.go: %v", err)
+	}
+	// #5521 PR3: streamChatResponse moved to stream_chat.go; pins scan both.
+	text := string(src) + "\n" + string(streamSrc)
 
 	anchor := strings.Index(text, "if rl, ok := a.provider.(provider.RateLimitProvider); ok {")
 	if anchor < 0 {
