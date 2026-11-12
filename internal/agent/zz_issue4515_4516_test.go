@@ -3,13 +3,12 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestIssue4515_RecordIterationFeedsRealToolActivity(t *testing.T) {
-	b, err := os.ReadFile("agent.go")
+	b, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Skip("source not readable in this environment")
 	}
@@ -40,7 +39,7 @@ func TestIssue4515_RecordIterationFeedsRealToolActivity(t *testing.T) {
 }
 
 func TestIssue4516_SubagentInjectionDoesNotFlagBudget(t *testing.T) {
-	b, err := os.ReadFile("agent.go")
+	b, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Skip("source not readable in this environment")
 	}
