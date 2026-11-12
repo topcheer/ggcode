@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -1375,412 +1374,28 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 	defer maybePersistSpecPatterns(a.speculator)
 
-	if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
-		cm.StartRunTracking()
-	}
-
-	a.mu.RLock()
-	startHookCfg := a.hookConfig
-	startWorkDir := a.workingDir
-	a.mu.RUnlock()
-	if len(startHookCfg.OnSessionStart) > 0 {
-		if err := a.fireSessionStartHooks(sid, startHookCfg, startWorkDir, onEvent); err != nil {
-			return err
-		}
-	}
-
-	userPromptForStats := ""
-	for _, b := range content {
-		if b.Type == "text" {
-			userPromptForStats += b.Text
-		}
-	}
-
-	if a.goalDriftCtx != nil {
-		a.goalDriftCtx.reset()
-	}
-	a.goalDriftCtx.initFromUserMessage(userPromptForStats)
-	runStats := newRunStats(userPromptForStats)
-
-	if a.contextManager != nil {
-
-		a.experienceFailureRecallFired = false
-
-		a.experienceInjectedCaseIDs = nil
-
-		a.toolflowHintFired = false
-		a.runToolNames = nil
-		if idx := a.recallExperience(userPromptForStats); idx != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "system",
-				Content: []provider.ContentBlock{{Type: "text", Text: "## Relevant Experience\n" + idx}},
-			})
-			debug.Log("agent", "injected experience recall (%d chars)", len(idx))
-		}
-	}
-
-	asyncVerifyStats := (*RunStats)(nil)
-
-	a.resetTurnDetectors()
-	// #turn-dryrun: surface the previous run's blast radius as a read-only
-	// observation (inform-only, per the predictive-guardrail lesson of
-	// arXiv:2611.02815 - never block).
-	if a.turnImpact != nil {
-		if rep := a.turnImpact.report(); rep != nil {
-			if a.contextManager != nil {
-				if txt := rep.render(); txt != "" {
-					a.contextManager.Add(provider.Message{
-						Role:    "system",
-						Content: []provider.ContentBlock{{Type: "text", Text: txt}},
-					})
-					debug.Log("agent", "injected turn impact report (%d files, tier=%s)", len(rep.Files), rep.RiskTier)
-				}
-			}
-			a.turnImpact.reset()
-		}
-	}
-	// #34 env fingerprint drift: warn (once per change) that prior
-	// build/test observations may be stale when manifests or toolchain
-	// shifted; baseline is persisted so it survives restarts.
-	if driftMsg := checkEnvDrift(a.WorkingDir()); driftMsg != "" && a.contextManager != nil {
-		a.contextManager.Add(provider.Message{
-			Role:    "system",
-			Content: []provider.ContentBlock{{Type: "text", Text: driftMsg}},
-		})
-		debug.Log("agent", "injected environment drift warning")
-	}
-	defer func() {
-		a.runStreamEpilogue(ctx, content, err, sid, runStats, asyncVerifyStats)
-	}()
-	userTurn := provider.Message{
-		Role:    "user",
-		Content: content,
-		Origin:  userOrigin,
-	}
-	a.contextManager.Add(userTurn)
-
-	userText := ""
-	for _, b := range content {
-		if b.Type == "text" {
-			userText += b.Text
-		}
-	}
-
-	a.constraintAmnesia.reset()
-	a.constraintAmnesia.recordConstraints(userText, 1)
-
-	if !a.consumeRemoteRefusalInhibit() {
-		a.ReleaseMatchingRefusals(userText)
-		a.recordUserRefusals(userText)
-	}
 	a.mu.RLock()
 	hookCfg := a.hookConfig
 	workDir := a.workingDir
 	a.mu.RUnlock()
-	userMsgResult := hooks.RunUserMessageHooks(hookCfg.OnUserMessage, hooks.HookEnv{
-		Event:       hooks.EventOnUserMessage,
-		Workspace:   workDir,
-		WorkingDir:  workDir,
-		UserMessage: userText,
-	})
-	if !userMsgResult.Allowed {
-		onEvent(provider.StreamEvent{
-			Type:  provider.StreamEventError,
-			Error: fmt.Errorf("%s", userMsgResult.Output),
-		})
-		return fmt.Errorf("user message blocked by hook: %s", userMsgResult.Output)
+	defer a.runStreamStopFinalizer(ctx, err, hookCfg, workDir)
+	rsc, setupErr := a.runStreamSetup(ctx, content, sid, onEvent)
+	if setupErr != nil {
+		return setupErr
 	}
-
 	defer func() {
-		stopReason := "completed"
-		stopError := ""
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				stopReason = "cancelled"
-			} else {
-				stopReason = "error"
-				stopError = err.Error()
-			}
-		}
-		hooks.RunAgentStopHooks(hookCfg, hooks.HookEnv{
-			Event:      hooks.EventOnAgentStop,
-			Workspace:  workDir,
-			WorkingDir: workDir,
-			StopReason: stopReason,
-			StopError:  stopError,
-		})
-
+		a.runStreamEpilogue(ctx, content, err, sid, rsc.runStats, rsc.asyncVerifyStats)
 	}()
-
-	if a.ReconcileToolCalls() {
-		debug.Log("agent", "RunStreamWithContent: reconciled unpaired tool_calls")
+	msgs, userText, toolDefs, msgErr := a.buildRunTurnContextD1(ctx, content, userOrigin, rsc, onEvent)
+	if msgErr != nil {
+		return msgErr
 	}
-
-	a.clearGoalIfNotAutopilot()
-	a.maybeInjectAutopilotGoalCollection()
-	a.maybeInjectCorrectionFeedback()
-	a.maybeInjectSentimentFeedback(userPromptForStats)
-
-	if ambMsg := a.checkAmbiguityPoints(userPromptForStats); ambMsg != "" {
-		debug.Log("agent", "ambiguity point detector: injecting disambiguation guidance")
-		a.contextManager.Add(provider.Message{
-			Role: "user",
-			Content: []provider.ContentBlock{{
-				Type: "text",
-				Text: ambMsg,
-			}},
-		})
-	}
-	a.maybeInjectPerfRegression()
-	a.maybeInjectDynamicSystemPrompt(userPromptForStats)
-	a.maybeInjectRatchetRules()
-
-	a.mu.RLock()
-	uhDir := a.workingDir
-	a.mu.RUnlock()
-	if uhDir != "" {
-		a.usageHints.attach(filepath.Join(uhDir, ".ggcode"))
-		a.tools.SetDescriptionAugmenter(a.usageHints.OverlayFor)
-	}
-	toolDefs := a.tools.ToDefinitions()
-	a.toolSearch.init(toolDefs)
-
-	if enabler, ok := a.provider.(interface{ ServerToolSearchActive() bool }); ok && enabler.ServerToolSearchActive() {
-		a.toolSearch.disable()
-		a.serverToolSearch = true
-		debug.Log("agent", "server-side tool search active: MCP schemas deferred via defer_loading")
-	}
-	if a.toolSearch.enabled {
-		debug.Log("agent", "tool search: %d MCP tool schemas deferred behind %s", len(a.toolSearch.deferred), ToolSearchToolName)
-	}
-	if cm, ok := a.contextManager.(interface{ SetToolDefinitionOverhead(int) }); ok {
-		cm.SetToolDefinitionOverhead(estimateToolDefinitionOverhead(toolDefs))
-	}
-	a.autopilotStrategistCount = 0
-	a.strategistBudgetAnnounced = false
-	a.strategistNoProgressCount = 0
-
-	a.resetOverseer(userText)
-	a.resetPlanner()
-
-	a.researchPlan.reset()
-	a.researchPlanSubs = nil
-
-	a.plannerAnalyze(userText)
-
-	a.maybeInjectResearchPlan(userText)
-	a.resetTodoStaleness()
-	a.resetTodoDrop()
-	a.resetScopeDrift()
-	a.bgVerifyJobs = newBgVerifyRegistry()
-	a.resetDriftRecurrence()
-
-	a.attentionFragment.reset()
-
-	if a.spiralState != nil {
-		a.spiralState.reset()
-	}
-	a.resetLastGoodCheckpoint()
-	a.recurringError.reset()
-	a.errStrategyLoop.reset()
-
-	a.termGuard.reset()
-
-	a.askQualityGate.reset()
-	a.fixCascade.reset()
-	a.errRegression.reset()
-	a.stalledConvergence.reset()
-	a.speculator.resetSequence()
-	a.toolMemo.reset()
-	a.commandCache.reset()
-	a.confidence.reset()
-	if a.errorBudget != nil {
-		a.errorBudget.reset()
-	}
-	a.verifDebt.reset()
-	a.undoBlind.reset()
-	a.editAbandon.reset()
-	a.toolCallBudget.reset()
-	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
-
-	a.resetSessionTokenUsage()
-
-	a.resetSessionTimeUsage()
-
-	a.resetSessionCostUsage()
-
-	a.unreadEdit.reset()
-	a.expiredRead.reset()
-	a.searchInvalidation.reset()
-	a.wtInvalidation.reset()
-	a.strategyExhaustion.reset()
-	a.falsePremise.reset()
-	a.phantomVerify.reset()
-
-	a.editFailRecovery.reset()
-
-	a.solutionFixation.reset()
-	a.pivotDecision.reset()
-	a.redundantReverify.reset()
-
-	a.exportGuard.reset()
-	a.hubPackageGuard.reset()
-	a.artifactGuard.reset()
-	a.branchGuard.reset()
-	a.destructiveGuard.reset()
-	a.fulfillmentGate.reset()
-	a.oversightTriage.reset()
-	a.autonomyDial.reset()
-
-	defer func() {
-		if d := a.oversightTriage.digest(); d != "" {
-			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: d})
-		}
-
-		if d := a.autonomyDial.suggest(); d != "" {
-			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: d})
-		}
-	}()
-
 	defer a.flushGuidanceStats()
-
 	defer a.routeWeaknessSignals()
-	a.constraintAudit.reset()
-	a.constraintFollowup.reset()
-	a.ambiguityPoint.reset()
-	a.planDrift.reset()
-	a.unverifiedClaim.reset()
-	a.companionGuard.reset()
-	a.specGaming.reset()
-	a.scopeNarrow.reset()
-	a.verifyRegression.reset()
-	a.resetSelfCorrectionGate()
-	a.argSizeGuardFires = 0
-	a.redundantRead.reset()
-	a.patchExhaust.reset()
-	a.searchParamGuard.reset()
-	a.toolRedundancy.reset()
-	a.toolSequence.reset()
-	a.obsContract.reset()
-	a.resetTransientRetryBudget()
-	a.mutateLedger.reset()
-	a.compoundingFailure.reset()
-
-	a.fileChurn.reset()
-	a.editOscillation.reset()
-	a.silentError.reset()
-
-	a.serialRead.reset()
-	a.toolEff.reset()
-	a.reasoningRedund.reset()
-	a.reproducerLifecycle.reset()
-	a.truncClaim.reset()
-	a.circularReasoning.reset()
-	a.contradiction.reset()
-	a.reverify.reset()
-	a.actionHedging.reset()
-	a.scopeCreep.reset()
-	a.prematureAbstr.reset()
-	a.capBoundary.reset()
-	a.planAbandon.reset()
-	a.compoundedUncert.reset()
-	a.trajectoryHealth.reset()
-	if a.tokenWasteBudget != nil {
-		a.tokenWasteBudget.reset()
-	}
-	a.mindlessAction.reset()
-
-	a.strategyStagnation.reset()
-	a.infoScent.reset()
-	a.causalAttribution.reset()
-	a.attrExperiment.reset()
-	a.reversibility.reset()
-	a.constraintViolation.reset()
-	a.inputUnderspec.reset()
-	a.tunnelVision.reset()
-	a.queryConverge.reset()
-	a.prematureCommit.reset()
-	a.failureMode.reset()
-	a.toolFallback.reset()
-	a.errorCascade.reset()
-	a.errorPropagate.reset()
-	a.fileFreshness.reset()
-	a.readHash.reset()
-	a.toolThermal.reset()
-	a.cacheEffMonitor.reset()
-
-	a.changeReconcile.reset()
-	a.claimVerify.reset()
-	a.permDenyStreak.reset()
-	a.crossFileImpact.reset()
-	a.diffSummary.reset()
-	a.goalFinish.reset()
-	a.commitHint.reset()
-	a.docDrift.reset()
-	a.draftPRHint.reset()
-	a.staleReview.reset()
-	if workingDir := a.WorkingDir(); workingDir != "" {
-		a.changeReconcile.capturePreRunState(workingDir)
-
-		if n := a.changeReconcile.dirtyFileCount(); n > 0 {
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: fmt.Sprintf(
-						"[workspace] Note: %d file(s) have uncommitted changes in the working tree "+
-							"(your own work before this session). When committing, stage only the files "+
-							"you modified during this task - do not use 'git add -A' or 'git commit -a' "+
-							"unless the user explicitly asks.",
-						n,
-					),
-				}},
-			})
-		}
-	}
-
-	a.diskSpace.reset()
-	if workingDir := a.WorkingDir(); workingDir != "" {
-		if diskMsg := a.diskSpace.check(workingDir); diskMsg != "" {
-			debug.Log("disk-space", "low disk space detected, injecting advisory")
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: diskMsg}},
-			})
-		}
-	}
-
-	a.envDrift.reset()
-	if workingDir := a.WorkingDir(); workingDir != "" {
-
-		a.monorepoScoper.detectMonorepo(workingDir)
-		if envMsg := a.envDrift.check(workingDir); envMsg != "" {
-			debug.Log("env-drift", "env var drift detected, injecting advisory")
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: envMsg}},
-			})
-		}
-	}
-
-	if a.checkpoints != nil {
-		a.checkpoints.StartRun(runStats.RunID())
-	}
-
-	a.sessionTimeout.start(a.currentMode().IsCruiseMode())
-
-	if underspecHint := a.maybeWarnInputUnderspec(userText); underspecHint != "" {
-		debug.Log("input-underspec", "underspecified user request detected, injecting advisory")
-		a.contextManager.Add(provider.Message{
-			Role:    "user",
-			Content: []provider.ContentBlock{{Type: "text", Text: underspecHint}},
-		})
-	}
-
+	msgs, toolDefs, userText = a.buildRunTurnContextD2(ctx, content, sid, msgs, userText, rsc, onEvent)
 	turnCounters := &chatTurnCounters{}
 	st := &loopState{detectorContinueBudget: 2}
-
-	err = a.runConversationLoop(ctx, onEvent, sid, userPromptForStats, toolDefs, runStats, st, turnCounters)
+	err = a.runConversationLoop(ctx, onEvent, sid, rsc.userPromptForStats, toolDefs, rsc.runStats, st, turnCounters)
 	return err
 }
 
@@ -2018,4 +1633,29 @@ func hasNonThinkingContent(blocks []provider.ContentBlock) bool {
 		}
 	}
 	return false
+}
+
+// runStreamStopFinalizer is the stream-stop defer body (hooks fire with
+// stop reason classification). Extracted from the inline closure; the
+// defer itself stays in RunStreamWithContent at its original position
+// (#5543 knife-5, LIFO order untouched).
+func (a *Agent) runStreamStopFinalizer(ctx context.Context, err error, hookCfg hooks.HookConfig, workDir string) {
+	stopReason := "completed"
+	stopError := ""
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			stopReason = "cancelled"
+		} else {
+			stopReason = "error"
+			stopError = err.Error()
+		}
+	}
+	hooks.RunAgentStopHooks(hookCfg, hooks.HookEnv{
+		Event:      hooks.EventOnAgentStop,
+		Workspace:  workDir,
+		WorkingDir: workDir,
+		StopReason: stopReason,
+		StopError:  stopError,
+	})
+
 }
