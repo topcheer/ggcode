@@ -26,8 +26,19 @@ func fake993KillScript(t *testing.T, dir string) string {
 	script := filepath.Join(dir, "fake993-kill.sh")
 	body := "#!/bin/sh\n" +
 		fake993Frame(fake993InitResult) +
-		"read line\nread line\nread line\n" +
-		"read line\n" +
+		// #5483: a fixed read budget raced the client's protocol writes -
+		// if acquire wrote one extra line (watchdog/config notifications)
+		// the script exited mid-acquire and the next write hit EPIPE
+		// ("first acquire: broken pipe"). Sentinel + idle instead: consume
+		// any traffic, die on the crash method OR 5s of silence (the final
+		// notify body carries no trailing newline, so a bare sentinel
+		// pattern would block forever on the partial last line; the idle
+		// arm is the deterministic fallback - failure detection is driven
+		// by stdout EOF either way). read -t requires bash, which is what
+		// fake993Resolved launches.
+		"while read -t 5 line; do\n" +
+		"  case \"$line\" in *x/crash*) exit 1;; esac\n" +
+		"done\n" +
 		"exit 1\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatalf("write kill script: %v", err)
