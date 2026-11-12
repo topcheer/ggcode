@@ -31,6 +31,9 @@ func (m Model) handleCronCommand(parts []string) tea.Cmd {
 			status := "active"
 			if j.Paused {
 				status = "paused"
+				if j.PausedReason != "" {
+					status = fmt.Sprintf("paused (%s)", j.PausedReason)
+				}
 			}
 			next := "-"
 			if !j.NextFire.IsZero() {
@@ -107,7 +110,11 @@ func (m Model) handleCronCommand(parts []string) tea.Cmd {
 		sb.WriteString(fmt.Sprintf("  Recurring: %v\n", job.Recurring))
 		sb.WriteString(fmt.Sprintf("  Queue if busy: %v\n", job.QueueIfBusy))
 		if job.Paused {
-			sb.WriteString("  Status: paused\n")
+			if job.PausedReason != "" {
+				sb.WriteString(fmt.Sprintf("  Status: paused (%s)\n", job.PausedReason))
+			} else {
+				sb.WriteString("  Status: paused\n")
+			}
 		} else {
 			sb.WriteString("  Status: active\n")
 		}

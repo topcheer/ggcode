@@ -11,12 +11,13 @@ import (
 
 // CronJobView /api/cron/jobs 输出行(前端 CronPage 消费契约)。
 type CronJobView struct {
-	ID        string `json:"id"`
-	CronExpr  string `json:"cron_expr"`
-	Prompt    string `json:"prompt"`
-	Recurring bool   `json:"recurring"`
-	Paused    bool   `json:"paused"`
-	CreatedAt string `json:"created_at,omitempty"`
+	ID           string `json:"id"`
+	CronExpr     string `json:"cron_expr"`
+	Prompt       string `json:"prompt"`
+	Recurring    bool   `json:"recurring"`
+	Paused       bool   `json:"paused"`
+	PausedReason string `json:"paused_reason,omitempty"` // #5273: dormant sentinel's auto-pause reason
+	CreatedAt    string `json:"created_at,omitempty"`
 }
 
 // SetCronListFn 注入当前 session 的任务快照源(活 cron.Scheduler——随会话切换
@@ -61,12 +62,13 @@ func (s *Server) scanLegacyCronStore() []CronJobView {
 	}
 
 	type jobRaw struct {
-		ID        string `json:"id"`
-		CronExpr  string `json:"cron_expr"`
-		Prompt    string `json:"prompt"`
-		Recurring bool   `json:"recurring"`
-		Paused    bool   `json:"paused,omitempty"`
-		CreatedAt string `json:"created_at,omitempty"`
+		ID           string `json:"id"`
+		CronExpr     string `json:"cron_expr"`
+		Prompt       string `json:"prompt"`
+		Recurring    bool   `json:"recurring"`
+		Paused       bool   `json:"paused,omitempty"`
+		PausedReason string `json:"paused_reason,omitempty"`
+		CreatedAt    string `json:"created_at,omitempty"`
 	}
 	type storeFile struct {
 		Jobs []jobRaw `json:"jobs"`
@@ -94,7 +96,7 @@ func (s *Server) scanLegacyCronStore() []CronJobView {
 			if len(p) > 120 {
 				p = p[:120] + "…"
 			}
-			result = append(result, CronJobView{ID: j.ID, CronExpr: j.CronExpr, Prompt: p, Recurring: j.Recurring, Paused: j.Paused, CreatedAt: j.CreatedAt})
+			result = append(result, CronJobView{ID: j.ID, CronExpr: j.CronExpr, Prompt: p, Recurring: j.Recurring, Paused: j.Paused, PausedReason: j.PausedReason, CreatedAt: j.CreatedAt})
 		}
 	}
 	sort.Slice(result, func(i, k int) bool { return result[i].ID < result[k].ID })

@@ -259,7 +259,7 @@ func (t CronListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 		}
 		state := ""
 		if job.Paused {
-			state = "paused, "
+			state = pausedStateLabel(job.PausedReason, true)
 		}
 
 		next := job.NextFire.Format(time.RFC3339)
@@ -275,6 +275,25 @@ func (t CronListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 
 type CronUpdateTool struct {
 	Scheduler *cron.Scheduler
+}
+
+// pausedStateLabel renders a paused job's state text (#5273): the
+// auto-pause reason surfaces wherever the pause state is shown, so a
+// dormant sentinel tells the operator WHY it stopped and how to wake it.
+// inline=true produces the bracket-embedded list form ("paused (…), ");
+// otherwise the standalone "paused (…)" detail form.
+func pausedStateLabel(reason string, inline bool) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		if inline {
+			return "paused, "
+		}
+		return "paused"
+	}
+	if inline {
+		return fmt.Sprintf("paused (%s), ", reason)
+	}
+	return fmt.Sprintf("paused (%s)", reason)
 }
 
 func (t CronUpdateTool) Name() string { return "cron_update" }
@@ -367,7 +386,7 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	sb.WriteString(fmt.Sprintf("  Recurring: %v\n", job.Recurring))
 	sb.WriteString(fmt.Sprintf("  Queue if busy: %v\n", job.QueueIfBusy))
 	if job.Paused {
-		sb.WriteString("  Status: paused\n")
+		sb.WriteString(fmt.Sprintf("  Status: %s\n", pausedStateLabel(job.PausedReason, false)))
 	} else {
 		sb.WriteString("  Status: active\n")
 	}
@@ -555,6 +574,9 @@ func (t CronGetTool) Execute(_ context.Context, input json.RawMessage) (Result, 
 		nextFire = "none (paused)"
 	}
 	fmt.Fprintf(&sb, "Next fire:   %s\n", nextFire)
+	if job.Paused {
+		fmt.Fprintf(&sb, "Paused for:  %s\n", pausedStateLabel(job.PausedReason, false))
+	}
 	fmt.Fprintf(&sb, "Created at:  %s\n", job.CreatedAt.Format(time.RFC3339))
 	fmt.Fprintf(&sb, "Prompt:\n%s\n", job.Prompt)
 	return Result{Content: sb.String()}, nil

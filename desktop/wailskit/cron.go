@@ -11,24 +11,26 @@ import (
 )
 
 type CronJobInfo struct {
-	ID          string `json:"id"`
-	CronExpr    string `json:"cronExpr"`
-	Prompt      string `json:"prompt"`
-	Recurring   bool   `json:"recurring"`
-	QueueIfBusy bool   `json:"queueIfBusy"`
-	Paused      bool   `json:"paused"`
-	CreatedAt   string `json:"createdAt"`
-	NextFire    string `json:"nextFire"`
+	ID           string `json:"id"`
+	CronExpr     string `json:"cronExpr"`
+	Prompt       string `json:"prompt"`
+	Recurring    bool   `json:"recurring"`
+	QueueIfBusy  bool   `json:"queueIfBusy"`
+	Paused       bool   `json:"paused"`
+	PausedReason string `json:"pausedReason,omitempty"` // #5273: auto-pause reason surfaced to the desktop UI
+	CreatedAt    string `json:"createdAt"`
+	NextFire     string `json:"nextFire"`
 }
 
 func cronJobToInfo(j cron.Job) CronJobInfo {
 	info := CronJobInfo{
-		ID:          j.ID,
-		CronExpr:    j.CronExpr,
-		Prompt:      j.Prompt,
-		Recurring:   j.Recurring,
-		QueueIfBusy: j.QueueIfBusy,
-		Paused:      j.Paused,
+		ID:           j.ID,
+		CronExpr:     j.CronExpr,
+		Prompt:       j.Prompt,
+		Recurring:    j.Recurring,
+		QueueIfBusy:  j.QueueIfBusy,
+		Paused:       j.Paused,
+		PausedReason: j.PausedReason,
 	}
 	if !j.CreatedAt.IsZero() {
 		info.CreatedAt = j.CreatedAt.Format(time.RFC3339)

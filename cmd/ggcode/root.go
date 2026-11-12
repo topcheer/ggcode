@@ -1373,7 +1373,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			if len(p) > 120 {
 				p = p[:120] + "\u2026"
 			}
-			out = append(out, webui.CronJobView{ID: j.ID, CronExpr: j.CronExpr, Prompt: p, Recurring: j.Recurring, Paused: j.Paused, CreatedAt: j.CreatedAt.Format("2006-01-02T15:04:05Z07:00")})
+			out = append(out, webui.CronJobView{ID: j.ID, CronExpr: j.CronExpr, Prompt: p, Recurring: j.Recurring, Paused: j.Paused, PausedReason: j.PausedReason, CreatedAt: j.CreatedAt.Format("2006-01-02T15:04:05Z07:00")})
 		}
 		return out
 	})
