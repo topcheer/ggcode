@@ -90,6 +90,25 @@ func TestIdleMaintainer_Defaults(t *testing.T) {
 	if m.after != 10*time.Minute {
 		t.Errorf("default after = %v, want 10m", m.after)
 	}
+	if m.interval != 30*time.Second {
+		t.Errorf("default interval = %v, want 30s (#5497 production cadence)", m.interval)
+	}
+}
+
+func TestIdleMaintainer_SetIntervalContract(t *testing.T) {
+	// #5497: positive injection takes effect; non-positive and nil are no-ops.
+	m := NewIdleMaintainer(0, 0.6, nil, nil)
+	m.SetInterval(10 * time.Millisecond)
+	if m.interval != 10*time.Millisecond {
+		t.Errorf("interval after SetInterval(10ms) = %v, want 10ms", m.interval)
+	}
+	m.SetInterval(0)
+	m.SetInterval(-time.Second)
+	if m.interval != 10*time.Millisecond {
+		t.Errorf("non-positive SetInterval must be a no-op; interval = %v", m.interval)
+	}
+	var nilM *IdleMaintainer
+	nilM.SetInterval(time.Millisecond) // must not panic
 }
 
 func TestAgent_IdleMaintainerSetterRoundTrip(t *testing.T) {

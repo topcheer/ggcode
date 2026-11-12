@@ -70,6 +70,18 @@ func (m *IdleMaintainer) SetMaintenance(fn func()) {
 	m.maintenance.Store(fn)
 }
 
+// SetInterval overrides the sweep cadence before Start() is called
+// (#5497 test hook: production default stays 30s; tests inject a short
+// interval so the first t=0 check is followed by more checks inside the
+// assertion window instead of waiting a full production tick). Must be
+// called before Start(); no-op after.
+func (m *IdleMaintainer) SetInterval(d time.Duration) {
+	if m == nil || d <= 0 {
+		return
+	}
+	m.interval = d
+}
+
 func (m *IdleMaintainer) Touch() {
 	if m == nil {
 		return
