@@ -116,6 +116,3 @@ or with different surrounding context, is NOT equivalent and stays `[delta]`.
 Merge commits on the PR branch are skipped; empty commits count as delta by
 convention (same as `git cherry`).
 
-## why 查询（#5261）
-
-`why` tool：输入文件路径（可带 `:line`）→ 解析链 锚点→checkpoint EditIntent→**任务描述+编辑动机**（TasksWithEdits/EditsForTask 底座）；checkpoint 已清理时优雅降级为 session 转录路径检索（user 消息摘录=原始请求）。全本地、无上传。
