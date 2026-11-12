@@ -735,7 +735,11 @@ func (m *Manager) emit(ev Event) {
 				m.storeResultLocked(ev.TeammateID, ev.Result)
 				m.mu.Unlock()
 
-				appendTeammateExperience(m.workingDirForExp(), ev.TeamID, ev.TeammateID, ev.TeammateName, ev.Result)
+				outcome := "success"
+				if ev.IsError || ev.Error != nil {
+					outcome = "failed"
+				}
+				appendTeammateExperience(m.workingDirForExp(), ev.TeamID, ev.TeammateID, ev.TeammateName, ev.Result, outcome)
 			} else {
 				debug.Log("swarm", "emit: dropping late result for ungoverned %s", ev.TeammateID)
 			}

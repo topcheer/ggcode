@@ -38,7 +38,7 @@ func TestAppendTeammateExperience_ConcurrentNoLostUpdate(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			appendTeammateExperience(dir, "team-x", fmt.Sprintf("tm-%d", n), "", fmt.Sprintf("result from writer %d", n))
+			appendTeammateExperience(dir, "team-x", fmt.Sprintf("tm-%d", n), "", fmt.Sprintf("result from writer %d", n), "success")
 		}(i)
 	}
 	wg.Wait()
@@ -59,8 +59,8 @@ func TestAppendTeammateExperience_ConcurrentNoLostUpdate(t *testing.T) {
 
 func TestAppendTeammateExperience_SequentialAccumulates(t *testing.T) {
 	dir := t.TempDir()
-	appendTeammateExperience(dir, "t", "a", "alpha", "first result")
-	appendTeammateExperience(dir, "t", "b", "", "second result")
+	appendTeammateExperience(dir, "t", "a", "alpha", "first result", "success")
+	appendTeammateExperience(dir, "t", "b", "", "second result", "failed")
 	got := readTeammateExpLines(t, dir)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 accumulated entries, got %d", len(got))
@@ -72,8 +72,8 @@ func TestAppendTeammateExperience_SequentialAccumulates(t *testing.T) {
 
 func TestAppendTeammateExperience_EmptyInputsNoop(t *testing.T) {
 	dir := t.TempDir()
-	appendTeammateExperience("", "t", "a", "", "x")
-	appendTeammateExperience(dir, "t", "a", "", "   \t ")
+	appendTeammateExperience("", "t", "a", "", "x", "success")
+	appendTeammateExperience(dir, "t", "a", "", "   \t ", "success")
 	if _, err := os.Stat(teammateExpPath(dir)); !os.IsNotExist(err) {
 		t.Fatal("empty inputs must not create the ledger")
 	}
@@ -81,7 +81,7 @@ func TestAppendTeammateExperience_EmptyInputsNoop(t *testing.T) {
 
 func TestAppendTeammateExperience_NoStrayTempFiles(t *testing.T) {
 	dir := t.TempDir()
-	appendTeammateExperience(dir, "t", "a", "", "result")
+	appendTeammateExperience(dir, "t", "a", "", "result", "success")
 	entries, err := os.ReadDir(filepath.Join(dir, ".ggcode"))
 	if err != nil {
 		t.Fatal(err)

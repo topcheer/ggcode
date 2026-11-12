@@ -15,6 +15,7 @@ type teammateExperienceEntry struct {
 	TeamID   string    `json:"team_id"`
 	Teammate string    `json:"teammate"`
 	Digest   string    `json:"digest"`
+	Outcome  string    `json:"outcome,omitempty"` // "success" | "failed"; empty = legacy unverified entry
 }
 
 const maxTeammateExpEntries = 200
@@ -25,15 +26,19 @@ func teammateExpPath(workingDir string) string {
 	return filepath.Join(workingDir, ".ggcode", "teammate-experience.jsonl")
 }
 
-func appendTeammateExperience(workingDir, teamID, tmID, tmName, result string) {
+func appendTeammateExperience(workingDir, teamID, tmID, tmName, result, outcome string) {
 	if workingDir == "" || strings.TrimSpace(result) == "" {
 		return
+	}
+	if outcome != "success" && outcome != "failed" {
+		outcome = "failed" // unknown outcomes must never masquerade as success
 	}
 	entry := teammateExperienceEntry{
 		Ts:       time.Now(),
 		TeamID:   teamID,
 		Teammate: tmID,
 		Digest:   truncateRunes(result, teammateExpDigestLen),
+		Outcome:  outcome,
 	}
 	if tmName != "" && tmName != tmID {
 		entry.Teammate = tmID + " (" + tmName + ")"

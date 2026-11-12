@@ -36,7 +36,7 @@ func TestIssue3266_TeammateReingestIdempotent(t *testing.T) {
 	if row.Reinforced != 2 {
 		t.Fatalf("merge wrong: %+v", row)
 	}
-	if row.Insight != "teammate experience: third digest" {
+	if row.Insight != "(unverified outcome) teammate experience: third digest" {
 		t.Fatalf("newest digest must win the merge, got %q", row.Insight)
 	}
 
