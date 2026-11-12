@@ -362,6 +362,16 @@ func (m *Manager) currentProvider() provider.Provider {
 	return m.provider
 }
 
+// sortedToolsCopy returns a sorted defensive copy; nil stays nil.
+func sortedToolsCopy(tools []string) []string {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := append([]string(nil), tools...)
+	sort.Strings(out)
+	return out
+}
+
 func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []string) (TeammateSnapshot, error) {
 	m.mu.Lock()
 	team, ok := m.teams[teamID]
@@ -389,15 +399,16 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	ctx, cancel := context.WithCancel(m.rootCtx)
 
 	tm := &Teammate{
-		ID:        tmID,
-		Name:      name,
-		Color:     color,
-		Status:    TeammateIdle,
-		Inbox:     make(chan MailMessage, m.cfg.InboxSize),
-		CreatedAt: time.Now(),
-		ctx:       ctx,
-		cancel:    cancel,
-		done:      make(chan struct{}),
+		ID:           tmID,
+		Name:         name,
+		Color:        color,
+		Status:       TeammateIdle,
+		AllowedTools: sortedToolsCopy(allowedTools),
+		Inbox:        make(chan MailMessage, m.cfg.InboxSize),
+		CreatedAt:    time.Now(),
+		ctx:          ctx,
+		cancel:       cancel,
+		done:         make(chan struct{}),
 	}
 
 	team.Teammates[tmID] = tm

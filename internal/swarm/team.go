@@ -61,6 +61,7 @@ type Teammate struct {
 	CurrentTask   string
 	CurrentTaskID string
 	LastResult    string
+	AllowedTools  []string // sorted; nil/empty = inherits the full tool surface
 	Inbox         chan MailMessage
 	CreatedAt     time.Time
 	StartedAt     time.Time
@@ -134,23 +135,26 @@ func (t *Teammate) getResults() string {
 }
 
 type TeammateStatusInfo struct {
-	ID          string
-	Name        string
-	Color       string
-	Status      TeammateStatus
-	CurrentTask string
-	LastResult  string
+	ID           string
+	Name         string
+	Color        string
+	Status       TeammateStatus
+	CurrentTask  string
+	LastResult   string
+	AllowedTools []string
 }
 
 func (t *Teammate) statusInfo() TeammateStatusInfo {
 	t.mu.Lock()
+	tools := append([]string(nil), t.AllowedTools...)
 	info := TeammateStatusInfo{
-		ID:          t.ID,
-		Name:        t.Name,
-		Color:       t.Color,
-		Status:      t.Status,
-		CurrentTask: t.CurrentTask,
-		LastResult:  t.LastResult,
+		ID:           t.ID,
+		Name:         t.Name,
+		Color:        t.Color,
+		Status:       t.Status,
+		CurrentTask:  t.CurrentTask,
+		LastResult:   t.LastResult,
+		AllowedTools: tools,
 	}
 	t.mu.Unlock()
 	return info
@@ -163,6 +167,7 @@ type TeammateSnapshot struct {
 	Status        TeammateStatus
 	CurrentTask   string
 	LastResult    string
+	AllowedTools  []string
 	CreatedAt     time.Time
 	StartedAt     time.Time
 	EndedAt       time.Time
@@ -175,6 +180,7 @@ func (t *Teammate) snapshot() TeammateSnapshot {
 	defer t.mu.Unlock()
 	events := make([]TeammateEvent, len(t.events))
 	copy(events, t.events)
+	tools := append([]string(nil), t.AllowedTools...)
 	return TeammateSnapshot{
 		ID:            t.ID,
 		Name:          t.Name,
@@ -182,6 +188,7 @@ func (t *Teammate) snapshot() TeammateSnapshot {
 		Status:        t.Status,
 		CurrentTask:   t.CurrentTask,
 		LastResult:    t.LastResult,
+		AllowedTools:  tools,
 		CreatedAt:     t.CreatedAt,
 		StartedAt:     t.StartedAt,
 		EndedAt:       t.EndedAt,
