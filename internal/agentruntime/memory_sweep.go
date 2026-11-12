@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -479,6 +481,25 @@ type sweepSlotState struct {
 }
 
 const sweepSlotStaleAfter = 10 * time.Minute
+
+// ---- weekly-tick jitter (#5519) -------------------------------------------
+
+// All resident instances tick at the same wall-clock moment; each sleeps a
+// random duration in [0, sweepJitterWindow] BEFORE contending for the flock
+// slot, decorrelating the herd. The first post-boot sweep goes through the
+// same window (never t=0 from boot). Package vars for test injection.
+var (
+	sweepJitterWindow = 30 * time.Minute
+	sweepJitterMu     sync.Mutex
+	sweepJitterRand   = rand.New(rand.NewSource(time.Now().UnixNano()))
+)
+
+// SweepJitterDuration samples one jitter delay for this instance/round.
+func SweepJitterDuration() time.Duration {
+	sweepJitterMu.Lock()
+	defer sweepJitterMu.Unlock()
+	return time.Duration(sweepJitterRand.Int63n(int64(sweepJitterWindow) + 1))
+}
 
 // acquireSweepSlot is the multi-instance guard: a state file marks a running
 // round; a second instance seeing a fresh mark skips (held=true). Stale
