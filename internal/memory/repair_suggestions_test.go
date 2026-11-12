@@ -116,6 +116,12 @@ func TestRepairSuggestionsConvergeAfterFix(t *testing.T) {
 	if err := am.DeleteMemory("build-impl"); err != nil {
 		t.Fatalf("delete outdated side: %v", err)
 	}
+	// #5519: backdate LastRun so the second run executes (this test
+	// exercises repair convergence, not the startup interval gate).
+	if st := am.loadConsolidationState(); st != nil {
+		st.LastRun = time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339)
+		am.saveConsolidationState(st)
+	}
 	second := am.Consolidate("")
 	if second.ConflictPairs != 0 {
 		t.Fatalf("after fix ConflictPairs = %d, want 0", second.ConflictPairs)

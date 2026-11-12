@@ -64,6 +64,13 @@ func TestConsolidateConflictFirstSeenPersists(t *testing.T) {
 	firstSeen := state.Conflicts[0].FirstSeen
 
 	time.Sleep(10 * time.Millisecond)
+	// #5519: consolidate now skips when the last run is recent; backdate the
+	// state so this test's second run executes (it exercises conflict
+	// tracking, not the startup interval gate).
+	if st := am.loadConsolidationState(); st != nil {
+		st.LastRun = time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339)
+		am.saveConsolidationState(st)
+	}
 	second := am.Consolidate("")
 	if second.ConflictPairs != 1 {
 		t.Fatalf("second run: ConflictPairs = %d, want 1", second.ConflictPairs)

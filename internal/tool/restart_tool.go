@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -11,10 +12,23 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// restartResumeNudgeDelay is how long after the restart the resume nudge
+// restartResumeNudgeDelayBase is the nominal delay before the resume nudge
 // fires: long enough for the new process to boot and resume the session,
 // short enough that the follow-up feels immediate.
-const restartResumeNudgeDelay = 3 * time.Minute
+const restartResumeNudgeDelayBase = 3 * time.Minute
+
+// restartResumeNudgeJitter spreads identical-fleet restarts (#5520): every
+// instance used the same constant, so a batch restart (binary-sync
+// broadcast) fired all resume nudges in lockstep. The jitter is derived
+// deterministically from the pid so it is stable within one process and
+// spread across a fleet.
+const restartResumeNudgeJitterSpan = 120 * time.Second
+
+func restartResumeNudgeDelay() time.Duration {
+	const steps = 10
+	offset := time.Duration(os.Getpid()%steps) * (restartResumeNudgeJitterSpan / steps)
+	return restartResumeNudgeDelayBase - restartResumeNudgeJitterSpan/2 + offset
+}
 
 // restartResumeNudgePrompt is the prompt enqueued by the resume nudge.
 const restartResumeNudgePrompt = "继续进行之前的任务"
@@ -96,11 +110,11 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 
 	nudgeNote := ""
 	if t.Nudger != nil {
-		if _, err := t.Nudger.CreateOneShotWithID(restartResumeNudgeID, time.Now().Add(restartResumeNudgeDelay), restartResumeNudgePrompt, true); err != nil {
+		if _, err := t.Nudger.CreateOneShotWithID(restartResumeNudgeID, time.Now().Add(restartResumeNudgeDelay()), restartResumeNudgePrompt, true); err != nil {
 			debug.Log("restart", "failed to arm resume nudge: %v", err)
 			nudgeNote = fmt.Sprintf(" NOTE: resume nudge scheduling failed (%v); the session still resumes automatically.", err)
 		} else {
-			nudgeNote = fmt.Sprintf(" A resume nudge will fire %s after the restart with prompt %q.", restartResumeNudgeDelay, restartResumeNudgePrompt)
+			nudgeNote = fmt.Sprintf(" A resume nudge will fire %s after the restart with prompt %q.", restartResumeNudgeDelay(), restartResumeNudgePrompt)
 		}
 	}
 

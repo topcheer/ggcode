@@ -58,6 +58,18 @@ func (am *AutoMemory) Consolidate(workingDir string) ConsolidationReport {
 	now := time.Now()
 	state := am.loadConsolidationState()
 
+	// #5519: skip when the last consolidation is recent. Startup used to
+	// re-run the full staleness scan on EVERY process boot even though the
+	// result is persisted in the state file; the scan is the expensive part
+	// and its verdicts barely change within hours. Floor is deliberately
+	// short (2h) so interactive sessions still see fresh findings.
+	if state.LastRun != "" {
+		if last, err := time.Parse(time.RFC3339, state.LastRun); err == nil && now.Sub(last) < 2*time.Hour {
+			debug.Log("memory", "consolidation: skipped (last run %s ago)", now.Sub(last).Round(time.Second))
+			return ConsolidationReport{}
+		}
+	}
+
 	staleReport := am.ScanStaleness(workingDir)
 	staleMap := make(map[string][]string, len(staleReport.Findings))
 	for _, f := range staleReport.Findings {
