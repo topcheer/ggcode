@@ -78,3 +78,13 @@ See [A2A Protocol](a2a.md) for delegating to remote ggcode instances.
 - The agent must be installed and accessible via `$PATH`
 - Each agent uses its own API key — configure them per the agent's documentation
 - Agents must support ACP (Agent Client Protocol) mode
+
+## 团队结果聚合（AggregateResults）
+
+`swarm.AggregateResults` 将 N 个 teammate 的任务产出折叠为一份确定性聚合报告（MoA 式聚合的确定性层，P0 不含 LLM 裁决）：
+
+1. **冲突检测**：同一文件路径被多个产出引用 → `Conflicts[]`（含各方名单）
+2. **融合**：带标签拼接 + 冲突节显式标注
+3. **可追溯报告**：文件并集/`NeedsAdjudication` 标志
+
+约束：**绝不静默合并冲突编辑**——冲突只标记交由上层裁决；纯 inform-only。
