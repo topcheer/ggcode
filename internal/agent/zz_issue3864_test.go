@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -45,7 +44,7 @@ func TestIssue3864_StructuredToolExemptions(t *testing.T) {
 }
 
 func TestIssue3864_StartCommandGateWired(t *testing.T) {
-	raw, err := os.ReadFile("agent.go")
+	raw, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatal(err)
 	}

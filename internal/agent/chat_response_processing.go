@@ -20,6 +20,11 @@ type loopState struct {
 	inlineToolCallNudges      int
 	guidanceAtBudget          bool
 	syncVerifyRetries         int
+	deferredMemoryContent     string
+	deferredMemoryFiles       []string
+	deferredMemoryTarget      string
+	msgs                      []provider.Message
+	followUpMessages          []provider.Message
 }
 
 // handleNoToolResponse processes the no-tool-calls path of one assistant

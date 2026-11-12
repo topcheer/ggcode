@@ -2,7 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -86,7 +85,7 @@ func TestIssue1141RealDiagnosticStillGuardsLargeEdit(t *testing.T) {
 }
 
 func TestIssue1141RecorderRunsBeforeRuleInjection(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatalf("cannot read agent.go: %v", err)
 	}

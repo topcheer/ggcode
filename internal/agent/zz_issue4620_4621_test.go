@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -9,7 +8,7 @@ import (
 )
 
 func TestIssue4620_CountersPastSkipGates(t *testing.T) {
-	data, err := os.ReadFile("agent.go")
+	data, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +21,7 @@ func TestIssue4620_CountersPastSkipGates(t *testing.T) {
 		"runStats.recordToolCall(tc.Name)",
 		"a.toolCallBudget.record()",
 		"a.toolThermal.recordToolCall(tc.Name)",
-		"a.iterPressure.recordToolCall(tc.Name, i+1)",
+		"a.iterPressure.recordToolCall(tc.Name, iter+1)",
 		"extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)",
 	} {
 		idx := strings.Index(text, marker)

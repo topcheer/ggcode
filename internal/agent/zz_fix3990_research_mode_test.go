@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -57,14 +56,14 @@ func TestFix3990FileStuckRaisedNotDisabledInResearchMode(t *testing.T) {
 }
 
 func TestFix3989StartCommandExcludedFromSuccessfulCommands(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Skipf("cannot read agent.go source: %v", err)
 	}
 	srcStr := string(src)
 
-	if !strings.Contains(srcStr, `if tc.Name == "run_command" && !result.IsError {
-						runStats.recordSuccessfulCommand(cmd)`) {
+	if !strings.Contains(srcStr, `if tc.Name == "run_command" && !result.IsError {`) ||
+		!strings.Contains(srcStr, "runStats.recordSuccessfulCommand(cmd)") {
 		t.Fatal("recordSuccessfulCommand must be gated on tc.Name == \"run_command\" (#3989): " +
 			"a successful start_command spawn would be persisted as a verified cmd_snippet")
 	}

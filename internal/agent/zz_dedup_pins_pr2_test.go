@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -69,7 +68,7 @@ func TestIssue5153_SeenROInvalidatesOnPartialWriteDespiteError(t *testing.T) {
 
 func readAgentSource(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile("agent.go")
+	raw, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatal(err)
 	}

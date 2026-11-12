@@ -52,7 +52,7 @@ func TestIssue2803WiringReadsRealFile(t *testing.T) {
 }
 
 func TestIssue2803CallSiteGated(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatalf("read agent.go: %v", err)
 	}

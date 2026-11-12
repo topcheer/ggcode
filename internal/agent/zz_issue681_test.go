@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -26,7 +25,7 @@ func TestIssue681_InjectGuidanceReportsDelivery(t *testing.T) {
 }
 
 func TestIssue681_CheckpointExemptFromBudget(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Skipf("cannot read agent.go: %v", err)
 	}

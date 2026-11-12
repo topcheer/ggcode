@@ -3,7 +3,6 @@ package agent
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -42,11 +41,7 @@ func TestIssue5249ErrorPathGateUsesPredicate(t *testing.T) {
 		t.Skip("no executable path")
 	}
 	_ = root
-	dir, err := filepath.Abs(".")
-	if err != nil {
-		t.Skipf("no cwd: %v", err)
-	}
-	body, err := os.ReadFile(filepath.Join(dir, "agent.go"))
+	body, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatalf("agent.go unreadable: %v", err)
 	}

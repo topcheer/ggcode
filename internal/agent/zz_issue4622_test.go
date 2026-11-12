@@ -7,7 +7,7 @@ import (
 )
 
 func TestIssue4622_ReasoningCountedInMindlessMeasure(t *testing.T) {
-	data, err := os.ReadFile("agent.go")
+	data, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatal(err)
 	}

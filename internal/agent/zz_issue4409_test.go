@@ -7,7 +7,7 @@ import (
 )
 
 func TestIssue4409_BudgetStopReturnsSentinel(t *testing.T) {
-	raw, err := os.ReadFile("agent.go")
+	raw, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatal(err)
 	}

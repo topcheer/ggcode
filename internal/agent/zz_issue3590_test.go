@@ -9,7 +9,11 @@ import (
 
 func TestIssue3590_RecordSearchResultOutsideReadPathsBlock(t *testing.T) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "agent.go", nil, 0)
+	src3590, perr3590 := readAgentAndProcessingSources()
+	if perr3590 != nil {
+		t.Fatal(perr3590)
+	}
+	file, err := parser.ParseFile(fset, "agent.go+extractions", src3590, 0)
 	if err != nil {
 		t.Skipf("agent.go not parseable from test dir: %v", err)
 	}

@@ -1,14 +1,13 @@
 package agent
 
 import (
-	"os"
 	"regexp"
 	"strings"
 	"testing"
 )
 
 func TestIssue1165RecordersRunBeforeRuleInjection(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatalf("cannot read agent.go: %v", err)
 	}
