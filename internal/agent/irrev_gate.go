@@ -297,6 +297,57 @@ func irrevNeutralizeSafeRedirects(cmd string) string {
 	return cmd
 }
 
+// #5478: irrevSubstitutionsAreReadOnly reports whether every command
+// substitution in the quote-stripped span is itself read-only. Bodies are
+// recursively classified with irrevSegmentIsReadOnly, so $(git push ...)
+// gates while $(gh pr view ...) passes. Unbalanced substitutions stay
+// gated (conservative - the parse is incomplete, so intent is unknown).
+func irrevSubstitutionsAreReadOnly(bare string) bool {
+	for i := 0; i < len(bare); i++ {
+		var body string
+		switch {
+		case strings.HasPrefix(bare[i:], "$(") || strings.HasPrefix(bare[i:], "<("):
+			end := irrevMatchParen(bare, i+1)
+			if end < 0 {
+				return false
+			}
+			body = bare[i+2 : end]
+			i = end
+		case bare[i] == '`':
+			j := strings.IndexByte(bare[i+1:], '`')
+			if j < 0 {
+				return false
+			}
+			body = bare[i+1 : i+1+j]
+			i = i + 1 + j
+		default:
+			continue
+		}
+		if body != "" && !irrevSegmentIsReadOnly(body) {
+			return false
+		}
+	}
+	return true
+}
+
+// irrevMatchParen returns the index of the ')' that matches the '(' at
+// position start, honoring nesting depth; -1 when unbalanced.
+func irrevMatchParen(s string, start int) int {
+	depth := 0
+	for j := start; j < len(s); j++ {
+		switch s[j] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return j
+			}
+		}
+	}
+	return -1
+}
+
 func irrevSplitShellSegments(cmd string) []string {
 	// #5269: the splitter was quote-blind, so a quoted jq program like
 	// `gh api ... -q '.[] | select(.x) | .number]'` was shredded on the pipes
@@ -356,9 +407,20 @@ func irrevSegmentIsReadOnly(seg string) bool {
 	// Real shell redirects/substitutions are unquoted by definition, so
 	// checking the quote-stripped span keeps them gated.
 	bare := irrevStripQuoted(seg)
-	if strings.Contains(bare, ">") || strings.Contains(bare, "$(") ||
-		strings.Contains(bare, "`") || strings.Contains(bare, "<(") {
-
+	if strings.Contains(bare, ">") {
+		return false
+	}
+	// #5478: a substitution whose BODY is itself read-only must not gate the
+	// whole segment - the standard patrol shape is
+	// `gh api .../commits/$(gh pr view N --json headRefOid -q .headRefOid)/check-runs`,
+	// where $( ) / ` ` / <( ) only inject a value. The old bare-token check
+	// gated ANY substitution regardless of what the body does (the third
+	// "0 grounding" false-positive layer: single-segment corpora passed,
+	// composite substitution shapes gated). Recurse into each body: a
+	// mutating body ($(git push ...)) still gates; unbalanced substitution
+	// stays gated conservatively. Redirects keep the hard gate above - a
+	// redirect writes regardless of anything embedded in its target.
+	if !irrevSubstitutionsAreReadOnly(bare) {
 		return false
 	}
 	fields := strings.Fields(seg)

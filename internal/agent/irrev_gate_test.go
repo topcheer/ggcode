@@ -111,7 +111,10 @@ func TestIrrevReadOnlyCommandConservative(t *testing.T) {
 	stayNonReadOnly := []string{
 		"go test ./... > out.txt",
 		"git status 2>err.txt",
-		"cat $(pwd)/x",
+		// #5478: "cat $(pwd)/x" moved OUT of this list - a substitution
+		// whose body is read-only (pwd) no longer gates the whole segment;
+		// the conservative floor is now "mutating body OR unbalanced
+		// substitution", pinned in TestIssue5478SubstitutionBodyParity.
 		"make build",
 		"curl -s https://example.com",
 		"go run ./cmd/x",
