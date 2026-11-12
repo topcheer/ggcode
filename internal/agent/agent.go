@@ -1543,6 +1543,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.turnImpact.reset()
 		}
 	}
+	// #34 env fingerprint drift: warn (once per change) that prior
+	// build/test observations may be stale when manifests or toolchain
+	// shifted; baseline is persisted so it survives restarts.
+	if driftMsg := checkEnvDrift(a.WorkingDir()); driftMsg != "" && a.contextManager != nil {
+		a.contextManager.Add(provider.Message{
+			Role:    "system",
+			Content: []provider.ContentBlock{{Type: "text", Text: driftMsg}},
+		})
+		debug.Log("agent", "injected environment drift warning")
+	}
 	defer func() {
 
 		MarkCompleted(sid, err == nil, runStats.Iterations, len(runStats.FilesEdited))
