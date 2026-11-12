@@ -47,6 +47,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"runToolNames":              "appended only as tools execute during a run (r484 toolflow hint input); nil = no tools run yet",
 		"researchPlanSubs":          "populated only when the r343/sa-130 research planner fires (research-mode run); nil = no plan yet",
 		"perfBaseline":              "loaded lazily from disk on first access (guarded)",
+		"activeRunStats":            "set at run start (#5523 wait-window accumulation hook); nil outside a run",
 		"guidancePromoter":          "loaded lazily from rule store (guarded)",
 		"ruleStore":                 "loaded lazily via SetRuleStore (guarded)",
 		"selfModel":                 "lazily bound to the workspace in SetWorkingDir (#5498: NewAgent runs before the workspace is known)",
