@@ -71,5 +71,6 @@ func newAuditCmd() *cobra.Command {
 	reportCmd.Flags().BoolVar(&strict, "strict", false, "exit non-zero when the ledger fails chain verification (CI gate)")
 
 	cmd.AddCommand(reportCmd)
+	cmd.AddCommand(newAuditVizCmd())
 	return cmd
 }

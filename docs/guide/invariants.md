@@ -75,6 +75,17 @@ ggcode audit report --path /path/to/audit.jsonl   # 事后重构该 run
 
 `audit report` 输出：哈希链验证状态（篡改证据前置显示）、人工审批时间线（approved/user_denied/ask_timeout）、策略拒绝计数（`policy_denied`：用户配置的 deny 规则生效——区别于人工拒绝，规则生效事件同样入账本）、不变式拒绝计数（`invariant_id`）、A2A 远程任务归因（peer/task）、每工具活动直方图、错误聚类（路径/文件名/数字归一化后同形状错误合并计数）。可选 `--session` 只看单个会话；`--files f1,f2` 传入本次变更文件后追加 blast-radius 审查深度提示（`copy` < `code` < `critical`，涉及迁移/鉴权/基础设施/CI/密钥的变更标记为 critical）。
 
+## 审计可视化（audit viz）
+
+`ggcode audit viz` 从审计链生成**自包含离线 HTML 决策时间线**（零外链资产）：链验证横幅（篡改/截断时红色降级——绝不静默展示不可信链）、汇总卡片（条目/带 rationale 条数/错误/gate 拒绝/工具数）、可过滤时间线（按状态/工具/文本，vanilla JS 零依赖；状态配色：ok/approved 绿、错误红、gate/denied 橙、ask_timeout 紫、cancelled 灰）。
+
+```
+ggcode audit viz --path audit.jsonl -o ggaudit.html   # 生成并自动打开
+ggcode audit viz --session <id> --max-entries 500 --no-open
+```
+
+每条展示 seq/时间/工具/状态徽标/时长/session/invariant/peer+task 归因、`why:`（arg_rationale，#5476 入账的决策理由）与 `err:`。**安全**：rationale/err 为模型派生文本，渲染全程 `html.EscapeString`；无客户端数据注入面；链验证失败时横幅降级提示"视为不可信"。依据：AgentGUI（arXiv:2607.26300）轨迹可视化定位快 38%；arXiv:2611.13254 失败 run 反证 88% 无人消费——可视化呈现是可靠性短板的最后一公里。
+
 ## 设计边界
 
 - 引擎是**确定性护栏**，不替代权限系统（permission）或对话层约束提醒（constraint_amnesia）
