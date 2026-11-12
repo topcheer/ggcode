@@ -37,10 +37,15 @@ type perfBaselineEntry struct {
 	Errors      int    `json:"err"`
 	FilesEdited int    `json:"fe"`
 	DurationSec int    `json:"dur"`
-	Compactions int    `json:"cmp"`
-	ContextPeak int    `json:"ctx"`
-	Success     bool   `json:"ok"`
-	Timestamp   int64  `json:"ts"`
+	// WaitSec is the wall-clock time the run spent inside wait-class tool
+	// calls (sleep / wait_command / wait_agent). DurationSec excludes it
+	// (active time) so the duration metric cannot be inflated by deliberate
+	// waiting (#5523). Legacy entries predate the split and carry 0.
+	WaitSec     int   `json:"wait,omitempty"`
+	Compactions int   `json:"cmp"`
+	ContextPeak int   `json:"ctx"`
+	Success     bool  `json:"ok"`
+	Timestamp   int64 `json:"ts"`
 
 	Tokens int `json:"tok,omitempty"`
 
@@ -293,6 +298,13 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 		return
 	}
 
+	durSec := int(stats.Duration.Round(time.Second).Seconds())
+	waitSec := int(stats.WaitDuration.Round(time.Second).Seconds())
+	activeSec := durSec - waitSec
+	if activeSec < 0 {
+		activeSec = 0
+	}
+
 	entry := perfBaselineEntry{
 		RunID:      stats.RunID(),
 		Iterations: stats.Iterations,
@@ -300,7 +312,11 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 
 		Errors:      stats.ErrorCount,
 		FilesEdited: len(stats.FilesEdited),
-		DurationSec: int(stats.Duration.Round(time.Second).Seconds()),
+		// DurationSec records ACTIVE time: wall clock minus wait-class tool
+		// windows (#5523). A run that is 90% deliberate sleep must not look
+		// like a 6x duration regression.
+		DurationSec: activeSec,
+		WaitSec:     waitSec,
 		Compactions: stats.CompactionCount,
 		ContextPeak: stats.ContextPeakTokens,
 		Success:     stats.Success,
@@ -316,8 +332,8 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 		runs = runs[len(runs)-perfBaselineMaxRuns:]
 	}
 	savePerfBaseline(workingDir, runs)
-	debug.Log("perf-baseline", "recorded run %s: iter=%d tc=%d err=%d dur=%ds",
-		entry.RunID, entry.Iterations, entry.ToolCalls, entry.Errors, entry.DurationSec)
+	debug.Log("perf-baseline", "recorded run %s: iter=%d tc=%d err=%d dur=%ds (active) wait=%ds",
+		entry.RunID, entry.Iterations, entry.ToolCalls, entry.Errors, entry.DurationSec, entry.WaitSec)
 }
 
 func (a *Agent) maybeInjectPerfRegression() {
@@ -571,6 +587,9 @@ func topToolMix(m map[string]int, n int) []string {
 func formatRunShapeDiagnostics(hit perfBaselineEntry, durSec int) string {
 	out := " Run shape of the regressed run: iterations=" + intToStr(hit.Iterations)
 	out += ", tool_calls=" + intToStr(hit.ToolCalls)
+	if hit.WaitSec > 0 {
+		out += ", wait=" + intToStr(hit.WaitSec) + "s"
+	}
 	if durSec > 0 && hit.Iterations > 0 {
 		out += ", sec/iter≈" + trimZeros(floatToString(float64(durSec)/float64(hit.Iterations)))
 	}

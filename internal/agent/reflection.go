@@ -36,6 +36,11 @@ type RunStats struct {
 
 	Duration time.Duration
 
+	// WaitDuration accumulates wall time spent inside wait-class tool calls
+	// (sleep, wait_command, wait_agent). The perf-regression banner compares
+	// active time only (#5523).
+	WaitDuration time.Duration
+
 	Iterations int
 
 	Success bool
@@ -100,6 +105,26 @@ func (s *RunStats) recordToolCall(toolName string) {
 	}
 	s.ToolCalls[toolName]++
 }
+
+// addWaitTime records wall time consumed by a wait-class tool call so the
+// perf baseline can subtract it from the run's active duration (#5523).
+func (s *RunStats) addWaitTime(d time.Duration) {
+	if d > 0 {
+		s.WaitDuration += d
+	}
+}
+
+// waitClassTools are the tools whose execution window is deliberate idle
+// waiting (sleep tool, background-job waits, sub-agent waits), not work.
+// Their wall time must not count toward the perf-regression run-duration
+// metric (#5523).
+var waitClassTools = map[string]bool{
+	"sleep":        true,
+	"wait_command": true,
+	"wait_agent":   true,
+}
+
+func isWaitClassTool(name string) bool { return waitClassTools[name] }
 
 func (s *RunStats) recordFileEdit(path string) {
 	path = strings.TrimSpace(path)
