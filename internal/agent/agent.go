@@ -319,6 +319,7 @@ type Agent struct {
 	branchGuard                  *branchGuardState
 	destructiveGuard             *gitDestructiveState
 	turnImpact                   *turnImpactRecorder
+	errorBudget                  *errorBudget
 	shellNativeHint              *shellNativeHintState
 	monorepoScoper               *monorepoScoperState
 	bgOrphan                     *bgOrphanState
@@ -541,6 +542,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		branchGuard:            newBranchGuardState(),
 		destructiveGuard:       newGitDestructiveState(),
 		turnImpact:             newTurnImpactRecorder(),
+		errorBudget:            newErrorBudget(),
 		shellNativeHint:        newShellNativeHintState(),
 		monorepoScoper:         newMonorepoScoperState(),
 		approvalMemory:         permission.NewApprovalMemory(),
@@ -1779,6 +1781,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolMemo.reset()
 	a.commandCache.reset()
 	a.confidence.reset()
+	if a.errorBudget != nil {
+		a.errorBudget.reset()
+	}
 	a.verifDebt.reset()
 	a.undoBlind.reset()
 	a.editAbandon.reset()
@@ -3702,6 +3707,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{Type: "text", Text: pseudoWarn}},
 				})
 				msgs = a.contextManager.Messages()
+			}
+
+			// #28 SLO error budget: sliding-window success-rate guard. Fast
+			// burn warns once; exhausting the budget trips the breaker and
+			// escalates to ask_user instead of letting the agent keep
+			// burning retries (budget layer vs compounding_failure's hint layer).
+			if a.errorBudget != nil {
+				if budgetMsg := a.errorBudget.evaluate(!result.IsError); budgetMsg != "" {
+					debug.Log("agent", "Iteration %d: error budget event", i+1)
+					a.contextManager.Add(provider.Message{
+						Role:    "user",
+						Content: []provider.ContentBlock{{Type: "text", Text: budgetMsg}},
+					})
+					msgs = a.contextManager.Messages()
+				}
 			}
 
 			if exfilWarn := a.exfilChain.checkExfilChain(tc.Name, string(tc.Arguments)); exfilWarn != "" {
