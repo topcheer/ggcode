@@ -23,6 +23,9 @@ func TestIdleMaintainerBusyCapFires(t *testing.T) {
 	// Shrink the busy backstop for the test (production default: 6h).
 	m.maxSinceRun = 120 * time.Millisecond
 
+	// #5497: inject a short sweep cadence; the t=0 first check alone can't
+	// reach the 120ms cap inside a 5s assertion window on a 30s tick.
+	m.SetInterval(10 * time.Millisecond)
 	m.Start()
 	defer m.Stop()
 
@@ -52,6 +55,9 @@ func TestIdleMaintainerIdleGateStillPrimary(t *testing.T) {
 	m.SetMaintenance(func() { fired.Add(1) })
 	m.maxSinceRun = 10 * time.Minute // cap far away; only the idle path may fire
 
+	// #5497: inject a short sweep cadence (30ms gate needs second checks
+	// inside the 200ms window; a 30s production tick never delivers one).
+	m.SetInterval(10 * time.Millisecond)
 	m.Start()
 	defer m.Stop()
 	time.Sleep(200 * time.Millisecond)
