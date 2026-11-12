@@ -52,6 +52,19 @@ jobs:
           fi
           prior=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WF_FILE/runs?event=push&per_page=30" \
             --jq '.workflow_runs[] | select(.head_branch == "${{ github.ref_name }}" and .status == "completed" and .conclusion == "success" and .id != ${{ github.run_id }}) | .id' | head -n1 || true)
+          # #5480 hardening: on a gh api HTTP error the error body is
+          # written to stdout, so $prior would hold JSON junk and read as a
+          # prior success - silently skipping the whole pipeline
+          # (fail-closed). Only a numeric run id is a real prior; anything
+          # else means the query failed - warn and fail open.
+          case "$prior" in
+            ''|*[!0-9]*)
+              if [ -n "$prior" ]; then
+                echo "::warning::dedup query failed for tag ${{ github.ref_name }} (unexpected gh api output) - failing open, pipeline will run"
+              fi
+              prior=''
+              ;;
+          esac
           if [ -n "$prior" ]; then
             echo "prior successful run #$prior for tag ${{ github.ref_name }} - skipping duplicate fan-out"
             echo "skip=true" >> "$GITHUB_OUTPUT"
