@@ -27,16 +27,18 @@ func fake993KillScript(t *testing.T, dir string) string {
 	body := "#!/bin/sh\n" +
 		fake993Frame(fake993InitResult) +
 		// #5483: a fixed read budget raced the client's protocol writes -
-		// if acquire wrote one extra line (watchdog/config notifications)
-		// the script exited mid-acquire and the next write hit EPIPE
-		// ("first acquire: broken pipe"). Sentinel + idle instead: consume
-		// any traffic, die on the crash method OR 5s of silence (the final
-		// notify body carries no trailing newline, so a bare sentinel
-		// pattern would block forever on the partial last line; the idle
-		// arm is the deterministic fallback - failure detection is driven
-		// by stdout EOF either way). read -t requires bash, which is what
-		// fake993Resolved launches.
-		"while read -t 5 line; do\n" +
+		// any extra pre-acquire notification consumed a read, the script
+		// exited mid-acquire, and the next client write hit EPIPE
+		// ("first acquire: broken pipe"). Sentinel + watchdog instead:
+		// consume any traffic and die on the crash method, or after 5s of
+		// silence (the final notify body has no trailing newline, so the
+		// sentinel alone would block on the partial last line). All POSIX:
+		// the script runs under its #!/bin/sh shebang, which is dash on
+		// Ubuntu CI runners - `read -t` is a bashism dash rejects (v2 of
+		// this fix died instantly on CI for exactly that reason; macOS
+		// /bin/sh is bash-as-sh, which is why local runs stayed green).
+		"( sleep 5; kill $$ ) &\n" +
+		"while read line; do\n" +
 		"  case \"$line\" in *x/crash*) exit 1;; esac\n" +
 		"done\n" +
 		"exit 1\n"
