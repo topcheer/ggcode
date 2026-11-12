@@ -15,12 +15,23 @@ import (
 
 var persistMu sync.Mutex
 
-func boardPersistPath(teamID string) string {
-	return filepath.Join(util.ConfigDir(), "swarm", "teams", teamID, "board.json")
+// boardRoot returns the persist root for team boards (#5540). Default is
+// the user config dir; tests override the BoardRoot field with a t.TempDir()
+// so per-Manager deterministic team IDs (team-1) cannot collide across
+// tests/packages on the shared on-disk path.
+func (m *Manager) boardRoot() string {
+	if m.BoardRoot != "" {
+		return m.BoardRoot
+	}
+	return util.ConfigDir()
 }
 
-func boardLockPath(teamID string) string {
-	return filepath.Join(util.ConfigDir(), "swarm", "teams", teamID, "board.lock")
+func (m *Manager) boardPersistPath(teamID string) string {
+	return filepath.Join(m.boardRoot(), "swarm", "teams", teamID, "board.json")
+}
+
+func (m *Manager) boardLockPath(teamID string) string {
+	return filepath.Join(m.boardRoot(), "swarm", "teams", teamID, "board.lock")
 }
 
 func (m *Manager) ClaimTaskSingleWinner(teamID, taskID, owner string) (*task.Task, error) {
@@ -28,16 +39,16 @@ func (m *Manager) ClaimTaskSingleWinner(teamID, taskID, owner string) (*task.Tas
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(boardLockPath(teamID)), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(m.boardLockPath(teamID)), 0o755); err != nil {
 		return nil, fmt.Errorf("claim lock dir: %w", err)
 	}
-	unlock, err := util.FileLock(boardLockPath(teamID))
+	unlock, err := util.FileLock(m.boardLockPath(teamID))
 	if err != nil {
 		return nil, fmt.Errorf("claim lock: %w", err)
 	}
 	defer unlock()
 
-	if disk := loadTeamBoardRaw(teamID); disk != nil {
+	if disk := m.loadTeamBoardRaw(teamID); disk != nil {
 		if dt, ok := disk.Get(taskID); ok && dt.Status == task.StatusInProgress && dt.Owner != "" {
 			if dt.Owner != owner {
 				return nil, fmt.Errorf("task %s was already claimed by %s (in_progress on the shared board); pick another task or coordinate with the owner (#4781)", taskID, dt.Owner)
@@ -63,18 +74,18 @@ func (m *Manager) ClaimTaskSingleWinner(teamID, taskID, owner string) (*task.Tas
 		return nil, err
 	}
 
-	if err := persistTeamBoardNow(teamID, tm); err != nil {
+	if err := m.persistTeamBoardNow(teamID, tm); err != nil {
 		debug.Log("swarm", "claim persist failed for %s/%s: %v (async snapshot will retry)", teamID, taskID, err)
 	}
 	return &updated, nil
 }
 
-func persistTeamBoardNow(teamID string, tm *task.Manager) error {
+func (m *Manager) persistTeamBoardNow(teamID string, tm *task.Manager) error {
 	data, err := tm.SnapshotJSON()
 	if err != nil {
 		return err
 	}
-	path := boardPersistPath(teamID)
+	path := m.boardPersistPath(teamID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -85,18 +96,18 @@ func persistTeamBoardNow(teamID string, tm *task.Manager) error {
 	return os.Rename(tmp, path)
 }
 
-func persistTeamBoardAsync(teamID string, tm *task.Manager) {
+func (m *Manager) persistTeamBoardAsync(teamID string, tm *task.Manager) {
 	safego.Go("swarm.boardPersist", func() {
 		persistMu.Lock()
 		defer persistMu.Unlock()
-		if err := persistTeamBoardNow(teamID, tm); err != nil {
+		if err := m.persistTeamBoardNow(teamID, tm); err != nil {
 			debug.Log("swarm", "board persist for %s: %v", teamID, err)
 		}
 	})
 }
 
-func loadTeamBoard(teamID string) *task.Manager {
-	tm := loadTeamBoardRaw(teamID)
+func (m *Manager) loadTeamBoard(teamID string) *task.Manager {
+	tm := m.loadTeamBoardRaw(teamID)
 
 	rolled := 0
 	for _, t := range tm.List() {
@@ -113,14 +124,14 @@ func loadTeamBoard(teamID string) *task.Manager {
 	return tm
 }
 
-func loadTeamBoardRaw(teamID string) *task.Manager {
+func (m *Manager) loadTeamBoardRaw(teamID string) *task.Manager {
 	tm := task.NewManager()
-	data, err := os.ReadFile(boardPersistPath(teamID))
+	data, err := os.ReadFile(m.boardPersistPath(teamID))
 	if err != nil {
 		return tm
 	}
 	if err := tm.RestoreJSON(data); err != nil {
-		src := boardPersistPath(teamID)
+		src := m.boardPersistPath(teamID)
 		q := fmt.Sprintf("%s.corrupt-%d", src, time.Now().Unix())
 		if rerr := os.Rename(src, q); rerr == nil {
 			debug.Log("swarm", "board restore for %s FAILED (%v): original board quarantined at %s, starting empty - inspect the quarantine file before any board change", teamID, err, q)

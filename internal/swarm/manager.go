@@ -41,6 +41,11 @@ const swarmStreamBatchInterval = 500 * time.Millisecond
 const swarmCancelTimeout = 5 * time.Second
 
 type Manager struct {
+	// BoardRoot overrides the on-disk root for team board persistence
+	// (#5540). Empty (production default) uses util.ConfigDir(); tests set
+	// it to a t.TempDir() so deterministic team IDs cannot collide on the
+	// shared path across tests and packages.
+	BoardRoot      string
 	teams          map[string]*Team
 	provider       provider.Provider
 	providerGetter func() provider.Provider
@@ -351,7 +356,7 @@ func (m *Manager) ListTeamBoards() []TeamBoardSnapshot {
 func (m *Manager) EmitBoardUpdated(teamID string) {
 	m.emit(Event{Type: "team_board_updated", TeamID: teamID, Timestamp: time.Now()})
 	if tm := m.GetTaskManager(teamID); tm != nil {
-		persistTeamBoardAsync(teamID, tm)
+		m.persistTeamBoardAsync(teamID, tm)
 	}
 }
 
@@ -635,7 +640,7 @@ func (m *Manager) EnsureTaskManager(teamID string) (*task.Manager, error) {
 	defer team.mu.Unlock()
 	if team.Tasks == nil {
 
-		team.Tasks = loadTeamBoard(teamID)
+		team.Tasks = m.loadTeamBoard(teamID)
 	}
 	return team.Tasks, nil
 }

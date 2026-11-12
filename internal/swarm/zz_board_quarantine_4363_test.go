@@ -12,7 +12,7 @@ import (
 func TestZZBoardCorruptQuarantine(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	teamID := "quarantine-team"
-	path := boardPersistPath(teamID)
+	path := newBoardTestManager(t).boardPersistPath(teamID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestZZBoardCorruptQuarantine(t *testing.T) {
 		t.Fatalf("seed corrupt board: %v", err)
 	}
 
-	tm := loadTeamBoard(teamID)
+	tm := newBoardTestManager(t).loadTeamBoard(teamID)
 	if tm == nil {
 		t.Fatal("loadTeamBoard must return a usable empty manager")
 	}
