@@ -35,7 +35,17 @@ func (c *changeReconcileState) capturePreRunState(workingDir string) {
 		return
 	}
 	for _, f := range files {
-		c.preRunDirty[normalizeReconcilePath(workingDir, f)] = true
+		rel := normalizeReconcilePath(workingDir, f)
+		// #5524: changes inside a registered git worktree
+		// (.ggcode/worktrees/<name>/) are sibling worktree work, not main
+		// working-tree dirt. Attributing them to the main tree produces
+		// false "you have uncommitted changes" signals and misdirected
+		// stage/commit guidance in shared workspaces. Skip them here; the
+		// worktree's own advisory surfaces (if any) own their paths.
+		if isWorktreeScopedPath(rel) {
+			continue
+		}
+		c.preRunDirty[rel] = true
 	}
 	if len(files) > 0 {
 		debug.Log("reconcile", "capturePreRunState: %d files were dirty before run start", len(files))
@@ -44,6 +54,21 @@ func (c *changeReconcileState) capturePreRunState(workingDir string) {
 
 func (c *changeReconcileState) dirtyFileCount() int {
 	return len(c.preRunDirty)
+}
+
+// isWorktreeScopedPath reports whether rel is inside a registered git
+// worktree directory (#5524): ".ggcode/worktrees/<name>/..." or an absolute
+// path containing that component. Such paths belong to the sibling
+// worktree, never to the main working tree.
+func isWorktreeScopedPath(rel string) bool {
+	if rel == "" {
+		return false
+	}
+	marker := filepath.Join(".ggcode", "worktrees") + string(filepath.Separator)
+	if strings.HasPrefix(rel, marker) || strings.Contains(rel, string(filepath.Separator)+marker) {
+		return true
+	}
+	return false
 }
 
 func (c *changeReconcileState) reset() {
