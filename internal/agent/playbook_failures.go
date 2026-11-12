@@ -15,7 +15,7 @@ import (
 
 const (
 	maxFailureEntries     = 20
-	maxFailureHintChars   = 400
+	maxFailureHintChars   = 600
 	failureEntryTTL       = 30 * 24 * time.Hour
 	failureHintStaleAfter = 14 * 24 * time.Hour
 )
@@ -26,6 +26,7 @@ type PlaybookFailureEntry struct {
 	SuspectTool string    `json:"suspect_tool"`
 	SuspectFile string    `json:"suspect_file"`
 	MaxCRS      int       `json:"max_crs"`
+	Repair      string    `json:"repair,omitempty"`
 	Occurrences int       `json:"occurrences"`
 	FirstSeen   time.Time `json:"first_seen"`
 	LastSeen    time.Time `json:"last_seen"`
@@ -75,6 +76,7 @@ func RecordFailureAttribution(workingDir, userPrompt, suspectTool, suspectFile s
 			}
 			if suspectTool != "" {
 				e.SuspectTool = suspectTool
+				e.Repair = CounterfactualRepairStep(suspectTool)
 			}
 			persistFailureEntries(path, pruneFailureEntries(entries))
 			debug.Log("failure-attribution", "updated entry %s%s (occurrences=%d)", taskType, suspectFile, e.Occurrences)
@@ -88,6 +90,7 @@ func RecordFailureAttribution(workingDir, userPrompt, suspectTool, suspectFile s
 		SuspectTool: suspectTool,
 		SuspectFile: suspectFile,
 		MaxCRS:      crs,
+		Repair:      CounterfactualRepairStep(suspectTool),
 		Occurrences: 1,
 		FirstSeen:   now,
 		LastSeen:    now,
@@ -202,6 +205,9 @@ func FailureHintsForPrompt(workingDir, runPrompt string, maxHints int) string {
 			note = " - recurring suspect, verify this file early"
 		case e.Occurrences == 2:
 			note = " - seen twice, double-check before editing"
+		}
+		if e.Repair != "" {
+			note += " → fix: " + e.Repair
 		}
 		tool := e.SuspectTool
 		if tool == "" {

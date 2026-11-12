@@ -30,3 +30,11 @@ ggcode audit verify   # 若已接入；否则调 internal/audit.Verify
 ```
 
 设计参照：tianpan《Decision Provenance in Agentic Systems》2026/04（logs ≠ accountability；decision event 六要素）、HiveMind《Structured audit trails》2026/06（Evidence 引用+hash-linked）。
+
+## 反事实修复腿（Counterfactual Repair）
+
+失败归档此前只回答**哪一步致败**（suspect 工具/文件/CRS）；CausalFlow（arXiv:2605.25338）的修复腿补上**下一步该怎么不同**：
+
+- `PlaybookFailureEntry.Repair`：按工具类确定性生成修复指令（编辑类→"先重读再改+最窄验证"；命令类→"先取全量错误输出再重试、一次只改一个变量"；测试类→"先 -run 单测"等）
+- 记录与更新两路均写入；`FailureHintsForPrompt` 注入时带 `→ fix:` 前缀（hint 预算 400→600 补偿）
+- 确定性分类器，无 LLM 依赖；见 `internal/agent/counterfactual_repair.go`
