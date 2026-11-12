@@ -285,6 +285,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newLLMProbeCmd(&cfgFile))
 	cmd.AddCommand(newACPCommand(&cfgFile))
 	cmd.AddCommand(newStatusCmd())
+	cmd.AddCommand(newMemoryCmd())
 	cmd.AddCommand(newBOMCmd())
 	cmd.AddCommand(newReportCmd())
 	cmd.AddCommand(newLoginCmd(&cfgFile))
@@ -704,26 +705,59 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	// events and runs a debounced headless curation pass (tag, merge,
 	// archive stale temporal facts) through the same store APIs the
 	// memory tools use. Gated by memory.curator.enabled (default on).
-	if cfg.MemoryCuratorEnabled() {
-		curatorProv := prov
-		if m := strings.TrimSpace(cfg.Memory.Curator.Model); m != "" && m != cfg.Model {
-			// ResolveProvider reads cfg.Model; Config embeds a lock so it
-			// must not be copied - swap the field, resolve, restore.
-			origModel := cfg.Model
-			cfg.Model = m
-			p2, _, perr := ResolveProvider(cfg)
-			cfg.Model = origModel
-			if perr == nil {
-				curatorProv = p2
-			} else {
-				debug.Log("root", "memory curator model override failed (%v); using default provider", perr)
-			}
+	curatorProv := prov
+	if m := strings.TrimSpace(cfg.Memory.Curator.Model); m != "" && m != cfg.Model {
+		// ResolveProvider reads cfg.Model; Config embeds a lock so it
+		// must not be copied - swap the field, resolve, restore.
+		origModel := cfg.Model
+		cfg.Model = m
+		p2, _, perr := ResolveProvider(cfg)
+		cfg.Model = origModel
+		if perr == nil {
+			curatorProv = p2
+		} else {
+			debug.Log("root", "memory curator model override failed (%v); using default provider", perr)
 		}
+	}
+	if cfg.MemoryCuratorEnabled() {
 		memoryCurator := agentruntime.NewMemoryCurator(autoMem, projectAutoMem, curatorProv, agentruntime.MemoryCuratorOptions{})
 		memoryCurator.Start(context.Background())
 		defer memoryCurator.Stop()
 		trace.Mark("start memory curator")
 	}
+	// #5512: autonomous LLM curator sweep (weekly adjudication round over
+	// global memory). Opt-in via memory.curator.sweep (default off); the
+	// flag is re-read at every tick so toggling needs no restart.
+	sweepStop := make(chan struct{})
+	safego.Go("memory-sweep-weekly", func() {
+		ticker := time.NewTicker(7 * 24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-sweepStop:
+				return
+			case <-ticker.C:
+				if !cfg.MemoryCuratorSweepEnabled() {
+					continue
+				}
+				judge := agentruntime.SweepJudgeFunc(func(jctx context.Context, prompt string) (string, error) {
+					resp, cerr := curatorProv.Chat(jctx, []provider.Message{{
+						Role:    "user",
+						Content: []provider.ContentBlock{provider.TextBlock(prompt)},
+					}}, nil)
+					if cerr != nil {
+						return "", cerr
+					}
+					return blocksToText(resp.Message.Content), nil
+				})
+				if _, serr := agentruntime.RunMemorySweep(context.Background(), autoMem, judge, agentruntime.SweepOptions{AuditBase: autoMem.Dir()}); serr != nil {
+					debug.Log("root", "memory sweep round failed: %v", serr)
+				}
+			}
+		}
+	})
+	defer close(sweepStop)
+	trace.Mark("start memory sweep scheduler")
 	refreshAgentSystemPrompt := func() {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
 
