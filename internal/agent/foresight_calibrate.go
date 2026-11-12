@@ -79,6 +79,12 @@ type foresightCalibrateState struct {
 	warnCount      int
 	expectWarns    int
 	protocolTaught bool
+
+	// Session-level calibration bookkeeping (#uncertainty-loop P2). Deliberately
+	// NOT cleared by reset() (which is turn-scoped): these accumulate for the
+	// whole run and are surfaced as a periodic scoreboard.
+	sessionPreds int
+	sessionHits  int
 }
 
 func newForesightCalibrateState() *foresightCalibrateState {
@@ -292,6 +298,7 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 
 	if mismatch {
 		s.mismatches++
+		s.sessionPreds++
 		debug.Log("foresight-calibrate", "Iteration %d: prediction-observation mismatch #%d (%s)", iteration, s.mismatches, mismatchDetail)
 
 		if s.mismatches >= 3 && s.warnCount < 2 {
@@ -301,9 +308,46 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 				s.mismatches, pred.snippet, mismatchDetail,
 			)
 		}
+		return ""
 	}
 
+	// Prediction confirmed: session-level bookkeeping + periodic scoreboard
+	// (zero-cost approximation of ECE-style calibration reporting,
+	// arXiv:2610.18614) surfaced every 10 scored predictions.
+	return foresightScoreboardLine(s, true)
+}
+
+// foresightScoreboardLine does the session-level bookkeeping for one scored
+// prediction and returns a calibration scoreboard line every 10 predictions.
+func foresightScoreboardLine(s *foresightCalibrateState, confirmed bool) string {
+	if s == nil {
+		return ""
+	}
+	s.sessionPreds++
+	if !confirmed {
+		return ""
+	}
+	s.sessionHits++
+	if s.sessionPreds%10 == 0 {
+		return fmt.Sprintf(
+			"[foresight] calibration scoreboard: %d scored predictions this session, %d confirmed (%.0f%% aligned). %s",
+			s.sessionPreds, s.sessionHits, float64(s.sessionHits)/float64(s.sessionPreds)*100,
+			foresightScoreboardAdvice(s.sessionHits, s.sessionPreds),
+		)
+	}
 	return ""
+}
+
+func foresightScoreboardAdvice(hits, preds int) string {
+	rate := float64(hits) / float64(preds)
+	switch {
+	case rate >= 0.9:
+		return "Predictions are well-calibrated; keep trusting your expect-declarations."
+	case rate >= 0.6:
+		return "Calibration is moderate; keep verifying assumptions against actual state."
+	default:
+		return "Calibration is poor; read actual state before acting instead of predicting."
+	}
 }
 
 func (s *foresightCalibrateState) reset() {

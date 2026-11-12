@@ -4679,6 +4679,13 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			if event.Confidence != nil {
 				conf := *event.Confidence
 				debug.Log("agent", "turn confidence: avg token logprob %.3f", conf)
+				// Feed the signal into the trajectory-confidence state so it
+				// participates in dual-evidence intervention (#uncertainty-loop P1)
+				// instead of staying a debug-only orphan.
+				if a.confidence != nil {
+					c := conf
+					a.confidence.lastLogprob = &c
+				}
 				if conf < -2.5 {
 					onEvent(provider.StreamEvent{
 						Type: provider.StreamEventSystem,
