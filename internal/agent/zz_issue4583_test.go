@@ -1,13 +1,12 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestIssue4583_BashPowershellReachWtGate(t *testing.T) {
-	raw, err := os.ReadFile("agent.go")
+	raw, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatal(err)
 	}

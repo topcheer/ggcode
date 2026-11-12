@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -22,7 +21,7 @@ func TestIssue4023_LatchReArmsPerRun(t *testing.T) {
 }
 
 func TestIssue4023_PerRunResetWiring(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Skipf("agent.go not readable: %v", err)
 	}

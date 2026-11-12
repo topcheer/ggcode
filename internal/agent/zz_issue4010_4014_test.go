@@ -1,14 +1,13 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
 
 func TestIssue4014PreviewIsRuneSafe(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatalf("read agent.go: %v", err)
 	}
@@ -34,7 +33,7 @@ func TestIssue4014PreviewIsRuneSafe(t *testing.T) {
 }
 
 func TestIssue4010ErrorPropagateRecordsConsensusFiring(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatalf("read agent.go: %v", err)
 	}

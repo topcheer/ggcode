@@ -17,7 +17,7 @@ func Test1817RestoreSkipsUserOverride(t *testing.T) {
 }
 
 func Test1817StreamBracketSurvivesPanic(t *testing.T) {
-	srcBytes, err := os.ReadFile("agent.go")
+	srcBytes, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Skipf("read agent.go: %v", err)
 	}

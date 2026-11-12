@@ -116,7 +116,7 @@ func TestIssue3249RecordUserUndoDelegates(t *testing.T) {
 }
 
 func TestIssue3249WiringSourcePin(t *testing.T) {
-	data, err := os.ReadFile("agent.go")
+	data, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,13 +3,12 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestIssue4421_PostLoopBudgetStopRescue(t *testing.T) {
-	raw, err := os.ReadFile("agent.go")
+	raw, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +31,7 @@ func TestIssue4421_PostLoopBudgetStopRescue(t *testing.T) {
 }
 
 func TestIssue4421_IsCancelledExemptsBudgetSentinel(t *testing.T) {
-	raw, err := os.ReadFile("agent.go")
+	raw, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatal(err)
 	}

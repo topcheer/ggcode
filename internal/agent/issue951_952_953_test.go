@@ -163,7 +163,7 @@ func TestTokenWasteBudgetOriginalLenDrivesMetering(t *testing.T) {
 }
 
 func TestAgentGoOriginalContentLenCapturedBeforeDetectorChain(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatalf("read agent.go: %v", err)
 	}

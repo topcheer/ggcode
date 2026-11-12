@@ -1,13 +1,12 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestSessionCostLimitResetWiredInRunStart(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatalf("read agent.go: %v", err)
 	}
@@ -34,7 +33,7 @@ func TestSessionCostLimitResetWiredInRunStart(t *testing.T) {
 }
 
 func TestSessionCostLimitStopArmsLoopGate(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatalf("read agent.go: %v", err)
 	}

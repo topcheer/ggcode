@@ -7,7 +7,7 @@ import (
 )
 
 func TestIssue3965RateLimitWarningEmitsEvent(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatalf("read agent.go: %v", err)
 	}

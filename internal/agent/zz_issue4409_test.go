@@ -7,13 +7,13 @@ import (
 )
 
 func TestIssue4409_BudgetStopReturnsSentinel(t *testing.T) {
-	raw, err := os.ReadFile("agent.go")
+	raw, err := readAgentAndProcessingSources()
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := string(raw)
 
-	gate := strings.Index(src, "if sessionBudgetStop {")
+	gate := strings.Index(src, "if st.sessionBudgetStop {")
 	if gate < 0 {
 		t.Fatal("budget stop gate missing")
 	}
