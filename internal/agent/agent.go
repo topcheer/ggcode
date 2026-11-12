@@ -1561,9 +1561,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	if cm, ok := a.contextManager.(interface{ SetToolDefinitionOverhead(int) }); ok {
 		cm.SetToolDefinitionOverhead(estimateToolDefinitionOverhead(toolDefs))
 	}
-	reactiveCompactRetries := 0
-	agentLLMRetries := 0
-	rateLimitRetries := 0
 	inlineToolCallNudges := 0
 	consecutiveEmptyResponses := 0
 	truncationContinues := 0
@@ -1793,6 +1790,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	sessionTimedOut := false
 	guidanceAtBudget := false
 	sessionBudgetStop := false
+	turnCounters := &chatTurnCounters{}
 
 	detectorContinueBudget := 2
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
@@ -2084,112 +2082,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		msgs = a.contextManager.Messages()
 
-		resp, textBuf, toolCalls, truncated, policyBlocked, reasoningChars, err := func() (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, int, error) {
-			defer func() {
-				if effortApplied != "" {
-					a.restoreEffort(effortPrev)
-				}
-				if cascadeSwapped {
-					a.restoreModelCascade()
-				}
-			}()
-			return a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
-		}()
+		resp, textBuf, toolCalls, truncated, policyBlocked, reasoningChars, err := a.chatTurn(ctx, msgs, activeToolDefs, onEvent, effortApplied, effortPrev, cascadeSwapped)
 		if err != nil {
-
-			a.cascade.resetBatches()
-			if errors.Is(err, errStreamInterruptedForReplan) {
-				reactiveCompactRetries = 0
-				agentLLMRetries = 0
+			action, finalErr := a.handleChatTurnError(ctx, err, textBuf, onEvent, turnCounters, runStats)
+			if action == chatTurnContinue {
 				continue
 			}
-			if a.tryReactiveCompact(ctx, onEvent, err, &reactiveCompactRetries) {
-				runStats.recordCompaction()
-				continue
-			}
-
-			// Rate-limited calls get a sawtooth exponential backoff (1s doubling to
-			// the cap, cycling) that is independent of the short-backoff counter AND
-			// of the English-keyword retryable gate below: GLM window-limit errors
-			// arrive in Chinese and would never reach a branch nested inside that
-			// gate. ClassifyLLMError already recognizes them. Retry in place until
-			// success or cancel, and tell the user how to switch provider/endpoint
-			// meanwhile.
-			if isRateLimitedLLMError(err) {
-				capInterval, maxAttempts := rateLimitRetryPolicy()
-				if maxAttempts > 0 && rateLimitRetries >= maxAttempts {
-					debug.Log("agent", "rate-limit retry budget exhausted (%d/%d): %v", rateLimitRetries, maxAttempts, err)
-				} else {
-					rateLimitRetries++
-					delay := rateLimitBackoffDelay(rateLimitRetries, capInterval)
-					if rateLimitRetries == 1 {
-						onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
-							Text: fmt.Sprintf("[Rate limited by the provider - auto-retrying with exponential backoff (1s doubling to %s, then cycling; Ctrl+C to stop). "+
-								"This may be a short throttle or a plan window quota that resets later. "+
-								"To continue immediately, switch to another provider/endpoint (see /model or your provider config).]", capInterval)})
-					} else {
-						onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
-							Text: fmt.Sprintf("[Still rate limited - retry %d in %s...]", rateLimitRetries, delay)})
-					}
-					debug.Log("agent", "rate limited (attempt %d/%d cycle-pos backoff %v, cap %v): %v",
-						rateLimitRetries, maxAttempts, delay, capInterval, err)
-					select {
-					case <-time.After(delay):
-					case <-ctx.Done():
-						onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
-						return ctx.Err()
-					}
-					continue
-				}
-			}
-
-			if isAgentRetryableLLMError(err) && agentLLMRetries < agentLLMRetryLimit() {
-
-				agentLLMRetries++
-
-				multiplier := 2
-				errStr := strings.ToLower(err.Error())
-				if strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "rate_limit") || strings.Contains(errStr, "too many") || strings.Contains(errStr, "overloaded") {
-					multiplier = 5
-				}
-				delay := time.Duration(agentLLMRetries*multiplier) * time.Second
-				debug.Log("agent", "transient LLM error (attempt %d/%d), retrying in %v: %v",
-					agentLLMRetries, agentLLMRetryLimit(), delay, err)
-				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
-					Text: fmt.Sprintf("[Retrying LLM call (%d/%d) after %v...] ",
-						agentLLMRetries, agentLLMRetryLimit(), delay)})
-				select {
-				case <-time.After(delay):
-				case <-ctx.Done():
-					onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
-					return ctx.Err()
-				}
-				continue
-			}
-
-			if strings.TrimSpace(textBuf) != "" {
-				a.contextManager.Add(provider.Message{
-					Role:    "assistant",
-					Content: []provider.ContentBlock{provider.TextBlock(textBuf)},
-				})
-			}
-
-			if errors.Is(err, context.Canceled) || (ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled)) {
-
-				cancelErr := ctx.Err()
-				if cancelErr == nil {
-					cancelErr = err
-				}
-				onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: cancelErr})
-				return cancelErr
-			}
-
-			friendlyErr := provider.WrapFriendly(err)
-			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: friendlyErr})
-			return friendlyErr
+			return finalErr
 		}
-		reactiveCompactRetries = 0
-		agentLLMRetries = 0
+
+		turnCounters.reactiveCompactRetries = 0
+		turnCounters.agentLLMRetries = 0
 
 		a.maybeSetAutopilotGoalFromLLMOutput(textBuf)
 
@@ -2198,54 +2101,30 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.emitUsage(resp.Usage)
 
 		if msg, stop := a.RecordSessionTokenUsage(int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens)); msg != "" {
-			a.crossDetectorConsensus.recordFiring("Session Token Budget", i+1)
-			a.injectGuidance(msg)
-			debug.Log("session-token-budget", "threshold crossed at iteration %d stop=%v", i+1, stop)
-			if stop {
+			if a.noteUsageBudgetCrossing(i+1, msg, stop, "Session Token Budget", "session-token-budget",
+				"[Session token budget fully consumed - winding down. Summarize the state so the user can resume with a fresh budget.] ", onEvent) {
 				sessionBudgetStop = true
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventSystem,
-					Text: "[Session token budget fully consumed - winding down. Summarize the state so the user can resume with a fresh budget.] ",
-				})
 			}
 		}
 
 		if msg, stop := a.RecordSessionCostUsage(resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheRead, resp.Usage.CacheWrite); msg != "" {
-			a.crossDetectorConsensus.recordFiring("Session Cost Limit", i+1)
-			a.injectGuidance(msg)
-			debug.Log("session-cost-limit", "threshold crossed at iteration %d stop=%v", i+1, stop)
-			if stop {
+			if a.noteUsageBudgetCrossing(i+1, msg, stop, "Session Cost Limit", "session-cost-limit",
+				"[Session spend limit fully consumed - winding down. Summarize the state so the user can resume with a fresh budget.] ", onEvent) {
 				sessionBudgetStop = true
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventSystem,
-					Text: "[Session spend limit fully consumed - winding down. Summarize the state so the user can resume with a fresh budget.] ",
-				})
 			}
 		}
 
 		if msg, stop := a.SessionTokenBudgetAlert(); msg != "" {
-			a.crossDetectorConsensus.recordFiring("Session Token Budget", i+1)
-			a.injectGuidance(msg)
-			debug.Log("session-token-budget", "delegated threshold drained at iteration %d stop=%v", i+1, stop)
-			if stop {
+			if a.noteUsageBudgetCrossing(i+1, msg, stop, "Session Token Budget", "session-token-budget",
+				"[Session token budget fully consumed (including sub-agent spend) - winding down. Summarize the state so the user can resume with a fresh budget.] ", onEvent) {
 				sessionBudgetStop = true
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventSystem,
-					Text: "[Session token budget fully consumed (including sub-agent spend) - winding down. Summarize the state so the user can resume with a fresh budget.] ",
-				})
 			}
 		}
 
 		if msg, stop := a.RecordSessionTimeUsage(); msg != "" {
-			a.crossDetectorConsensus.recordFiring("Session Time Budget", i+1)
-			a.injectGuidance(msg)
-			debug.Log("session-time-budget", "threshold crossed at iteration %d stop=%v", i+1, stop)
-			if stop {
+			if a.noteUsageBudgetCrossing(i+1, msg, stop, "Session Time Budget", "session-time-budget",
+				"[Session time budget fully elapsed - winding down. Summarize the state so the user can resume with a fresh budget.] ", onEvent) {
 				sessionBudgetStop = true
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventSystem,
-					Text: "[Session time budget fully elapsed - winding down. Summarize the state so the user can resume with a fresh budget.] ",
-				})
 			}
 		}
 
