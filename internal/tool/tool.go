@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/sessionidx"
 )
@@ -70,6 +71,7 @@ type Registry struct {
 	jobManager   *CommandJobManager
 	descAugment  func(toolName string) string
 	sessionIndex *sessionidx.Manager
+	checkpoints  *checkpoint.Manager
 	mu           sync.RWMutex
 }
 
@@ -100,6 +102,21 @@ func (r *Registry) SessionIndex() *sessionidx.Manager {
 func (r *Registry) SetSessionIndex(m *sessionidx.Manager) {
 	r.mu.Lock()
 	r.sessionIndex = m
+	r.mu.Unlock()
+}
+
+// Checkpoints returns the checkpoint provenance manager (nil until set).
+func (r *Registry) Checkpoints() *checkpoint.Manager {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.checkpoints
+}
+
+// SetCheckpoints attaches the checkpoint provenance manager so provenance
+// tools (why) can resolve edit intents lazily at call time.
+func (r *Registry) SetCheckpoints(m *checkpoint.Manager) {
+	r.mu.Lock()
+	r.checkpoints = m
 	r.mu.Unlock()
 }
 

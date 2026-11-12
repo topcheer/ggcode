@@ -115,3 +115,4 @@ context), not the intent. The same logical change applied at a different spot,
 or with different surrounding context, is NOT equivalent and stays `[delta]`.
 Merge commits on the PR branch are skipped; empty commits count as delta by
 convention (same as `git cherry`).
+
