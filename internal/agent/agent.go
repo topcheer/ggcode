@@ -39,8 +39,12 @@ const maxAgentLLMRetries = 3
 
 // Rate-limit retry policy: when the LLM is rate limited (transient 429 or a
 // coding-plan window/quota that resets on a schedule), keep retrying the SAME
-// call in place at a fixed long interval instead of failing the turn after a
-// few short backoffs. The interval defaults to 5 minutes; the attempt count
+// call in place with a SAWTOOTH exponential backoff instead of failing the
+// turn after a few short backoffs. Concurrency throttles recover in seconds,
+// so retries start at 1s and double (1,2,4,...) up to the cap; plan-window
+// quotas need much longer, and once the cap is reached the cycle RESTARTS at
+// 1s and climbs again (1,2,4,...,cap,1,2,...). With the default 5m cap the
+// per-cycle sequence is 1,2,4,8,16,32,64,128,256,300s. The attempt count
 // defaults to unlimited (0) because window limits routinely need hours to
 // reset, and the user can cancel at any time. Both are overridable via env.
 const (
@@ -49,8 +53,9 @@ const (
 	rateLimitRetryMaxEnvVar       = "GGCODE_RATE_LIMIT_RETRY_MAX"
 )
 
-// rateLimitRetryPolicy returns the fixed retry interval and max attempts for
-// rate-limited LLM calls (max <= 0 means unlimited).
+// rateLimitRetryPolicy returns the backoff CAP interval and max attempts for
+// rate-limited LLM calls (max <= 0 means unlimited). The cap is the ceiling of
+// each exponential climb, not a fixed sleep.
 func rateLimitRetryPolicy() (interval time.Duration, maxAttempts int) {
 	interval = defaultRateLimitRetryInterval
 	if v := strings.TrimSpace(os.Getenv(rateLimitRetryIntervalEnvVar)); v != "" {
@@ -67,6 +72,28 @@ func rateLimitRetryPolicy() (interval time.Duration, maxAttempts int) {
 		}
 	}
 	return interval, maxAttempts
+}
+
+// rateLimitBackoffDelay returns the sleep before rate-limit retry attempt n
+// (1-based): 1s,2s,4s,... doubling while below the cap, then the cap itself
+// once, then the cycle restarts at 1s. Cap 5m yields
+// 1,2,4,8,16,32,64,128,256,300,1,2,... (#rate-limit-sawtooth).
+func rateLimitBackoffDelay(n int, cap time.Duration) time.Duration {
+	if cap <= time.Second {
+		return cap
+	}
+	// period = doublings strictly below cap, plus one capped step.
+	// cap 5m: 1..256 are 9 doublings < 300s, period = 10 (9 climbs + 1 cap).
+	period := 0
+	for d := time.Second; d < cap; d *= 2 {
+		period++
+	}
+	period++
+	pos := (n - 1) % period
+	if pos == period-1 {
+		return cap
+	}
+	return time.Second << pos
 }
 
 // isRateLimitedLLMError reports whether the error is a rate limit that should
@@ -2221,32 +2248,33 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				continue
 			}
 
-			// Rate-limited calls get a LONG fixed-interval retry that is
-			// independent of the short-backoff counter AND of the English-keyword
-			// retryable gate below: GLM window-limit errors arrive in Chinese and
-			// would never reach a branch nested inside that gate. ClassifyLLMError
-			// already recognizes them. Retry in place at the configured interval
-			// (default 5m) until success or cancel, and tell the user how to
-			// switch provider/endpoint meanwhile.
+			// Rate-limited calls get a sawtooth exponential backoff (1s doubling to
+			// the cap, cycling) that is independent of the short-backoff counter AND
+			// of the English-keyword retryable gate below: GLM window-limit errors
+			// arrive in Chinese and would never reach a branch nested inside that
+			// gate. ClassifyLLMError already recognizes them. Retry in place until
+			// success or cancel, and tell the user how to switch provider/endpoint
+			// meanwhile.
 			if isRateLimitedLLMError(err) {
-				interval, maxAttempts := rateLimitRetryPolicy()
+				capInterval, maxAttempts := rateLimitRetryPolicy()
 				if maxAttempts > 0 && rateLimitRetries >= maxAttempts {
 					debug.Log("agent", "rate-limit retry budget exhausted (%d/%d): %v", rateLimitRetries, maxAttempts, err)
 				} else {
 					rateLimitRetries++
+					delay := rateLimitBackoffDelay(rateLimitRetries, capInterval)
 					if rateLimitRetries == 1 {
 						onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
-							Text: fmt.Sprintf("[Rate limited by the provider - auto-retrying this call every %s until it recovers (Ctrl+C to stop). "+
+							Text: fmt.Sprintf("[Rate limited by the provider - auto-retrying with exponential backoff (1s doubling to %s, then cycling; Ctrl+C to stop). "+
 								"This may be a short throttle or a plan window quota that resets later. "+
-								"To continue immediately, switch to another provider/endpoint (see /model or your provider config).]", interval)})
+								"To continue immediately, switch to another provider/endpoint (see /model or your provider config).]", capInterval)})
 					} else {
 						onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
-							Text: fmt.Sprintf("[Still rate limited - retry %d in %s...]", rateLimitRetries, interval)})
+							Text: fmt.Sprintf("[Still rate limited - retry %d in %s...]", rateLimitRetries, delay)})
 					}
-					debug.Log("agent", "rate limited (attempt %d, max %d), retrying in %v: %v",
-						rateLimitRetries, maxAttempts, interval, err)
+					debug.Log("agent", "rate limited (attempt %d/%d cycle-pos backoff %v, cap %v): %v",
+						rateLimitRetries, maxAttempts, delay, capInterval, err)
 					select {
-					case <-time.After(interval):
+					case <-time.After(delay):
 					case <-ctx.Done():
 						onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
 						return ctx.Err()
