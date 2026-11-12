@@ -88,3 +88,11 @@ See [A2A Protocol](a2a.md) for delegating to remote ggcode instances.
 3. **可追溯报告**：文件并集/`NeedsAdjudication` 标志
 
 约束：**绝不静默合并冲突编辑**——冲突只标记交由上层裁决；纯 inform-only。
+
+## 能力协商（Capability Negotiation）
+
+`swarm.NegotiateCapability(teamID, tmID, requiredTools)` 在**派单前**回答：该 teammate 的工具白名单是否覆盖任务所需。
+
+- `Teammate.AllowedTools`（排序记录，nil/空=继承全量工具面）；`TeammateSnapshot`/`TeammateStatusInfo` 同步暴露
+- 返回**排序缺集** `missing`（nil=覆盖 OK）；未知 teammate/team 报错
+- **inform-only**：不强制拦截——调用方按缺集决定放行/告警/改派
