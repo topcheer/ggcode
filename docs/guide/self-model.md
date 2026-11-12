@@ -17,7 +17,7 @@ ggcode 的"自知"此前是**反应式、会话级、不可查询**：capability
 
 ## Backlog（P2）
 
-- **delegation prompt 注入**：`DelegationContext()` 已就绪；真正派单 prompt 构建站在 agentruntime/tool 层，接线列为后续 PR
+- **delegation prompt 注入（已落地）**：`BuildSubAgentSystemPrompt`/`BuildTeammateSystemPrompt` 按 WorkingDir 加载 self-model，卡片注入 Task 段前（零信号零注入）
 - **skill 级依赖/工具组合声明**（SARSI Dependencies 字段填充）
 
 ## 测试
