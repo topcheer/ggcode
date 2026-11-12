@@ -594,6 +594,32 @@ func stripArgRationale(args json.RawMessage) json.RawMessage {
 	return b
 }
 
+// extractArgRationale pulls the arg_rationale text out of raw tool-call
+// args (pre-strip) for persistence into the audit ledger (#decision-audit).
+// Capped at 500 runes; malformed JSON or a missing field yields "".
+func extractArgRationale(args json.RawMessage) string {
+	if len(args) == 0 || !strings.Contains(string(args), argRationaleField) {
+		return ""
+	}
+	var call map[string]json.RawMessage
+	if err := json.Unmarshal(args, &call); err != nil {
+		return ""
+	}
+	raw, ok := call[argRationaleField]
+	if !ok {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) > 500 {
+		runes = runes[:500]
+	}
+	return strings.TrimSpace(string(runes))
+}
+
 func formatArgRationaleRequest(toolName string, score int, heavy []string) string {
 	var sb strings.Builder
 	sb.WriteString("high-impact call: complexity score ")

@@ -137,6 +137,11 @@ type Agent struct {
 	cascade              modelCascadeState
 	cascadeSavedProvider provider.Provider
 
+	// pendingAuditRationale: arg_rationale captured right before
+	// stripArgRationale (#decision-audit); consumed by the next
+	// auditToolResult call and cleared.
+	pendingAuditRationale string
+
 	llmOverseer                llmOverseerState
 	tools                      *tool.Registry
 	contextManager             ctxpkg.ContextManager
