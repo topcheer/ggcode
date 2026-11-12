@@ -30,6 +30,11 @@ type confidenceState struct {
 	maxErrorCluster   int
 	lastWasError      bool
 
+	// lastLogprob: language-model turn confidence (avg token logprob) fed
+	// in from the stream done event; previously a debug-only orphan
+	// (#uncertainty-loop P1). nil = provider did not report.
+	lastLogprob *float64
+
 	guidanceGiven bool
 }
 
@@ -52,6 +57,7 @@ func (c *confidenceState) reset() {
 	c.consecutiveErrors = 0
 	c.maxErrorCluster = 0
 	c.lastWasError = false
+	c.lastLogprob = nil
 	c.guidanceGiven = false
 }
 
@@ -179,7 +185,14 @@ func (c *confidenceState) maybeIntervene() string {
 	}
 
 	if len(c.uniqueTools) <= 2 && c.totalCalls >= 5 {
-		reasons = append(reasons, "very low tool diversity — consider a different approach")
+		reasons = append(reasons, "very low tool diversity - consider a different approach")
+	}
+
+	// Dual evidence: low LM confidence on top of a weak trajectory score.
+	// A polished answer with a low avg logprob is exactly the wrapped-
+	// authority failure mode (arXiv:2608.27167).
+	if c.lastLogprob != nil && *c.lastLogprob <= -2.5 {
+		reasons = append(reasons, fmt.Sprintf("recent turns had low language-model confidence (avg token logprob %.2f)", *c.lastLogprob))
 	}
 
 	successRate := float64(c.successCount) / float64(c.totalCalls) * 100
