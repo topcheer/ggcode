@@ -32,6 +32,14 @@ type Job struct {
 	// in the future). Zero-value false keeps ordinary one-shots volatile,
 	// preserving the historic session-scoped semantics.
 	Persist bool
+
+	// Terminal-state machinery (#5273): consecutive no-diff rounds. When
+	// MaxNoDiffRounds > 0 and NoDiffStreak reaches it, a recurring job is
+	// auto-paused with PausedReason set (persisted; Resume clears both).
+	// Zero defaults keep existing behavior byte-identical.
+	NoDiffStreak    int
+	MaxNoDiffRounds int
+	PausedReason    string
 }
 
 func (j *Job) Snapshot() Job {
@@ -48,8 +56,11 @@ type jobJSON struct {
 	CreatedAt   string `json:"created_at"`
 	// Persist + NextFire are only meaningful for durable one-shot jobs
 	// (see Job.Persist); recurring jobs recompute NextFire from CronExpr.
-	Persist  bool   `json:"persist,omitempty"`
-	NextFire string `json:"next_fire,omitempty"`
+	Persist         bool   `json:"persist,omitempty"`
+	NextFire        string `json:"next_fire,omitempty"`
+	NoDiffStreak    int    `json:"no_diff_streak,omitempty"`
+	MaxNoDiffRounds int    `json:"max_no_diff_rounds,omitempty"`
+	PausedReason    string `json:"paused_reason,omitempty"`
 }
 
 type sessionStore struct {
@@ -263,13 +274,16 @@ func (s *Scheduler) Load() {
 		}
 		s.nextID++
 		job := &Job{
-			ID:          jj.ID,
-			CronExpr:    jj.CronExpr,
-			Prompt:      jj.Prompt,
-			Recurring:   jj.Recurring,
-			QueueIfBusy: jj.QueueIfBusy,
-			CreatedAt:   createdAt,
-			Paused:      jj.Paused,
+			ID:              jj.ID,
+			CronExpr:        jj.CronExpr,
+			Prompt:          jj.Prompt,
+			Recurring:       jj.Recurring,
+			QueueIfBusy:     jj.QueueIfBusy,
+			CreatedAt:       createdAt,
+			Paused:          jj.Paused,
+			NoDiffStreak:    jj.NoDiffStreak,
+			MaxNoDiffRounds: jj.MaxNoDiffRounds,
+			PausedReason:    jj.PausedReason,
 		}
 		if !job.Paused {
 			job.NextFire = next
@@ -332,15 +346,18 @@ func (s *Scheduler) save() error {
 			nextFire = j.NextFire.Format(time.RFC3339)
 		}
 		jobs = append(jobs, jobJSON{
-			ID:          j.ID,
-			CronExpr:    j.CronExpr,
-			Prompt:      j.Prompt,
-			Recurring:   j.Recurring,
-			QueueIfBusy: j.QueueIfBusy,
-			Paused:      j.Paused,
-			CreatedAt:   j.CreatedAt.Format(time.RFC3339),
-			Persist:     j.Persist,
-			NextFire:    nextFire,
+			ID:              j.ID,
+			CronExpr:        j.CronExpr,
+			Prompt:          j.Prompt,
+			Recurring:       j.Recurring,
+			QueueIfBusy:     j.QueueIfBusy,
+			Paused:          j.Paused,
+			CreatedAt:       j.CreatedAt.Format(time.RFC3339),
+			Persist:         j.Persist,
+			NextFire:        nextFire,
+			NoDiffStreak:    j.NoDiffStreak,
+			MaxNoDiffRounds: j.MaxNoDiffRounds,
+			PausedReason:    j.PausedReason,
 		})
 	}
 
@@ -803,6 +820,10 @@ func (s *Scheduler) Resume(id string) error {
 		return nil
 	}
 	job.Paused = false
+	// Wake channel semantics (#5273): an explicit resume also clears the
+	// no-diff streak and the auto-pause reason.
+	job.NoDiffStreak = 0
+	job.PausedReason = ""
 
 	next, err := NextTime(job.CronExpr, time.Now())
 	if err != nil {
