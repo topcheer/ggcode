@@ -11,7 +11,12 @@ func TestIssue4622_ReasoningCountedInMindlessMeasure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(data)
+	streamSrc, err := os.ReadFile("stream_chat.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// #5521 PR3: streamChatResponse moved to stream_chat.go; pins scan both.
+	text := string(data) + "\n" + string(streamSrc)
 	if !strings.Contains(text, "recordStep(len(textBuf)+reasoningChars, true)") {
 		t.Fatal("recordStep must sum text and reasoning lengths (#4622)")
 	}
