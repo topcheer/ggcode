@@ -19,6 +19,11 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
+// User directive: default idle-maintenance window. Sleep-time compute (memory
+// consolidation sweep + pre-compact check) waits for this many minutes of
+// continuous inactivity before firing; overridable via idle.after_min.
+const defaultIdleAfterMin = 360
+
 func CronStorePaths(sessionID string) (sessionPath, legacyPath string) {
 	base := filepath.Join(config.HomeDir(), ".ggcode")
 	legacyPath = filepath.Join(base, "cron-jobs.json")
@@ -46,7 +51,11 @@ func ApplyIdleMaintenance(ag *agent.Agent, cfg config.IdleConfig) *agent.IdleMai
 	}
 	afterMin := cfg.AfterMin
 	if afterMin <= 0 {
-		afterMin = 10
+		// User directive: the old 10-minute floor fired sleep-time
+		// compute after any coffee-break pause in long-lived sessions. 6
+		// hours keeps it in the genuinely long-idle window; an explicit
+		// after_min still overrides.
+		afterMin = defaultIdleAfterMin
 	}
 	ratio := cfg.PrecompactRatio
 	if ratio <= 0 {

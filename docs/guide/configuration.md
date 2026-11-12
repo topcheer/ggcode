@@ -342,7 +342,8 @@ watch:
 
 Cron and watch triggers fire prompts; idle maintenance does the opposite -
 it exploits the ABSENCE of activity. When the session has been idle for
-`after_min` minutes (default 10) and no agent run is in flight, ggcode uses
+`after_min` minutes (default 360, i.e. 6 hours) and no agent run is in
+flight, ggcode uses
 the window to pre-compact the context if usage is at/above
 `precompact_ratio` (default 0.6). The compaction LLM call happens while you
 are away instead of adding latency to your next message.
@@ -355,7 +356,7 @@ conflicting memories without waiting for the next process start.
 ```yaml
 idle:
   enabled: true
-  after_min: 10
+  after_min: 360
   precompact_ratio: 0.6
 ```
 
