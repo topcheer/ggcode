@@ -86,13 +86,52 @@ func persistTeamBoardNow(teamID string, tm *task.Manager) error {
 }
 
 func persistTeamBoardAsync(teamID string, tm *task.Manager) {
+	// #5540: resolve the target path and snapshot the board SYNCHRONOUSLY,
+	// at queue time. The goroutine only performs disk I/O against the
+	// captured path/data. Resolving ConfigDir() (HOME-derived) inside the
+	// goroutine made the write target depend on which test's environment
+	// happened to be active when the goroutine got scheduled — a late
+	// persist from test N-1 would land in test N's sandbox and trip its
+	// TempDir cleanup (environment-dependent flake, CI-observed on
+	// TestSwarmTaskClaimTool).
+	data, err := tm.SnapshotJSON()
+	if err != nil {
+		debug.Log("swarm", "board snapshot for %s: %v", teamID, err)
+		return
+	}
+	path := boardPersistPath(teamID)
+	persistWg.Add(1)
 	safego.Go("swarm.boardPersist", func() {
+		defer persistWg.Done()
 		persistMu.Lock()
 		defer persistMu.Unlock()
-		if err := persistTeamBoardNow(teamID, tm); err != nil {
+		if err := writeTeamBoardAtomically(path, data); err != nil {
 			debug.Log("swarm", "board persist for %s: %v", teamID, err)
 		}
 	})
+}
+
+// persistWg tracks in-flight async board persists so tests (and any future
+// graceful-stop path) can wait for the goroutines deterministically (#5540).
+var persistWg sync.WaitGroup
+
+// DrainBoardPersists blocks until every queued async board persist has
+// finished its disk write. Test helpers call this before removing the
+// sandboxed HOME tree.
+func DrainBoardPersists() {
+	persistWg.Wait()
+}
+
+// writeTeamBoardAtomically writes data to path via tmp+rename.
+func writeTeamBoardAtomically(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func loadTeamBoard(teamID string) *task.Manager {

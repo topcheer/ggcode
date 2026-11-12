@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,5 +111,45 @@ func TestBoardPersistenceMissingFileStartsEmpty(t *testing.T) {
 	tm := loadTeamBoard("team-404")
 	if tasks := tm.List(); len(tasks) != 0 {
 		t.Errorf("missing board should start empty, got %d task(s)", len(tasks))
+	}
+}
+
+// #5540 companion pins: queue-time path capture + deterministic drain.
+func TestBoardPersistAsyncDrainAndPathCapture(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	defer m.Shutdown()
+	team := m.CreateTeam("drain-pin", "leader")
+	tm, err := m.EnsureTaskManager(team.ID)
+	if err != nil {
+		t.Fatalf("task manager: %v", err)
+	}
+	created := tm.Create("pin task", "desc", "", nil)
+	if created.ID == "" {
+		t.Fatal("create must yield an ID")
+	}
+
+	// Queue an async persist, then drain: after DrainBoardPersists the
+	// write MUST be complete (deterministic barrier, not a poll guess).
+	persistTeamBoardAsync(team.ID, tm)
+	DrainBoardPersists()
+	path := boardPersistPath(team.ID)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("drained persist must have written %s: %v", path, err)
+	}
+
+	// Path capture: the queued write resolves its target at queue time.
+	// Change HOME mid-flight (simulating the next test's env); draining a
+	// second persist must still land at the ORIGINAL captured path.
+	before, _ := os.ReadFile(path)
+	persistTeamBoardAsync(team.ID, tm)
+	t.Setenv("HOME", t.TempDir()) // env now differs from queue time
+	DrainBoardPersists()
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("persist must land at the queue-time-captured path: %v", err)
+	}
+	if string(before) != string(after) || !strings.Contains(string(after), created.ID) {
+		t.Fatalf("board content must round-trip at the captured path (task %s)", created.ID)
 	}
 }

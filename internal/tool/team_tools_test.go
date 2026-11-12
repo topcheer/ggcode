@@ -3,21 +3,41 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/swarm"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 func swarmTestManager(t *testing.T) *swarm.Manager {
 	t.Helper()
-	return swarm.NewManager(
+	// #5540: board persistence writes under ConfigDir() keyed to the
+	// deterministic team ID (team-1 for every fresh Manager). Without a
+	// sandbox, tests collide on the same on-disk board.json across runs
+	// and packages (environment-dependent claim flake). Point HOME at a
+	// per-test temp dir; ConfigDir() derives from it.
+	t.Setenv("HOME", t.TempDir())
+	mgr := swarm.NewManager(
 		config.SwarmConfig{},
 		nil,
 		nil,
 		nil,
 	)
+	// Registered after Setenv, so LIFO runs this BEFORE the HOME restore:
+	// stop producers, deterministically wait out every queued async board
+	// persist (persistWg barrier), then remove the swarm subtree ourselves
+	// so TempDir cleanup cannot race a late write into the deleted tree
+	// (#5540).
+	t.Cleanup(func() {
+		mgr.Shutdown()
+		swarm.DrainBoardPersists()
+		_ = os.RemoveAll(filepath.Join(util.ConfigDir(), "swarm"))
+	})
+	return mgr
 }
 
 func TestTeamCreateTool(t *testing.T) {
