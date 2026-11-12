@@ -28,9 +28,10 @@ type ConstraintAnchor struct {
 }
 
 type AnchorStore struct {
-	mu      sync.Mutex
-	path    string
-	Anchors []ConstraintAnchor `json:"anchors"`
+	mu       sync.Mutex
+	path     string
+	boundDir string             // workspace this store is bound to (#5498)
+	Anchors  []ConstraintAnchor `json:"anchors"`
 }
 
 // AnchorPath returns the persistence path under the given workspace.

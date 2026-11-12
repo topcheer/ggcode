@@ -479,8 +479,8 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		speculator:             newSpeculator(),
 		toolMemo:               newToolMemo(),
 		confidence:             newConfidenceState(),
-		selfModel:              LoadSelfModel(SelfModelPath(".")),
-		anchorStore:            LoadAnchorStore(AnchorPath(".")),
+		selfModel:              nil, // lazily bound in SetWorkingDir (#5498: cwd != workspace)
+		anchorStore:            nil, // lazily bound in SetWorkingDir (#5498: cwd != workspace)
 		verifDebt:              newVerificationDebtState(),
 		undoBlind:              newUndoBlindState(),
 		editAbandon:            newEditAbandonState(),
@@ -1254,6 +1254,19 @@ func (a *Agent) SetWorkingDir(dir string) {
 	}
 	if a.refusalLedger == nil || a.refusalLedger.workingDir != dir {
 		a.refusalLedger = newRefusalLedger(dir)
+	}
+
+	// #5498: both persistent stores were previously pinned to the process
+	// working directory ("."), so in ACP/daemon deployments (cwd != workspace)
+	// every read/write landed beside the binary. Rebind on workspace change,
+	// same pattern as the ledgers above.
+	if a.selfModel == nil || a.selfModel.boundDir != dir {
+		a.selfModel = LoadSelfModel(SelfModelPath(dir))
+		a.selfModel.boundDir = dir
+	}
+	if a.anchorStore == nil || a.anchorStore.boundDir != dir {
+		a.anchorStore = LoadAnchorStore(AnchorPath(dir))
+		a.anchorStore.boundDir = dir
 	}
 
 	if a.unreadEdit != nil {
@@ -3660,9 +3673,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 			if a.selfModel != nil {
 				if result.IsError {
-					a.selfModel.Record(SelfModelPath("."), tc.Name, false, result.Content)
+					a.selfModel.Record(SelfModelPath(a.WorkingDir()), tc.Name, false, result.Content)
 				} else {
-					a.selfModel.Record(SelfModelPath("."), tc.Name, true, "")
+					a.selfModel.Record(SelfModelPath(a.WorkingDir()), tc.Name, true, "")
 				}
 			}
 			if effGuidance := a.toolEff.recordCall(tc.Name, result.Content, result.IsError); effGuidance != "" {
