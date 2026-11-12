@@ -698,7 +698,7 @@ watch:
 # the compaction latency. Disabled unless enabled: true.
 idle:
   enabled: false
-  after_min: 10          # idle window before maintenance fires (default 10)
+  after_min: 360        # idle window before maintenance fires (default 360 = 6h)
   precompact_ratio: 0.6  # only pre-compact when usage is at/above this (default 0.6)
 
 # Memory v2: memories are NOT injected into the system prompt anymore -
