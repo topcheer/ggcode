@@ -24,6 +24,11 @@ on:
         description: 'Build number to promote (e.g. 2026061904). Leave empty for latest.'
         required: false
         type: string
+      build_number_override:
+        description: 'Explicit build number for NEW builds (env: BUILD_NUMBER_OVERRIDE). Empty = auto (query Play, bump past used codes).'
+        required: false
+        type: string
+        default: ''
 
 concurrency:
   group: mobile-release-${{ github.ref }}
@@ -193,6 +198,38 @@ jobs:
           storeFile=upload.jks
           EOF
 
+      - name: Resolve Android build number (auto-bump past used Play codes)
+        id: buildnum
+        working-directory: mobile/flutter/android
+        env:
+          BUILD_NUMBER_OVERRIDE: ${{ inputs.build_number_override || env.BUILD_NUMBER_OVERRIDE }}
+          PLAY_STORE_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -eu
+          # Explicit override wins (input or BUILD_NUMBER_OVERRIDE env); otherwise
+          # query Play for the highest used version code and pick the pubspec build
+          # number if it is free, else bump past the used maximum. Play rejects any
+          # version code that was EVER uploaded (v1.3.280: "Version code 2026111201
+          # has already been used" - same-day re-release collided).
+          OVERRIDE="${BUILD_NUMBER_OVERRIDE:-}"
+          PUBSPEC_N="$(sed -n 's/^version: [0-9.]*+\([0-9]*\).*/\1/p' ../pubspec.yaml)"
+          if [ -n "$OVERRIDE" ]; then
+            echo "build number: explicit override $OVERRIDE"
+            echo "number=$OVERRIDE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "querying Play for used version codes (track: internal)..."
+          CODES_JSON="$(bundle exec fastlane run google_play_track_version_codes track:internal 2>/dev/null | sed -n 's/.*\[\(.*\)\].*/\1/p' | tail -n1)"
+          MAX_USED="$(echo "$CODES_JSON" | tr ',' '\n' | tr -d ' []' | grep -E '^[0-9]+$' | sort -n | tail -n1 || true)"
+          echo "pubspec=+$PUBSPEC_N max_used=${MAX_USED:-<none>}"
+          if [ -z "$MAX_USED" ] || [ "$PUBSPEC_N" -gt "$MAX_USED" ]; then
+            N="$PUBSPEC_N"
+          else
+            N="$((MAX_USED + 1))"
+          fi
+          echo "build number: auto-resolved $N"
+          echo "number=$N" >> "$GITHUB_OUTPUT"
+
       - name: Guard version consistency
         run: |
           VERSION="${{ inputs.version }}"
@@ -219,7 +256,7 @@ jobs:
           # Version numbers are synced by pre-push hook / release process; no CI bump
 
       - name: Build AAB
-        run: flutter build appbundle --release
+        run: flutter build appbundle --release --build-number "${{ steps.buildnum.outputs.number }}"
 
       - name: Deploy to Google Play
         id: deploy_android
@@ -332,6 +369,10 @@ jobs:
 
       - name: Build IPA
         shell: bash
+        env:
+          # Same override channel as Android: explicit input/env only. iOS
+          # dup uploads are already gated by the ASC already-uploaded check.
+          BUILD_NUMBER_FLAG: ${{ inputs.build_number_override || env.BUILD_NUMBER_OVERRIDE }}
         run: |
           # Override Xcode project to Manual signing
           PBX=ios/Runner.xcodeproj/project.pbxproj
@@ -365,7 +406,7 @@ jobs:
           PLIST
 
           # Build archive (not just build) so we get .xcarchive
-          flutter build ipa --release --no-codesign
+          flutter build ipa --release --no-codesign ${BUILD_NUMBER_FLAG:+--build-number "$BUILD_NUMBER_FLAG"}
 
           # Disable errexit and pipefail for the patch section
           set +e
