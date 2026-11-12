@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -69,9 +68,16 @@ func TestIssue5153_SeenROInvalidatesOnPartialWriteDespiteError(t *testing.T) {
 
 func readAgentSource(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile("agent.go")
+	// #5543: the stream loop body moved out of agent.go into dedicated
+	// run_*.go files; scan the whole set (shape-agnostic file targeting).
+	return mustStreamLoopSource(t, "agent.go", "run_tool_call_idx.go")
+}
+
+func mustStreamLoopSource(t *testing.T, names ...string) string {
+	t.Helper()
+	s, err := readStreamLoopSource(names...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(raw)
+	return s
 }

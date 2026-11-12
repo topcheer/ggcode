@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -22,11 +21,12 @@ func TestIssue4023_LatchReArmsPerRun(t *testing.T) {
 }
 
 func TestIssue4023_PerRunResetWiring(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the per-run reset block moved to reset_turn.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	text, err := readStreamLoopSource("agent.go", "reset_turn.go")
 	if err != nil {
-		t.Skipf("agent.go not readable: %v", err)
+		t.Skipf("stream-loop source not readable: %v", err)
 	}
-	text := string(src)
 	anchor := "a.resetPlanner()"
 	idx := strings.Index(text, anchor)
 	if idx < 0 {

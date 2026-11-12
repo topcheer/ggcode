@@ -7,20 +7,23 @@ import (
 )
 
 func TestIssue4409_BudgetStopReturnsSentinel(t *testing.T) {
-	raw, err := os.ReadFile("agent.go")
+	// #5543: the budget-stop gate stayed in the main loop (agent.go);
+	// scan the stream-loop source files (shape-agnostic file targeting).
+	src, err := readStreamLoopSource("agent.go", "run_turn_start_gate.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := string(raw)
 
 	gate := strings.Index(src, "if sessionBudgetStop {")
 	if gate < 0 {
 		t.Fatal("budget stop gate missing")
 	}
 
+	// #5543: the iteration bookkeeping moved into runTurnStartGate; the
+	// gate body now ends at its own sentinel return.
 	end := gate + 2200
-	if to := strings.Index(src[gate:], "runStats.Iterations = i + 1"); to > 0 && gate+to < end {
-		end = gate + to
+	if to := strings.Index(src[gate:], "return ErrSessionBudgetExhausted"); to > 0 && gate+to < end {
+		end = gate + to + len("return ErrSessionBudgetExhausted")
 	}
 	body := src[gate:end]
 	if !strings.Contains(body, "return ErrSessionBudgetExhausted") {

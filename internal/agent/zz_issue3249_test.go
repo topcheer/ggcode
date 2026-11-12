@@ -116,11 +116,12 @@ func TestIssue3249RecordUserUndoDelegates(t *testing.T) {
 }
 
 func TestIssue3249WiringSourcePin(t *testing.T) {
-	data, err := os.ReadFile("agent.go")
+	// #5543: the undo_edit branch moved out of agent.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	src, err := readStreamLoopSource("agent.go", "run_tool_call_idx.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := string(data)
 	i := strings.Index(src, `"undo_edit"`)
 	if i < 0 {
 		t.Fatal("undo_edit branch not found in agent.go")

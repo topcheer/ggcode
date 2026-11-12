@@ -52,11 +52,12 @@ func TestIssue2803WiringReadsRealFile(t *testing.T) {
 }
 
 func TestIssue2803CallSiteGated(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the edit-fallback site moved out of agent.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	s, err := readStreamLoopSource("agent.go", "run_tool_call_idx.go")
 	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
+		t.Fatalf("read stream-loop source: %v", err)
 	}
-	s := string(src)
 	callIdx := strings.Index(s, "checkContentAgainstFixed(extractFilePathFromError")
 	if callIdx < 0 {
 		t.Fatal("checkContentAgainstFixed call site not found in agent.go")

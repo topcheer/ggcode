@@ -1,17 +1,17 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestSessionCostLimitResetWiredInRunStart(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the per-run reset block moved to reset_turn.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	text, err := readStreamLoopSource("agent.go", "reset_turn.go")
 	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
+		t.Fatalf("read stream-loop source: %v", err)
 	}
-	text := string(src)
 
 	for _, call := range []string{
 		"a.resetSessionTokenUsage()",
@@ -34,11 +34,12 @@ func TestSessionCostLimitResetWiredInRunStart(t *testing.T) {
 }
 
 func TestSessionCostLimitStopArmsLoopGate(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the usage recording moved to run_usage_budget.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	text, err := readStreamLoopSource("agent.go", "run_usage_budget.go")
 	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
+		t.Fatalf("read stream-loop source: %v", err)
 	}
-	text := string(src)
 
 	anchor := strings.Index(text, "a.RecordSessionCostUsage(")
 	if anchor < 0 {

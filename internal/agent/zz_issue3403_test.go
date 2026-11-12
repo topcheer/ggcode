@@ -1,17 +1,17 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func Test3403SpiralStateResetWiredIntoRunStreamBatch(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the per-run reset batch moved to reset_turn.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	body, err := readStreamLoopSource("agent.go", "reset_turn.go")
 	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
+		t.Fatalf("read stream-loop source: %v", err)
 	}
-	body := string(src)
 	if !strings.Contains(body, "a.spiralState.reset()") {
 		t.Fatal("#3403: spiralState.reset() is not wired into the RunStream per-run reset batch - the detector violates its per-run contract (dead reset() caused quota leakage + stale cross-run topics)")
 	}

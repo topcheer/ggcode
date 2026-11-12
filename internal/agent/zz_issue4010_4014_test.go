@@ -1,18 +1,18 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
 
 func TestIssue4014PreviewIsRuneSafe(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the autopilot deadlock preview moved out of agent.go; scan
+	// the stream-loop source files (shape-agnostic file targeting).
+	text, err := readStreamLoopSource("agent.go", "run_no_tool_calls.go")
 	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
+		t.Fatalf("read stream-loop source: %v", err)
 	}
-	text := string(src)
 	anchor := "preview := textBuf"
 	idx := strings.Index(text, anchor)
 	if idx < 0 {
@@ -34,11 +34,12 @@ func TestIssue4014PreviewIsRuneSafe(t *testing.T) {
 }
 
 func TestIssue4010ErrorPropagateRecordsConsensusFiring(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the errorPropagate branch moved out of agent.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	text, err := readStreamLoopSource("agent.go", "run_tool_call_idx.go")
 	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
+		t.Fatalf("read stream-loop source: %v", err)
 	}
-	text := string(src)
 	anchor := "if propGuidance := a.errorPropagate.recordResult"
 	idx := strings.Index(text, anchor)
 	if idx < 0 {

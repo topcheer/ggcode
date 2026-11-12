@@ -3,7 +3,6 @@ package agent
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -42,15 +41,12 @@ func TestIssue5249ErrorPathGateUsesPredicate(t *testing.T) {
 		t.Skip("no executable path")
 	}
 	_ = root
-	dir, err := filepath.Abs(".")
+	// #5543: the error-path gate moved out of agent.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	src, err := readStreamLoopSource("agent.go", "run_tool_call_idx.go")
 	if err != nil {
-		t.Skipf("no cwd: %v", err)
+		t.Fatalf("stream-loop source unreadable: %v", err)
 	}
-	body, err := os.ReadFile(filepath.Join(dir, "agent.go"))
-	if err != nil {
-		t.Fatalf("agent.go unreadable: %v", err)
-	}
-	src := string(body)
 	if !strings.Contains(src, "result.IsError && mutatingSourceEdit(") {
 		t.Error("agent.go error-path gate must use mutatingSourceEdit (apply_patch failures feed editFailRecovery)")
 	}

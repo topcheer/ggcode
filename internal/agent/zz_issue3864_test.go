@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -45,11 +44,12 @@ func TestIssue3864_StructuredToolExemptions(t *testing.T) {
 }
 
 func TestIssue3864_StartCommandGateWired(t *testing.T) {
-	raw, err := os.ReadFile("agent.go")
+	// #5543: the command-channel fallback moved out of agent.go; scan
+	// the stream-loop source files (shape-agnostic file targeting).
+	src, err := readStreamLoopSource("agent.go", "run_tool_call_idx.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := string(raw)
 	anchor := strings.Index(src, "runCommandMutatesTree(string(tc.Arguments))")
 	if anchor < 0 {
 		t.Fatal("gate anchor not found")

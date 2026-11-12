@@ -1,17 +1,19 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestIssue4013RunToolNamesAppendedAtExecutionOnly(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the tool batch/execution loop moved out of agent.go;
+	// beginBatch lives in run_tool_calls.go and the idx loop in
+	// run_tool_call_idx.go; scan both in order (shape-agnostic file
+	// targeting).
+	text, err := readStreamLoopSource("run_tool_calls.go", "run_tool_call_idx.go")
 	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
+		t.Fatalf("read stream-loop source: %v", err)
 	}
-	text := string(src)
 	begin := strings.Index(text, "a.cascade.beginBatch()")
 	execLoop := strings.Index(text, "for idx, tc := range toolCalls")
 	if begin < 0 || execLoop <= begin {

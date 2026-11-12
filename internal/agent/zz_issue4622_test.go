@@ -1,22 +1,18 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestIssue4622_ReasoningCountedInMindlessMeasure(t *testing.T) {
-	data, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	streamSrc, err := os.ReadFile("stream_chat.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 	// #5521 PR3: streamChatResponse moved to stream_chat.go; pins scan both.
-	text := string(data) + "\n" + string(streamSrc)
+	// #5543: the tool-calls zone moved out of agent.go; scan the whole
+	// stream-loop file set (shape-agnostic file targeting).
+	text, err := readStreamLoopSource("agent.go", "stream_chat.go", "run_tool_calls.go", "run_tool_call_idx.go")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(text, "recordStep(len(textBuf)+reasoningChars, true)") {
 		t.Fatal("recordStep must sum text and reasoning lengths (#4622)")
 	}

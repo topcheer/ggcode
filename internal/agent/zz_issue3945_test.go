@@ -1,17 +1,19 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestIssue3945_StopGateWired(t *testing.T) {
-	raw, err := os.ReadFile("agent.go")
+	// #5543: the four arming sites moved into recordUsageBudgets
+	// (run_usage_budget.go) and the loop gate stayed in agent.go; scan
+	// both (shape-agnostic file targeting).
+	raw, err := readStreamLoopSource("agent.go", "run_usage_budget.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := string(raw)
+	src := raw
 	for _, needle := range []string{
 		"sessionBudgetStop := false",
 		"sessionBudgetStop = true",
@@ -22,13 +24,20 @@ func TestIssue3945_StopGateWired(t *testing.T) {
 		}
 	}
 
-	if got := strings.Count(src, "sessionBudgetStop = true"); got != 4 {
-		t.Fatalf("want 4 arming sites (token + time + cost + delegated drain), got %d", got)
+	// 4 explicit arming sites live in recordUsageBudgets; the main loop
+	// propagates the folded result (sessionBudgetStop = true) once.
+	if got := strings.Count(src, "sessionBudgetStop = true"); got != 5 {
+		t.Fatalf("want 5 sessionBudgetStop = true sites (4 budget arming in recordUsageBudgets + 1 loop-fold in the main loop), got %d", got)
 	}
 
-	gateIdx := strings.Index(src, "if sessionBudgetStop {")
 	loopIdx := strings.Index(src, "for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {")
-	if gateIdx < loopIdx {
-		t.Fatal("gate must live inside the run loop")
+	if loopIdx < 0 {
+		t.Fatal("run loop not found")
+	}
+	// The gate must live inside the run loop (after its opening). The
+	// first gate hit beyond loopIdx is the main-loop budget-stop gate.
+	gateIdx := strings.Index(src[loopIdx:], "if sessionBudgetStop {")
+	if gateIdx < 0 {
+		t.Fatal("budget-stop gate not found inside the run loop")
 	}
 }

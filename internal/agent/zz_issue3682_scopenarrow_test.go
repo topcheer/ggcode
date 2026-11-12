@@ -1,17 +1,17 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func Test3682ScopeNarrowExcludesStartCommand(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the scopeNarrow recording site moved out of agent.go; scan
+	// the stream-loop source files (shape-agnostic file targeting).
+	text, err := readStreamLoopSource("agent.go", "run_tool_call_idx.go")
 	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
+		t.Fatalf("read stream-loop source: %v", err)
 	}
-	text := string(src)
 
 	anchor := "a.scopeNarrow.recordVerificationCommand("
 	idx := strings.Index(text, anchor)

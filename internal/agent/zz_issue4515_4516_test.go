@@ -40,11 +40,14 @@ func TestIssue4515_RecordIterationFeedsRealToolActivity(t *testing.T) {
 }
 
 func TestIssue4516_SubagentInjectionDoesNotFlagBudget(t *testing.T) {
-	b, err := os.ReadFile("agent.go")
+	// #5543: the turn-start gate and no-tool-calls branch moved out of
+	// agent.go; scan the stream-loop source files (shape-agnostic file
+	// targeting). Concatenation order keeps the subagent-injection site
+	// and both guidanceAtBudget sets in one searchable text.
+	s, err := readStreamLoopSource("agent.go", "run_turn_start_gate.go", "run_no_tool_calls.go")
 	if err != nil {
 		t.Skip("source not readable in this environment")
 	}
-	s := string(b)
 	idx := strings.Index(s, "injectSubagentCompletions()")
 	if idx < 0 {
 		t.Fatal("injectSubagentCompletions site not found")

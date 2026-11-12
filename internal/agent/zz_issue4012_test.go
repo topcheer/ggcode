@@ -1,17 +1,19 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestIssue4012_ToolPathWiringExists(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the tool path and no-tool path split into run_tool_calls.go
+	// and run_no_tool_calls.go; scan the set. Concatenation order puts
+	// the tool path first, so the beginBatch ordering pin still reads
+	// left-to-right (shape-agnostic file targeting).
+	srcStr, err := readStreamLoopSource("run_tool_calls.go", "run_tool_call_idx.go", "run_no_tool_calls.go")
 	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
+		t.Fatalf("read stream-loop source: %v", err)
 	}
-	srcStr := string(src)
 
 	if !strings.Contains(srcStr, "a.mindlessAction.recordStep(len(textBuf)+reasoningChars, true)") {
 		t.Fatalf("tool-path recordStep(true) wiring missing - detector is dead again (#4012 regression)")

@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -9,11 +8,12 @@ import (
 )
 
 func TestIssue4620_CountersPastSkipGates(t *testing.T) {
-	data, err := os.ReadFile("agent.go")
+	// #5543: the tool-call idx loop moved out of agent.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	text, err := readStreamLoopSource("agent.go", "run_tool_call_idx.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(data)
 	redactGate := strings.Index(text, "a.runToolNames = append(a.runToolNames, tc.Name)")
 	if redactGate < 0 {
 		t.Fatal("runToolNames append not found")

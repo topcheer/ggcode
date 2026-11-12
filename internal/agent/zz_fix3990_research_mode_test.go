@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -57,14 +57,17 @@ func TestFix3990FileStuckRaisedNotDisabledInResearchMode(t *testing.T) {
 }
 
 func TestFix3989StartCommandExcludedFromSuccessfulCommands(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the tool-call idx loop moved out of agent.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	srcStr, err := readStreamLoopSource("agent.go", "run_tool_call_idx.go")
 	if err != nil {
-		t.Skipf("cannot read agent.go source: %v", err)
+		t.Skipf("cannot read stream-loop source: %v", err)
 	}
-	srcStr := string(src)
 
-	if !strings.Contains(srcStr, `if tc.Name == "run_command" && !result.IsError {
-						runStats.recordSuccessfulCommand(cmd)`) {
+	// #5543: the extracted method body may be dedented; match the gate
+	// and call on adjacent lines regardless of indentation depth.
+	gateRe := regexp.MustCompile(`(?m)^\t*if tc\.Name == "run_command" && !result\.IsError \{$\n^\t*runStats\.recordSuccessfulCommand\(cmd\)$`)
+	if !gateRe.MatchString(srcStr) {
 		t.Fatal("recordSuccessfulCommand must be gated on tc.Name == \"run_command\" (#3989): " +
 			"a successful start_command spawn would be persisted as a verified cmd_snippet")
 	}

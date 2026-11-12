@@ -2,7 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -86,9 +85,11 @@ func TestIssue1141RealDiagnosticStillGuardsLargeEdit(t *testing.T) {
 }
 
 func TestIssue1141RecorderRunsBeforeRuleInjection(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: executeToolCalls moved out of agent.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	src, err := readStreamLoopSource("agent.go", "run_tool_call_idx.go")
 	if err != nil {
-		t.Fatalf("cannot read agent.go: %v", err)
+		t.Fatalf("cannot read stream-loop source: %v", err)
 	}
 	code := string(src)
 

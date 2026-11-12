@@ -163,13 +163,15 @@ func TestTokenWasteBudgetOriginalLenDrivesMetering(t *testing.T) {
 }
 
 func TestAgentGoOriginalContentLenCapturedBeforeDetectorChain(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the measuredLen sites moved out of agent.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	srcText, err := readStreamLoopSource("agent.go", "run_tool_call_idx.go")
 	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
+		t.Fatalf("read stream-loop source: %v", err)
 	}
-	captureIdx := strings.Index(string(src), "measuredLen := len(result.Content)")
-	applyIdx := strings.Index(string(src), "a.applyToolResultGuidance(")
-	shrinkIdx := strings.LastIndex(string(src), "guardToolOutput(result.Content")
+	captureIdx := strings.Index(srcText, "measuredLen := len(result.Content)")
+	applyIdx := strings.Index(srcText, "a.applyToolResultGuidance(")
+	shrinkIdx := strings.LastIndex(srcText, "guardToolOutput(result.Content")
 	if captureIdx < 0 {
 		t.Fatal("measuredLen capture not found in agent.go")
 	}

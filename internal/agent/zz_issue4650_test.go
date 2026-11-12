@@ -1,24 +1,26 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestIssue4650_DetectorGuidanceContinuesRun(t *testing.T) {
-	data, err := os.ReadFile("agent.go")
+	// #5543: the no-tool-calls branch moved out of agent.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	text, err := readStreamLoopSource("agent.go", "run_no_tool_calls.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(data)
 	if !strings.Contains(text, "detectorMsgsBefore := len(a.contextManager.Messages())") {
 		t.Fatal("detector block must snapshot context length before the sites (#4650)")
 	}
-	if !strings.Contains(text, "len(a.contextManager.Messages()) > detectorMsgsBefore && detectorContinueBudget > 0") {
+	// #5543: the per-run budget moved into noToolCallsState; the gate
+	// reads it through the state pointer (st.detectorContinueBudget).
+	if !strings.Contains(text, "len(a.contextManager.Messages()) > detectorMsgsBefore && st.detectorContinueBudget > 0") {
 		t.Fatal("post-block continue must fire when guidance was injected and budget remains (#4650)")
 	}
-	if !strings.Contains(text, "detectorContinueBudget := 2") {
+	if !strings.Contains(text, "detectorContinueBudget: 2") {
 		t.Fatal("per-run continue budget must bound the loop (#4650)")
 	}
 

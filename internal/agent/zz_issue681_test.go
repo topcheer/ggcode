@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -26,19 +25,23 @@ func TestIssue681_InjectGuidanceReportsDelivery(t *testing.T) {
 }
 
 func TestIssue681_CheckpointExemptFromBudget(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the mid-point progress checkpoint moved out of agent.go;
+	// scan the stream-loop source files (shape-agnostic file targeting).
+	text, err := readStreamLoopSource("agent.go", "run_detector_guidance.go")
 	if err != nil {
-		t.Skipf("cannot read agent.go: %v", err)
+		t.Skipf("cannot read stream-loop source: %v", err)
 	}
-	text := string(src)
 	idx := strings.Index(text, "a.maxIter >= 20 && !progressCheckInjected")
 	if idx < 0 {
 		t.Fatal("checkpoint block not found in agent.go")
 	}
 
-	end := strings.Index(text[idx:], "effortApplied, effortPrev := a.applyAdaptiveEffort()")
+	// #5543: the checkpoint block moved into runDetectorGuidance; the
+	// block now ends at that method's return (applyAdaptiveEffort runs
+	// right after the runDetectorGuidance call in the main loop).
+	end := strings.Index(text[idx:], "return msgs, progressCheckInjected")
 	if end < 0 {
-		t.Fatal("checkpoint block terminator not found in agent.go")
+		t.Fatal("checkpoint block terminator not found")
 	}
 	block := text[idx : idx+end]
 	if strings.Contains(block, "injectGuidance") {

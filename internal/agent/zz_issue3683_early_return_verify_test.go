@@ -1,17 +1,17 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func Test3683EarlyReturnsSetAsyncVerifyStats(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	// #5543: the early-return paths moved out of agent.go; scan the
+	// stream-loop source files (shape-agnostic file targeting).
+	text, err := readStreamLoopSource("agent.go", "run_no_tool_calls.go")
 	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
+		t.Fatalf("read stream-loop source: %v", err)
 	}
-	text := string(src)
 
 	assign := "asyncVerifyStats = runStats"
 	sites := 0
@@ -31,7 +31,12 @@ func Test3683EarlyReturnsSetAsyncVerifyStats(t *testing.T) {
 			hi = len(text)
 		}
 		window := text[lo:hi]
-		hasReturn := strings.Contains(window, "return nil")
+		// #5543: the extracted method signals termination via
+		// noToolCallsTerminal instead of a bare `return nil`; accept both
+		// shapes (the main loop turns the terminal signal into the run's
+		// final nil error).
+		hasReturn := strings.Contains(window, "return nil") ||
+			strings.Contains(window, "return noToolCallsTerminal")
 		hasGate := strings.Contains(window, "codeChangedInRun(runStats)")
 		if sites <= 2 && (!hasReturn || !hasGate) {
 			t.Fatalf("guard site %d: gate/return wiring incomplete (gate=%v return=%v) — the early-return verify bypass may be back", sites, hasGate, hasReturn)
