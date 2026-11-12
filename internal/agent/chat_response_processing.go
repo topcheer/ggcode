@@ -25,6 +25,10 @@ type loopState struct {
 	deferredMemoryTarget      string
 	msgs                      []provider.Message
 	followUpMessages          []provider.Message
+	progressCheckInjected     bool
+	sessionBudgetStop         bool
+	sessionTimedOut           bool
+	transientCompactWarned    bool
 }
 
 // handleNoToolResponse processes the no-tool-calls path of one assistant

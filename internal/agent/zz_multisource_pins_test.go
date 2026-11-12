@@ -10,7 +10,7 @@ func readAgentAndProcessingSources() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, extra := range []string{"chat_response_processing.go", "chat_tool_loop.go", "chat_turn_error.go", "stream_chat.go", "watcher_registry.go", "edited_paths.go"} {
+	for _, extra := range []string{"chat_response_processing.go", "chat_tool_loop.go", "chat_turn_error.go", "conversation_loop.go", "stream_chat.go", "watcher_registry.go", "edited_paths.go"} {
 		b, err := os.ReadFile(extra)
 		if err != nil {
 			continue // optional until later knives populate them

@@ -30,7 +30,7 @@ func TestIssue681_CheckpointExemptFromBudget(t *testing.T) {
 		t.Skipf("cannot read agent.go: %v", err)
 	}
 	text := string(src)
-	idx := strings.Index(text, "a.maxIter >= 20 && !progressCheckInjected")
+	idx := strings.Index(text, "a.maxIter >= 20 && !st.progressCheckInjected")
 	if idx < 0 {
 		t.Fatal("checkpoint block not found in agent.go")
 	}
