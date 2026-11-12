@@ -30,6 +30,7 @@ type AgentSelfModel struct {
 	Skills         map[string]*SkillStat `json:"skills"`
 	DeclaredLimits []string              `json:"declaredLimits,omitempty"`
 	UpdatedAt      time.Time             `json:"updatedAt"`
+	boundDir       string                `json:"-"` // workspace binding (#5498)
 }
 
 // SelfModelPath returns the persistence path under the given workspace.
