@@ -23,6 +23,13 @@ type Result struct {
 	Images              []ResultImage      `json:"images,omitempty"`
 	SuggestedWorkingDir string             `json:"suggested_working_dir,omitempty"`
 	FollowUpMessages    []provider.Message `json:"follow_up_messages,omitempty"`
+	// HaltAgent (#5520): a successful result carrying this flag terminates
+	// the main agent loop immediately after the result is recorded - no
+	// further tool calls in the batch, no further turns. Reserved for tools
+	// that hand the session over out-of-band (restart: the durable resume
+	// nudge is already armed, so any further turn is wasted work). Ignored
+	// on IsError results.
+	HaltAgent bool `json:"halt_agent,omitempty"`
 }
 
 type ResultImage struct {

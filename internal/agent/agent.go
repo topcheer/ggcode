@@ -4517,6 +4517,27 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 				return err
 			}
+
+			// #5520: a successful tool result carrying HaltAgent (restart) ends
+			// the run right here — any further turn in this process is wasted
+			// work, and the tool has already armed whatever durable handover
+			// it needs (resume nudge). Remaining calls in this batch are
+			// cancelled-fill so the provider transcript stays balanced, the
+			// collected results land in context for the resumed session, and
+			// the run unwinds cleanly.
+			if result.HaltAgent && !result.IsError {
+				debug.Log("agent", "halt-agent: %s requested immediate loop stop; cancelling %d remaining tool calls in batch", tc.Name, len(toolCalls)-idx-1)
+				a.fillCancelledToolResults(toolCalls[idx+1:], &toolResults)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: toolResults,
+				})
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: fmt.Sprintf("Agent loop stopped: %s requested immediate termination (session handover in progress, e.g. pending restart).", tc.Name),
+				})
+				return nil
+			}
 		}
 		if err := ctx.Err(); err != nil {
 

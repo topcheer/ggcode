@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"time"
 
@@ -11,10 +12,21 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// restartResumeNudgeDelay is how long after the restart the resume nudge
-// fires: long enough for the new process to boot and resume the session,
-// short enough that the follow-up feels immediate.
-const restartResumeNudgeDelay = 3 * time.Minute
+// The resume nudge fires arm-time + rand(10s..30s) (#5520). The previous
+// fixed 3-minute delay made every instance in a batch-restarted fleet wake
+// in lockstep (synchronized LLM load spike, cron cadence alignment); the
+// random window decorrelates them while staying long enough for the new
+// process to boot and resume the session.
+const (
+	restartNudgeJitterMin = 10 * time.Second
+	restartNudgeJitterMax = 30 * time.Second
+)
+
+// restartNudgeJitter draws the randomized nudge delay. Package-level var so
+// tests can pin the distribution deterministically.
+var restartNudgeJitter = func() time.Duration {
+	return restartNudgeJitterMin + time.Duration(rand.Int64N(int64(restartNudgeJitterMax-restartNudgeJitterMin)))
+}
 
 // restartResumeNudgePrompt is the prompt enqueued by the resume nudge.
 const restartResumeNudgePrompt = "继续进行之前的任务"
@@ -43,10 +55,10 @@ type RestartRequester interface {
 
 type RestartTool struct {
 	Requester RestartRequester
-	// Nudger, when injected, arms a durable one-shot cron firing
-	// restartResumeNudgeDelay after the restart, enqueuing
-	// restartResumeNudgePrompt so the resumed session continues the prior
-	// task. Optional: nil disables the nudge (restart proceeds regardless).
+	// Nudger, when injected, arms a durable one-shot cron firing a jittered
+	// 10-30s after the restart, enqueuing restartResumeNudgePrompt so the
+	// resumed session continues the prior task. Optional: nil disables the
+	// nudge (restart proceeds regardless).
 	Nudger ResumeNudgeScheduler
 }
 
@@ -96,11 +108,12 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 
 	nudgeNote := ""
 	if t.Nudger != nil {
-		if _, err := t.Nudger.CreateOneShotWithID(restartResumeNudgeID, time.Now().Add(restartResumeNudgeDelay), restartResumeNudgePrompt, true); err != nil {
+		delay := restartNudgeJitter()
+		if _, err := t.Nudger.CreateOneShotWithID(restartResumeNudgeID, time.Now().Add(delay), restartResumeNudgePrompt, true); err != nil {
 			debug.Log("restart", "failed to arm resume nudge: %v", err)
 			nudgeNote = fmt.Sprintf(" NOTE: resume nudge scheduling failed (%v); the session still resumes automatically.", err)
 		} else {
-			nudgeNote = fmt.Sprintf(" A resume nudge will fire %s after the restart with prompt %q.", restartResumeNudgeDelay, restartResumeNudgePrompt)
+			nudgeNote = fmt.Sprintf(" A resume nudge fires ~%s after the restart (jittered 10-30s window, decorrelated from other instances) with prompt %q.", delay.Round(time.Second), restartResumeNudgePrompt)
 		}
 	}
 
@@ -109,9 +122,9 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	// installed copy, PATH shadow) is visible at arm time, before the swap is
 	// even attempted.
 	execPath := t.Requester.ExecTargetPath()
-	okNote := "OK: restart armed. The process restarts as soon as this turn finishes (with a short fallback timeout). Do NOT issue any further tool calls — end your turn now. The session resumes automatically after restart."
+	okNote := "OK: restart armed. The agent loop terminates immediately after this result — no further tool calls, no further turns. The process restarts as soon as the turn unwinds (with a short fallback timeout). The session resumes automatically after restart."
 	if p := execPath; p != "" {
 		okNote += fmt.Sprintf(" Exec target: %s (current revision %s). After restart the startup banner verifies the running image.", p, t.Requester.ExecTargetRevision())
 	}
-	return Result{Content: okNote + nudgeNote}, nil
+	return Result{Content: okNote + nudgeNote, HaltAgent: true}, nil
 }
