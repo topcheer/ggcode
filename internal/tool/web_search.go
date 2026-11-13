@@ -138,11 +138,8 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 
 	if len(results) == 0 {
-		msg := "No results found."
-		if degradeAdvisory != "" {
-			msg += degradeAdvisory
-		}
-		return Result{Content: msg}, nil
+		return Result{Content: composeEmptySearchMessage(backendTotal,
+			len(args.AllowedDomains) > 0 || len(args.BlockedDomains) > 0, degradeAdvisory)}, nil
 	}
 
 	var sb strings.Builder
@@ -164,6 +161,23 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 }
 
 const weakSearchBestScore = 30
+
+// composeEmptySearchMessage renders the empty-result message for one
+// web_search call (#5580). A backend that returned results which the domain
+// filter then excluded is healthy: say so and advise widening the filter
+// instead of letting the agent conclude the backend degraded. A true
+// backend empty (backendTotal == 0) keeps the plain message plus any
+// degradation advisory from the streak counter.
+func composeEmptySearchMessage(backendTotal int, domainFilterActive bool, degradeAdvisory string) string {
+	msg := "No results found."
+	if backendTotal > 0 && domainFilterActive {
+		msg += searchFilterEmptyMessage(backendTotal)
+	}
+	if degradeAdvisory != "" {
+		msg += degradeAdvisory
+	}
+	return msg
+}
 
 func filterByDomain(results []searchResult, allowedDomains, blockedDomains []string) []searchResult {
 	if len(allowedDomains) == 0 && len(blockedDomains) == 0 {

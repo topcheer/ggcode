@@ -73,3 +73,13 @@ func recordSearchHit() string {
 	searchDegrade.consecutiveEmpties = 0
 	return ""
 }
+
+// searchFilterEmptyMessage renders the #5580 domain-filter-empty advisory:
+// the backend returned backendTotal results but allowed_domains/blocked_domains
+// excluded every one of them. The message steers the agent toward widening
+// the filter instead of concluding the backend is degraded.
+func searchFilterEmptyMessage(backendTotal int) string {
+	return fmt.Sprintf(
+		"\n\n[search-filter-empty] backend returned %d results but all were excluded by allowed_domains/blocked_domains - the backend is healthy; widen the filter instead of retrying the same query.",
+		backendTotal)
+}
