@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/qr_scanner.dart';
+import '../../core/web_url_open.dart';
 
 import '../../core/providers/session_provider.dart';
 import '../../core/l10n/app_localizations.dart';
@@ -671,6 +672,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       MaterialPageRoute(builder: (_) => const _WorkspaceScannerScreen()),
     );
     if (scanned == null || scanned.isEmpty) return;
+    // #5565 follow-up: plain http(s) QR (et-tunnel WebUI) is not a relay
+    // session — offer to open it in the browser instead of feeding it to
+    // connectScannedCode (which would blindly rewrite https -> wss).
+    if (isPlainWebUrl(scanned)) {
+      if (!mounted) return;
+      await offerOpenWebUrl(context, scanned.trim());
+      return;
+    }
     await ref.read(connectionProvider.notifier).connectScannedCode(scanned);
   }
 
