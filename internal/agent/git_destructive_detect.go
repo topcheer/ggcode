@@ -307,6 +307,14 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		return nil
 	}
 	cmd = normalizeGitGlobalFlags(cmd)
+	// #5268: the lexical git patterns below match substrings, so quoted
+	// prose mentioning them (`echo 'never run git reset --hard on main'`)
+	// fired CRITICAL warnings. Scan the quote-blanked text for every
+	// remaining whole-string matcher; argv-grounded checks
+	// (branchForceDeleteInGitSegment etc.) already segment correctly.
+	// Interpreter -c payload lines keep their quoted span (it IS the
+	// command), same rule as blankQuotedSegmentsForTokens.
+	blanked := blankQuotedSegmentsForTokens(cmd)
 	var found []destructivePattern
 
 	type patternCheck struct {
@@ -314,7 +322,7 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		result destructivePattern
 	}
 
-	if reGitForceWithLease.MatchString(cmd) {
+	if reGitForceWithLease.MatchString(blanked) {
 		found = append(found, destructivePattern{
 			name:        "force_with_lease",
 			severity:    "warning",
@@ -330,7 +338,7 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		})
 	}
 
-	if reGitResetHard.MatchString(cmd) {
+	if reGitResetHard.MatchString(blanked) {
 		found = append(found, destructivePattern{
 			name:        "reset_hard",
 			severity:    "critical",
@@ -380,7 +388,7 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		})
 	}
 
-	if reGitStashDrop.MatchString(cmd) {
+	if reGitStashDrop.MatchString(blanked) {
 		found = append(found, destructivePattern{
 			name:        "stash_drop",
 			severity:    "warning",
@@ -389,7 +397,7 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		})
 	}
 
-	if reGitRebase.MatchString(cmd) {
+	if reGitRebase.MatchString(blanked) {
 		found = append(found, destructivePattern{
 			name:        "rebase",
 			severity:    "warning",
@@ -398,7 +406,7 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		})
 	}
 
-	if reGitFilterBranch.MatchString(cmd) {
+	if reGitFilterBranch.MatchString(blanked) {
 		found = append(found, destructivePattern{
 			name:        "filter_branch",
 			severity:    "critical",
@@ -551,7 +559,11 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 }
 
 func isForcePushCommand(cmd string) bool {
-
+	// #5268: token-split on the raw line sees through quotes; scan the
+	// quote-blanked text so prose inside quoted arguments cannot assemble
+	// a bare git-push token sequence. Interpreter -c payloads keep their
+	// quoted span: that span IS the command (TestForcePushQuotedWrapperForm).
+	cmd = blankQuotedSegmentsForTokens(cmd)
 	cmd = normalizeGitGlobalFlags(cmd)
 	for _, line := range strings.Split(cmd, "\n") {
 		if forcePushSingleLine(line) {
@@ -605,7 +617,10 @@ func forcePushSingleLine(cmd string) bool {
 }
 
 func isCleanForceCommand(cmd string) bool {
-
+	// #5268: quote-blank each line EXCEPT interpreter payload lines, whose
+	// quoted span is the command itself; sh -c "git checkout -- ." must
+	// keep firing (same payload rule as isForcePushCommand).
+	cmd = blankQuotedSegmentsForTokens(cmd)
 	for _, line := range strings.Split(cmd, "\n") {
 		if cleanForceSingleLine(line) {
 			return true
@@ -710,6 +725,11 @@ func flagTakesValue(fl string) bool {
 }
 
 func discardAllFires(cmd string) bool {
+	// #5268: blank quoted spans before splitting so quoted prose cannot
+	// match the discard/checkout regexes (splitting first would leave the
+	// quoted text inside one segment). Payload-aware: sh -c "git checkout
+	// -- ." keeps its quoted span.
+	cmd = blankQuotedSegmentsForTokens(cmd)
 	for _, seg := range reChainSep.Split(cmd, -1) {
 		if seg == "" {
 			continue
@@ -726,6 +746,112 @@ func discardAllFires(cmd string) bool {
 // value (#5456). Unknown flags are conservatively treated as value-consuming
 // (prevWasFlag=true), matching the #5342 behavior; add entries here only for
 // flags verifiably valueless across the wrapper words in rmWrapperWords.
+
+// blankQuotedSegments (#5268) replaces single- and double-quoted literal
+// spans with same-length space filler so substring-based git destructive
+// patterns only see what the shell would actually parse as command text.
+// Mirrors quotedSegmentEnd's segmentation (including $() bodies inside
+// double quotes, whose inner quotes cannot end the segment early); unlike
+// stripQuotedReferences (#5101) it is not report-verb aware - every quoted
+// span is inert data for THIS scan, so a git command carried inside a
+// substitution body stays visible because the body is copied verbatim,
+// while prose like `echo 'never run git reset --hard on main'` blanks out
+// (#5268 item 1 residual: git-class lexical FP).
+func blankQuotedSegments(cmd string) string {
+	var b strings.Builder
+	b.Grow(len(cmd))
+	i := 0
+	for i < len(cmd) {
+		c := cmd[i]
+		if c != '\'' && c != '"' {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		start := i
+		end := quotedSegmentEnd(cmd, i)
+		if cmd[start] == '"' {
+			b.WriteString(blankQuotedKeepingSubstitutions(cmd, start, end))
+		} else {
+			for k := start; k <= end && k < len(cmd); k++ {
+				b.WriteByte(' ')
+			}
+		}
+		i = end + 1
+	}
+	return b.String()
+}
+
+// lexicallyDestructiveGit runs the lexical git-pattern checks against the
+// quote-blanked command so quoted literals in prose (echo comments, heredoc
+// echoes of documentation text) cannot fire them (#5268 item 1 residual).
+// Real invocations are unaffected: their tokens are unquoted.
+
+// quotedPayloadReceivers are commands whose quoted argument is an
+// executed payload (interpreter -c "..." forms). Quoted spans after them
+// must stay visible to token scans: `sh -c "git push --force origin main"`
+// is a real invocation, not prose (#5342 wrapper family; here for the
+// #5268 quote-blanking interaction).
+var quotedPayloadReceivers = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true,
+	"ash": true, "python": true, "python3": true, "node": true,
+	"perl": true, "ruby": true, "php": true, "lua": true, "osascript": true,
+	"shellspec": true, "shfmt": true,
+}
+
+// lineContainsQuotedPayload reports whether any single line embeds an
+// executed quoted payload (interpreter -c "..."): token-split that line
+// keeps its quoted span intact rather than blanking it as prose.
+func lineContainsQuotedPayload(line string) bool {
+	toks := strings.Fields(line)
+	for i := 0; i < len(toks); i++ {
+		t := strings.Trim(toks[i], "\"'")
+		if i == 0 {
+			// wrapper prefixes (sudo/env/time/nohup/... bash -c "...") and
+			// path forms (/bin/sh -c "...") skip ahead to the receiver
+			w := t
+			if j := strings.LastIndexAny(w, "/\\"); j >= 0 {
+				w = w[j+1:]
+			}
+			if !heredocPrefixWords[w] && !quotedPayloadReceivers[w] {
+				return false
+			}
+			continue
+		}
+		if t == "-c" && i+1 < len(toks) {
+			r := strings.Trim(toks[i-1], "\"'")
+			if j := strings.LastIndexAny(r, "/\\"); j >= 0 {
+				r = r[j+1:]
+			}
+			if quotedPayloadReceivers[r] {
+				return true
+			}
+		}
+		if heredocPrefixWords[t] && i+1 < len(toks) {
+			continue
+		}
+		if quotedPayloadReceivers[t] && i+1 < len(toks) && strings.Trim(toks[i+1], "\"'") == "-c" {
+			return true
+		}
+	}
+	return false
+}
+
+// blankQuotedSegmentsForTokens applies blankQuotedSegments per line except
+// lines carrying an executed quoted payload, whose quoted spans remain in
+// the token stream (their payload is the real command).
+func blankQuotedSegmentsForTokens(cmd string) string {
+	var out []string
+	for _, line := range strings.Split(cmd, "\n") {
+		if lineContainsQuotedPayload(line) {
+			out = append(out, line)
+			continue
+		}
+		out = append(out, blankQuotedSegments(line))
+	}
+	return strings.Join(out, "\n")
+}
+
 var wrapperValuelessFlags = map[string]bool{
 	"-0":                   true, // xargs NUL separator
 	"--null":               true, // xargs long form

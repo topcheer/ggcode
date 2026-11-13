@@ -170,6 +170,9 @@ func TestAgentGoOriginalContentLenCapturedBeforeDetectorChain(t *testing.T) {
 	captureIdx := strings.Index(string(src), "measuredLen := len(result.Content)")
 	applyIdx := strings.Index(string(src), "a.applyToolResultGuidance(")
 	shrinkIdx := strings.LastIndex(string(src), "guardToolOutput(result.Content")
+	if alt := strings.LastIndex(string(src), "guardToolOutputReport(result.Content"); alt > shrinkIdx {
+		shrinkIdx = alt
+	}
 	if captureIdx < 0 {
 		t.Fatal("measuredLen capture not found in agent.go")
 	}
