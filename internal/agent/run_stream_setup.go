@@ -272,7 +272,10 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 }
 
 // buildRunTurnContextD2 resets detectors + prepares tool defs (#5543 knife-5).
-func (a *Agent) buildRunTurnContextD2(ctx context.Context, content []provider.ContentBlock, sid string, msgs []provider.Message, userText string, rsc *runStreamCtx, onEvent func(provider.StreamEvent)) (outMsgs []provider.Message, toolDefs []provider.ToolDefinition, outUserText string) {
+// toolDefs flows through untouched (D1 owns construction); the param exists
+// so the named return cannot silently hand back a nil slice (#5549
+// regression: LLM got zero tool definitions, so it never emitted tool calls).
+func (a *Agent) buildRunTurnContextD2(ctx context.Context, content []provider.ContentBlock, sid string, msgs []provider.Message, userText string, toolDefs []provider.ToolDefinition, rsc *runStreamCtx, onEvent func(provider.StreamEvent)) (outMsgs []provider.Message, outToolDefs []provider.ToolDefinition, outUserText string) {
 	a.constraintAudit.reset()
 	a.constraintFollowup.reset()
 	a.ambiguityPoint.reset()
