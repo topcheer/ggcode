@@ -41,12 +41,14 @@ func TestIssue4780_SafeChainNoLongerAggregates(t *testing.T) {
 
 func TestIssue4780_RiskySubcommandStillFires(t *testing.T) {
 
-	chain := `gh pr view 4859 --json state && rm -rf /tmp/scratch-dir && gh pr list --limit 5`
+	// threshold 18: the fire triggers use the stacked scorer (quoted single
+	// subcommand: hard 16 + sudo 2 = 18); a lone rm -rf (8) no longer gates.
+	chain := `gh pr view 4859 --json state && sudo sh -c 'rm -rf /tmp/scratch-dir && git reset --hard' && gh pr list --limit 5`
 	if score, fires := zz4780RunCmd(t, chain); !fires {
-		t.Fatalf("chain containing a hard-token subcommand must fire (score=%d)", score)
+		t.Fatalf("chain containing a risky subcommand must fire (score=%d)", score)
 	}
 
-	heavy := `r=$(git log --oneline --decorate -30 origin/main) $(git status --porcelain=v1 --branch) $(git branch --list --format='%(refname:short) %(objectname:short)' 'fix-*' 'patrol-*') | grep -E 'issue|fix|patrol' | sort -u | uniq -c | sort -rn | head -10 | tee /tmp/ggcode-arg-complexity-fixture-output.txt`
+	heavy := `r=$(sudo sh -c 'rm -rf /tmp/ggcode-arg-complexity-fixture && git reset --hard origin/main') $(git status --porcelain=v1 --branch) $(git branch --list --format='%(refname:short) %(objectname:short)' 'fix-*' 'patrol-*') | grep -E 'issue|fix|patrol' | sort -u | uniq -c | sort -rn | head -10 | tee /tmp/ggcode-arg-complexity-fixture-output.txt`
 	if score, fires := zz4780RunCmd(t, heavy); !fires {
 		t.Fatalf("substitution-heavy subcommand must fire (score=%d)", score)
 	}

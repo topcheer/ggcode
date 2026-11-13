@@ -14,7 +14,7 @@ import (
 
 const (
 	argComplexityDefaultThreshold = 4
-	argComplexityRunCmdThreshold  = 8
+	argComplexityRunCmdThreshold  = 18
 )
 
 const argComplexityMaxFires = 3
