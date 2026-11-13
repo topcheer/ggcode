@@ -46,6 +46,8 @@ export default function App() {
   // 移动端抽屉(P5-7):窄屏左栏抽屉化
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [paneOpen, setPaneOpen] = useState(false); // 移动端右栏 overlay(lg 以下)
+  // 桌面(lg+)右栏常驻可隐藏:panePinned=false 时收起,主区占满(与移动 overlay 语义互不干扰)。
+  const [panePinned, setPanePinned] = useState(() => localStorage.getItem("ggcode-pane-pinned") !== "0");
   const [shareOpen, setShareOpen] = useState(false); // /share 二维码弹层
   const [tunnelOpen, setTunnelOpen] = useState(false); // /et 公网隧道弹层
   // ⌘K 会话切换数据源:最近 sessions(P4-2),面板打开时拉取
@@ -188,11 +190,14 @@ export default function App() {
       {/* 三栏骨架:左会话栏 + 主区(Chat/Settings 切换) + 右 Pane(P1.5) */}
       <aside className={`fixed inset-y-0 left-0 z-40 w-[232px] shrink-0 flex-col border-r border-border bg-sidebar transition-transform md:static md:flex ${drawerOpen ? "flex" : "hidden"}`}>
         {drawerOpen && <div className="fixed inset-0 z-[-1] bg-black/40 md:hidden" onClick={() => setDrawerOpen(false)} />}
-        <div className="border-b border-border px-4 py-5">
-          <h1 className="text-ui-lg font-bold tracking-tight">
-            gg<span className="text-brand">code</span>
-          </h1>
-          <p className="text-ui-xs mt-0.5 text-foreground-subtlest">AI coding workspace</p>
+        <div className="flex items-center gap-2.5 border-b border-border px-4 py-5">
+          <img src="/icon.png" alt="ggcode" className="h-9 w-9 rounded-[10px]" />
+          <div>
+            <h1 className="text-ui-lg font-bold tracking-tight">
+              gg<span className="text-brand">code</span>
+            </h1>
+            <p className="text-ui-xs mt-0.5 text-foreground-subtlest">AI coding workspace</p>
+          </div>
         </div>
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2">
           <button
@@ -276,6 +281,7 @@ export default function App() {
           >
             ☰
           </button>
+          <img src="/icon.png" alt="" className="h-5 w-5 rounded-md" />
           <span className="text-ui-sm font-semibold">ggcode</span>
           {/* 移动端 ⌘K 等价入口(pointer: coarse 无组合键,点按唤起命令面板) */}
           <button
@@ -285,18 +291,31 @@ export default function App() {
           >
             ⌘
           </button>
+          {/* 右栏:移动=打开 overlay;桌面=切换常驻(pin/unpin,localStorage 持久) */}
           <button
-            className="text-ui-sm rounded-lg px-2 py-1 text-foreground-subtle hover:bg-hover"
+            className="text-ui-sm rounded-lg px-2 py-1 text-foreground-subtle hover:bg-hover lg:hidden"
             onClick={() => setPaneOpen(true)}
             title="活动面板"
           >
-            ☰ 面板
+            ☰
+          </button>
+          <button
+            className="text-ui-sm hidden rounded-lg px-2 py-1 text-foreground-subtle hover:bg-hover lg:inline-block"
+            onClick={() => {
+              setPanePinned((v) => {
+                localStorage.setItem("ggcode-pane-pinned", v ? "0" : "1");
+                return !v;
+              });
+            }}
+            title={panePinned ? "隐藏右侧栏" : "显示右侧栏"}
+          >
+            {panePinned ? "⬗" : "☰ 面板"}
           </button>
         </div>
         {view === "chat" ? <Chat /> : <Settings onBack={() => setView("chat")} />}
       </main>
       {paneOpen && <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setPaneOpen(false)} />}
-      <aside className={`fixed inset-y-0 right-0 z-50 w-[92vw] max-w-[420px] flex-col border-l border-border bg-sidebar transition-transform lg:static lg:z-auto lg:flex lg:w-[380px] lg:max-w-none ${paneOpen ? "flex" : "hidden"}`} style={paneSpawn || activeStreams.length > 0 || todos.length > 0 || cronEvents.length > 0 ? { width: "380px" } : undefined}>
+      <aside className={`fixed inset-y-0 right-0 z-50 w-[92vw] max-w-[420px] flex-col border-l border-border bg-sidebar transition-transform lg:static lg:z-auto lg:w-[380px] lg:max-w-none ${panePinned ? "lg:flex" : "lg:hidden"} ${paneOpen ? "flex" : "hidden"}`} style={paneSpawn || activeStreams.length > 0 || todos.length > 0 || cronEvents.length > 0 ? { width: "380px" } : undefined}>
         {/* 活动面板:任务清单/子代理/Cron 三 tab 独立区域(零事件 tab 灰显) */}
         {(todos.length > 0 || activeStreams.length > 0 || cronEvents.length > 0) && (
           <div className="flex min-h-0 flex-col border-b border-border">
