@@ -28,6 +28,12 @@ func ControlEt(ctl EtunnelController, localURL, subdomain, token string, saveCfg
 	if len(args) > 0 {
 		sub = strings.ToLower(strings.TrimSpace(args[0]))
 	}
+	// login 的浏览器 loopback 授权必须在用户桌面侧完成：IM/daemon 主机可能
+	// 无头，SDK 也只能把授权 URL 打到 stderr（IM 回复拿不到）——引导用户去
+	// 交互式 TUI 执行，而不是半残地跑一半。
+	if sub == "login" {
+		return "et login 需要交互式浏览器授权：请在 TUI 会话中执行 /et login", nil
+	}
 	mask := func(tok string) string {
 		if tok == "" {
 			return "(unset)"
@@ -106,6 +112,6 @@ func ControlEt(ctl EtunnelController, localURL, subdomain, token string, saveCfg
 		}
 		return "et tunnel active: " + tunnelURL + tokenSuffix() + planSuffix, nil
 	default:
-		return "usage: /et [on|off|show|setup <subdomain> <token>]", nil
+		return "usage: /et [on|off|show|setup <subdomain> <token>|login]", nil
 	}
 }

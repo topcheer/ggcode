@@ -320,7 +320,7 @@ var SlashCommands = []string{
 var SlashCommandDescriptions = map[string]string{
 	"/help":            "Show help message",
 	"/webui":           "Show WebUI URL and open it in the browser",
-	"/et":              "etunnel 隧道: /et on|off|show|setup <子域名> <token>",
+	"/et":              "etunnel 隧道: /et on|off|show|setup <子域名> <token>|login",
 	"/retry":           "Retry last submission after error",
 	"/edit":            "Edit and resend last submission",
 	"/?":               "Show help message",
@@ -431,7 +431,7 @@ var SlashCommandDescriptions = map[string]string{
 
 var SlashCommandPlaceholders = map[string]string{
 	"/model":         "<model-name>",
-	"/et":            "<on|off|show|setup <subdomain> <token>>",
+	"/et":            "<on|off|show|setup <subdomain> <token>|login>",
 	"/provider":      "<vendor> [endpoint]",
 	"/impersonate":   "<cli-tool>",
 	"/inspector":     "<sessions|checkpoints|memory|plugins|config|status>",

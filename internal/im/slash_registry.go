@@ -30,7 +30,7 @@ type SlashCommand struct {
 var imSlashRegistry = []SlashCommand{
 	{
 		Name:     "et",
-		Help:     "etunnel tunnel: /et [on|off|show|setup <subdomain> <token>]",
+		Help:     "etunnel tunnel: /et [on|off|show|setup <subdomain> <token>|login]",
 		Category: "control",
 		Handler: func(d SlashDeps, args []string) (string, error) {
 			return d.EtunnelControl(args)

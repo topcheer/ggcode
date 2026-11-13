@@ -113,6 +113,8 @@ func init() {
 	regUpdatePlain(func(m Model, msg webchatUserMsg) (tea.Model, tea.Cmd) { return m.handleWebchatUserMsg(msg) })
 	regUpdatePlain(func(m Model, msg webuiReadyMsg) (tea.Model, tea.Cmd) { return m.handleWebuiReadyMsg(msg) })
 	regUpdatePlain(func(m Model, msg etTunnelReadyMsg) (tea.Model, tea.Cmd) { return m.handleEtTunnelReadyMsg(msg) })
+	regUpdatePlain(func(m Model, msg etLoginAuthMsg) (tea.Model, tea.Cmd) { return m.handleEtLoginAuthMsg(msg) })
+	regUpdatePlain(func(m Model, msg etLoginDoneMsg) (tea.Model, tea.Cmd) { return m.handleEtLoginDoneMsg(msg) })
 	regUpdatePlain(func(m Model, msg knightStartupHintMsg) (tea.Model, tea.Cmd) { return m.handleKnightStartupHintMsg(msg) })
 	regUpdate(func(m Model, msg shellCommandStreamMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
 		return m.handleShellCommandStreamMsg(msg, spinnerCmd)
