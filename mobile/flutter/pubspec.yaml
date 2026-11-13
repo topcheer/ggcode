@@ -1,7 +1,7 @@
 name: ggcode_mobile
 description: Remote control client for GGCode AI coding agent.
 publish_to: 'none'
-version: 1.3.280+2026111201
+version: 1.3.282+2026111401
 
 environment:
   sdk: '>=3.13.0 <4.0.0'
