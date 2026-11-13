@@ -52,6 +52,29 @@ func TestControlEtOnPlanDistinction(t *testing.T) {
 	}
 }
 
+// TestControlEtLoginGuidance pins the IM/daemon /et login surface: the
+// browser loopback flow cannot run headless (the SDK's fallback URL goes to
+// stderr, undeliverable over IM), so login must guide back to the TUI and
+// must NOT start any flow here. The usage line must mention login.
+func TestControlEtLoginGuidance(t *testing.T) {
+	f := &fakeEtCtl{}
+	out, err := ControlEt(f, "http://127.0.0.1:1#token=x", "", "", nil, []string{"login"})
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if !strings.Contains(out, "TUI") {
+		t.Fatalf("login must guide to the interactive TUI: %q", out)
+	}
+	if f.url != "" || f.stopped {
+		t.Fatalf("login must not touch the tunnel controller")
+	}
+	// usage line (unknown sub) mentions login
+	out, _ = ControlEt(f, "", "", "", nil, []string{"bogus"})
+	if !strings.Contains(out, "login") {
+		t.Fatalf("usage line must mention login: %q", out)
+	}
+}
+
 func TestControlEtShowOffSetup(t *testing.T) {
 	f := &fakeEtCtl{}
 	// show, inactive
