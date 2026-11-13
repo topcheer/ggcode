@@ -1392,7 +1392,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	defer a.flushGuidanceStats()
 	defer a.routeWeaknessSignals()
-	msgs, toolDefs, userText = a.buildRunTurnContextD2(ctx, content, sid, msgs, userText, rsc, onEvent)
+	msgs, toolDefs, userText = a.buildRunTurnContextD2(ctx, content, sid, msgs, userText, toolDefs, rsc, onEvent)
 	turnCounters := &chatTurnCounters{}
 	st := &loopState{detectorContinueBudget: 2}
 	err = a.runConversationLoop(ctx, onEvent, sid, rsc.userPromptForStats, toolDefs, rsc.runStats, st, turnCounters)
