@@ -12,6 +12,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
+	qrcodepkg "github.com/topcheer/ggcode/internal/qrcode"
 	"github.com/topcheer/ggcode/internal/session"
 )
 
@@ -21,9 +22,9 @@ func TestRenderQQShareQRCodeMatchesTerminalSmallStyle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("qrcode.New returned error: %v", err)
 	}
-	bitmap, err := compactTerminalQRBitmap(link)
+	bitmap, err := qrcodepkg.Bitmap(link)
 	if err != nil {
-		t.Fatalf("compactTerminalQRBitmap returned error: %v", err)
+		t.Fatalf("qrcode.Bitmap returned error: %v", err)
 	}
 	defaultLines := strings.Split(strings.TrimRight(code.ToSmallString(false), "\n"), "\n")
 

@@ -43,6 +43,7 @@ ggcode daemon --follow    # Daemon with terminal follow display
 ggcode daemon --bypass    # Daemon in bypass mode
 ggcode daemon --background  # Fork to background
 ggcode daemon --tunnel    # Start with mobile tunnel (QR code for GGCode Mobile)
+ggcode daemon --follow --etunnel  # Follow mode + auto-start the et WebUI tunnel (prints URL + scannable QR)
 ggcode daemon --new-session  # Skip auto-loading most recent session
 ```
 
