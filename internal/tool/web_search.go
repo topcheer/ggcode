@@ -121,12 +121,27 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	results, bestScore := assessSearchResultsScored(args.Query, results, args.AllowedDomains)
 
 	total := len(results)
+
+	// #5578: track consecutive empty (backend-level) results for explicit
+	// degradation advisories. Domain-filter empties (total>0, filtered 0)
+	// count as backend hits, not backend failures.
+	var degradeAdvisory string
+	if total == 0 {
+		degradeAdvisory = recordSearchEmpty()
+	} else {
+		degradeAdvisory = recordSearchHit()
+	}
+
 	if len(results) > args.MaxResults {
 		results = results[:args.MaxResults]
 	}
 
 	if len(results) == 0 {
-		return Result{Content: "No results found."}, nil
+		msg := "No results found."
+		if degradeAdvisory != "" {
+			msg += degradeAdvisory
+		}
+		return Result{Content: msg}, nil
 	}
 
 	var sb strings.Builder
@@ -140,6 +155,9 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	if bestScore < weakSearchBestScore {
 		sb.WriteString(fmt.Sprintf("[search-quality] best result matches only %d%% of query terms - results look weak. Consider rephrasing with vocabulary the target docs actually use, or narrowing via allowed_domains.\n", bestScore))
+	}
+	if degradeAdvisory != "" {
+		sb.WriteString(degradeAdvisory)
 	}
 	return Result{Content: sb.String()}, nil
 }
