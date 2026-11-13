@@ -189,6 +189,11 @@ replaces the former `/webui tunnel`):
 - `/et setup <subdomain> <token>` — persist a paid-plan custom subdomain
   and API token to the config `etunnel` section (token is redacted in
   API responses).
+- `/et login` — browser authorization against the tunnel server (SDK
+  loopback flow): opens the auth page and persists the account's API
+  token, plan and custom-domain list to the config `etunnel` section.
+  Takes effect on the next `/et on`; requires the interactive TUI (the
+  IM `/et login` surface points back here).
 
 ### llm-probe
 

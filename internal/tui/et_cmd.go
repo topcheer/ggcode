@@ -1,19 +1,25 @@
 package tui
 
 import (
+	"context"
 	"net/url"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
+	etunnel "github.com/topcheer/etunnel/sdk"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // /et 命令族(顶级命令,与 /webui 解耦):etunnel 隧道生命周期管理。
-//   /et on            激活隧道(使用 /et setup 的子域名/token,未配置走免费计划)
+//   /et on            激活隧道(使用 /et setup|login 的配置,未配置走免费计划)
 //   /et off           关闭隧道
 //   /et show          当前状态(URL + 配置摘要,token 打码)
 //   /et setup <域名> <token>   持久化付费计划配置(写 config etunnel 节)
+//   /et login         浏览器授权登录(SDK loopback 流程,回执持久化)
 //
 // 控制器由 root 注入(webuiSrv 侧 TunnelCtl 单例);WebUI 本地地址仍从
 // webuiURL 提取——隧道发布的就是 WebUI 服务。
@@ -24,6 +30,17 @@ type etTunnelReadyMsg struct {
 	err     error
 	started bool   // false=已激活直接复用
 	plan    string // ""=free（随 URL 打 free 限制）；非空=paid 标注（#5395，etTunnelOn 按配置判定）
+}
+
+// et login 两段式消息：授权 URL 先于完成回执上屏（浏览器流程可长达
+// LoginTimeout=10min，用户必须先看到去哪授权），凭据完成后再持久化。
+type etLoginAuthMsg struct {
+	authURL string
+}
+
+type etLoginDoneMsg struct {
+	creds *etunnel.Credentials
+	err   error
 }
 
 func (m Model) handleEtTunnelReadyMsg(msg etTunnelReadyMsg) (tea.Model, tea.Cmd) {
@@ -54,7 +71,7 @@ func maskToken(tok string) string {
 	return "****" + tok[len(tok)-4:]
 }
 
-// handleEtCommand /et [on|off|show|setup <subdomain> <token>]
+// handleEtCommand /et [on|off|show|setup <subdomain> <token>|login]
 func (m Model) handleEtCommand(parts []string) tea.Cmd {
 	sub := ""
 	if len(parts) > 1 {
@@ -115,10 +132,98 @@ func (m Model) handleEtCommand(parts []string) tea.Cmd {
 		return nil
 	case "on":
 		return m.etTunnelOn()
+	case "login":
+		return m.etLoginStart()
 	default:
-		m.chatWriteSystem(nextSystemID(), "用法: /et [on|off|show|setup <子域名> <token>]")
+		m.chatWriteSystem(nextSystemID(), "用法: /et [on|off|show|setup <子域名> <token>|login]")
 		return nil
 	}
+}
+
+// etLoginServer 授权服务器基址：与隧道默认服务同一主机（SDK DefaultServer
+// wss://host/tunnel → https://host）。隧道与登录共用服务端。
+func etLoginServer() string {
+	norm := etunnel.NormalizeServerURL(etunnel.DefaultServer)
+	u, err := url.Parse(norm)
+	if err != nil || u.Host == "" {
+		return "https://t.etun.uk" // 兜底=SDK 默认主机
+	}
+	return "https://" + u.Host
+}
+
+// etLoginStart 启动 SDK 浏览器授权流（loopback）：两条并行 bubbletea 命令——
+// 授权 URL 上屏（openBrowser 回调内投递）与完成回执（阻塞至浏览器回调或
+// 超时）。token 生效时机=下次 /et on。
+func (m Model) etLoginStart() tea.Cmd {
+	m.chatWriteSystem(nextSystemID(),
+		"⬢ et login: 正在发起浏览器授权…（授权页将自动打开；超时上限 10 分钟）")
+
+	authCh := make(chan string, 1)
+	doneCh := make(chan etLoginDoneMsg, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		defer cancel()
+		creds, err := etunnel.Login(ctx, etLoginServer(), func(authURL string) error {
+			select {
+			case authCh <- authURL:
+			default:
+			}
+			var cmd *exec.Cmd
+			switch runtime.GOOS {
+			case "darwin":
+				cmd = exec.Command("open", authURL)
+			case "windows":
+				cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", authURL)
+			default:
+				cmd = exec.Command("xdg-open", authURL)
+			}
+			return cmd.Start()
+		})
+		debug.Log("tui", "et login done: plan=%s err=%v", credsPlan(creds), err)
+		doneCh <- etLoginDoneMsg{creds: creds, err: err}
+	}()
+	return tea.Batch(
+		func() tea.Msg { return etLoginAuthMsg{authURL: <-authCh} },
+		func() tea.Msg { return <-doneCh },
+	)
+}
+
+// credsPlan 登录回执套餐（日志/展示用）。
+func credsPlan(c *etunnel.Credentials) string {
+	if c == nil {
+		return ""
+	}
+	return c.Plan
+}
+
+// handleEtLoginAuthMsg 授权 URL 上屏（浏览器已尝试打开；未弹出则手动访问）。
+func (m Model) handleEtLoginAuthMsg(msg etLoginAuthMsg) (tea.Model, tea.Cmd) {
+	m.chatWriteSystem(nextSystemID(),
+		"⬢ et login: 请在浏览器完成授权（若未自动打开，访问:\n"+msg.authURL+"\n授权完成后回到本会话，凭据将自动保存）")
+	return m, nil
+}
+
+// handleEtLoginDoneMsg 登录完成：凭据持久化（APIToken→Token，同 setup 字段槽，
+// 下次 /et on 即生效）。
+func (m Model) handleEtLoginDoneMsg(msg etLoginDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, func() tea.Msg { return streamMsg("⚠ et login failed: " + msg.err.Error()) }
+	}
+	c := msg.creds
+	m.config.ETunnel.Token = c.APIToken
+	m.config.ETunnel.Plan = c.Plan
+	m.config.ETunnel.Subdomains = c.Subdomains
+	if err := m.config.SaveScoped(m.configSaveScope); err != nil {
+		return m, func() tea.Msg { return streamMsg("⚠ et login 凭据保存失败: " + err.Error()) }
+	}
+	domains := "(无自定义域名=free)"
+	if len(c.Subdomains) > 0 {
+		domains = strings.Join(c.Subdomains, ", ")
+	}
+	m.chatWriteSystem(nextSystemID(),
+		"⬢ et login 成功: 套餐="+c.Plan+" token="+maskToken(c.APIToken)+"\n可用域名: "+domains+
+			"\n下次 /et on 即以本账户凭据激活。")
+	return m, nil
 }
 
 // etTunnelOn 激活隧道:本地地址取自 webuiURL,付费配置取自 config.ETunnel

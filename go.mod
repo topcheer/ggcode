@@ -42,13 +42,13 @@ require (
 	github.com/yuin/goldmark v1.8.7
 	go.mau.fi/util v0.11.0
 	go.mau.fi/whatsmeow v0.0.0-20261107160454-79dc2a8c33df
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 	golang.org/x/image v0.47.0
 	golang.org/x/mod v0.42.0
 	golang.org/x/net v0.62.0
-	golang.org/x/sys v0.49.0
-	golang.org/x/term v0.47.0
-	golang.org/x/text v0.43.0
+	golang.org/x/sys v0.50.0
+	golang.org/x/term v0.48.0
+	golang.org/x/text v0.44.0
 	google.golang.org/genai v1.77.0
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
@@ -150,7 +150,7 @@ require (
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.2 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/topcheer/etunnel v1.2.0
+	github.com/topcheer/etunnel v1.6.8
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.77.0 // indirect
@@ -169,7 +169,7 @@ require (
 	go.uber.org/zap v1.28.0 // indirect
 	golang.org/x/arch v0.32.0 // indirect
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
-	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/api v0.310.0 // indirect

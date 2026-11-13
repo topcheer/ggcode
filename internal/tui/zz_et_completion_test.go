@@ -24,7 +24,7 @@ func TestEtCompletionSurface(t *testing.T) {
 	if !ok {
 		t.Fatal("/et missing from SlashCommandPlaceholders")
 	}
-	for _, sub := range []string{"on", "off", "show", "setup"} {
+	for _, sub := range []string{"on", "off", "show", "setup", "login"} {
 		if !strings.Contains(ph, sub) {
 			t.Errorf("/et placeholder %q must mention subcommand %q", ph, sub)
 		}

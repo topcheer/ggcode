@@ -104,10 +104,12 @@ type EndpointConfig struct {
 	ModelLimits         map[string]ModelLimitConfig `yaml:"model_limits,omitempty" json:"model_limits,omitempty"`
 }
 
-// ETunnelConfig /et 隧道(/et setup 持久化):自定义子域名与付费 token。
+// ETunnelConfig /et 隧道(/et setup|login 持久化):自定义子域名与付费 token。
 type ETunnelConfig struct {
-	Subdomain string `yaml:"subdomain,omitempty" json:"subdomain,omitempty"` // 付费计划自定义子域名
-	Token     string `yaml:"token,omitempty" json:"token,omitempty"`         // 付费计划 API key
+	Subdomain  string   `yaml:"subdomain,omitempty" json:"subdomain,omitempty"`   // 付费计划自定义子域名
+	Token      string   `yaml:"token,omitempty" json:"token,omitempty"`           // 付费计划 API key(/et login 持久化的 APIToken 也落此字段)
+	Plan       string   `yaml:"plan,omitempty" json:"plan,omitempty"`             // 账户套餐(login 回执,展示面)
+	Subdomains []string `yaml:"subdomains,omitempty" json:"subdomains,omitempty"` // 账户可用自定义域名清单(login 回执,setup 校验参考)
 }
 
 type VendorConfig struct {
