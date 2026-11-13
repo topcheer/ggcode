@@ -183,7 +183,6 @@ var knownModelCapabilities = map[string]modelCapability{
 	"apac.amazon.nova-pro-v1:0":                                     {ContextWindow: 300000, MaxOutputTokens: 10000, SupportsVision: true},
 	"apac.anthropic.claude-sonnet-4-20250514-v1:0":                  {ContextWindow: 200000, MaxOutputTokens: 64000, SupportsVision: true},
 	"apodex/apodex-1.1-mini":                                        {ContextWindow: 262144, MaxOutputTokens: 262144},
-	"apodex/apodex-1.1-mini:free":                                   {ContextWindow: 262144, MaxOutputTokens: 235929},
 	"au.anthropic.claude-haiku-4-5-20251001-v1:0":                   {ContextWindow: 200000, MaxOutputTokens: 64000, SupportsVision: true},
 	"au.anthropic.claude-haiku-5-5":                                 {ContextWindow: 1000000, MaxOutputTokens: 128000, SupportsVision: true},
 	"au.anthropic.claude-opus-4-6-v1":                               {ContextWindow: 1000000, MaxOutputTokens: 128000, SupportsVision: true},
