@@ -19,7 +19,7 @@ func (t SendMessageTool) Name() string { return "send_message" }
 func (t SendMessageTool) Description() string {
 	return "Send an async message or lightweight task to another worker. " +
 		"For swarm teammates (tm-*): delivers to inbox; prefer swarm_task_create for tracked work. " +
-		"For sub-agents (agent-*): unreliable for new work — spawn a new agent instead. " +
+		"For sub-agents (agent-*): mailbox messages reach a still-running sub-agent at its next iteration; finished runs never see them - spawn a new agent for follow-up work. " +
 		"to='*' for best-effort broadcast (not tracked). Provide team_id when known."
 }
 func (t SendMessageTool) Parameters() json.RawMessage {
@@ -28,7 +28,7 @@ func (t SendMessageTool) Parameters() json.RawMessage {
 	"properties": {
 		"to": {
 			"type": "string",
-			"description": "Recipient ID or '*' for best-effort broadcast. Swarm teammate IDs start with 'tm-' (e.g., 'tm-2') and receive task-like inbox work. Sub-agent IDs start with 'agent-' and only receive mailbox messages; do not rely on this for assigning new work."
+			"description": "Recipient ID or '*' for best-effort broadcast. Swarm teammate IDs start with 'tm-' (e.g., 'tm-2') and receive task-like inbox work. Sub-agent IDs start with 'agent-'; messages are delivered into a still-running sub-agent's conversation at its next iteration. For new work, spawn a new agent instead."
 		},
 		"message": {
 			"type": "string",
@@ -118,14 +118,14 @@ func (t SendMessageTool) Execute(_ context.Context, input json.RawMessage) (Resu
 		if len(allSent) == 0 {
 			return Result{Content: "No running sub-agents or active teammates to broadcast to. Broadcast is best-effort and not tracked.\n"}, nil
 		}
-		return Result{Content: fmt.Sprintf("Best-effort broadcast sent to %d recipient(s): %s. Use teammate_results only for teammate outputs; sub-agent mailbox messages may not produce a response.\n", len(allSent), strings.Join(allSent, ", "))}, nil
+		return Result{Content: fmt.Sprintf("Best-effort broadcast sent to %d recipient(s): %s. Use teammate_results only for teammate outputs; sub-agent recipients only see mailbox messages if their run is still active.\n", len(allSent), strings.Join(allSent, ", "))}, nil
 	}
 
 	if t.Manager != nil {
 		if err := t.Manager.SendToAgent(args.To, msg); err != nil {
 			return Result{IsError: true, Content: err.Error()}, nil
 		}
-		return Result{Content: fmt.Sprintf("Mailbox message sent to sub-agent %s. This is best-effort only; spawned sub-agents are one-shot runs and may not consume mailbox messages or return a response. Use wait_agent for the original run result, or spawn_agent with a new full task for follow-up work.\n", args.To)}, nil
+		return Result{Content: fmt.Sprintf("Mailbox message sent to sub-agent %s (best-effort): if the run is still active it is delivered into the sub-agent's conversation at its next iteration; a finished run never consumes it. Use wait_agent for the original run result, or spawn_agent with a new full task for follow-up work.\n", args.To)}, nil
 	}
 
 	return Result{IsError: true, Content: fmt.Sprintf("Agent %q not found (no sub-agent manager configured)", args.To)}, nil

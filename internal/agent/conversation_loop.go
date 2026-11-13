@@ -72,6 +72,7 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 		}
 
 		a.injectSubagentCompletions()
+		a.injectMailboxMessages()
 		if err := a.maybeAutoCompact(ctx, onEvent, &st.transientCompactWarned); err != nil {
 			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
 			return err
