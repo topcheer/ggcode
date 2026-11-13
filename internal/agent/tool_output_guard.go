@@ -20,10 +20,24 @@ const (
 
 const toolHeadTailTruncationPrefix = "[... output truncated:"
 
+// guardReport records which constraint actually bound a guarded output so
+// the truncation advisory can tell the model WHY it lost content (#5268
+// item 3: context byte cap vs the tool's own line window).
+type guardReport struct {
+	Truncated bool
+	Limit     int // byte limit that bound (0 when not truncated)
+	Fill      float64
+}
+
 func guardToolOutput(content string, contextFill float64) string {
+	out, _ := guardToolOutputReport(content, contextFill)
+	return out
+}
+
+func guardToolOutputReport(content string, contextFill float64) (string, guardReport) {
 	if contextFill < contextFillModerate {
 		debug.Log("context-guard", "no-truncation fill=%.2f len=%d", contextFill, len(content))
-		return content
+		return content, guardReport{Truncated: false, Fill: contextFill}
 	}
 
 	limit := outputLimitModerate
@@ -36,12 +50,12 @@ func guardToolOutput(content string, contextFill float64) string {
 
 	if len(content) <= limit {
 		debug.Log("context-guard", "below-limit fill=%.2f limit=%d len=%d", contextFill, limit, len(content))
-		return content
+		return content, guardReport{Truncated: false, Fill: contextFill}
 	}
 
 	truncated := truncateHeadTail(content, limit)
 	debug.Log("context-guard", "truncated fill=%.2f limit=%d before=%d after=%d", contextFill, limit, len(content), len(truncated))
-	return truncated
+	return truncated, guardReport{Truncated: true, Limit: limit, Fill: contextFill}
 }
 
 func truncateHeadTail(s string, maxLen int) string {

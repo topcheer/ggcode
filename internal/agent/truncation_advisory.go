@@ -5,8 +5,27 @@ import (
 )
 
 func truncationAdvisory(toolName string, originalLen int) string {
+	return truncationAdvisoryWithGuard(toolName, originalLen, 0)
+}
+
+// truncationAdvisoryWithGuard renders the post-guard advisory. When the
+// guard byte limit is known (>0) the advice names the constraint that
+// actually bound (#5268 item 3): a context-pressure byte cap applied AFTER
+// the tool's own line window - so for read_file the remedy is a narrower
+// per-call window or the spilled full copy, not repeating the same
+// offset/limit call that was just truncated.
+func truncationAdvisoryWithGuard(toolName string, originalLen, guardLimit int) string {
 	sizeStr := formatBytes(originalLen)
 	var advice string
+
+	if guardLimit > 0 && (toolName == "read_file" || toolName == "multi_file_read") {
+		return "\n[Truncation advisory: output was " + sizeStr +
+			" and was cut by the context-pressure byte cap (" + formatBytes(guardLimit) +
+			"), not by your line window - the tool already applied offset/limit. " +
+			"Re-calling read_file with the same window returns the same bytes and truncates again. " +
+			"Either request a narrower window (smaller limit) per call, or read the spilled full copy " +
+			"named above with offset/limit to page through the omitted middle.]"
+	}
 
 	switch toolName {
 	case "run_command", "start_command", "read_command_output", "wait_command":
@@ -83,15 +102,22 @@ func truncationAdvisory(toolName string, originalLen int) string {
 }
 
 func advisoryForTruncation(toolName string, originalLen int) string {
+	return advisoryForTruncationGuard(toolName, originalLen, 0)
+}
 
+func advisoryForTruncationGuard(toolName string, originalLen, guardLimit int) string {
 	if originalLen < 8*1024 {
 		return ""
 	}
-	return truncationAdvisory(toolName, originalLen)
+	return truncationAdvisoryWithGuard(toolName, originalLen, guardLimit)
 }
 
 func withTruncationAdvisory(truncatedContent, toolName string, originalLen int) string {
-	advisory := advisoryForTruncation(toolName, originalLen)
+	return withTruncationAdvisoryGuard(truncatedContent, toolName, originalLen, 0)
+}
+
+func withTruncationAdvisoryGuard(truncatedContent, toolName string, originalLen, guardLimit int) string {
+	advisory := advisoryForTruncationGuard(toolName, originalLen, guardLimit)
 	if advisory == "" {
 		return truncatedContent
 	}

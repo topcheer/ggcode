@@ -1184,15 +1184,16 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			threshold := a.contextManager.AutoCompactThreshold()
 			if threshold > 0 {
 				fillRatio := float64(a.contextManager.TokenCount()) / float64(threshold)
-				if truncated := guardToolOutput(result.Content, fillRatio); len(truncated) < len(result.Content) {
-					debug.Log("agent", "tool output guarded: tool=%s tokens=%d threshold=%d fill=%.0f%% %d→%d bytes", tc.Name, a.contextManager.TokenCount(), threshold, fillRatio*100, len(result.Content), len(truncated))
-					guarded := truncated
+				guardedOut, guardRep := guardToolOutputReport(result.Content, fillRatio)
+				if guardRep.Truncated && len(guardedOut) < len(result.Content) {
+					debug.Log("agent", "tool output guarded: tool=%s tokens=%d threshold=%d fill=%.0f%% %d→%d bytes", tc.Name, a.contextManager.TokenCount(), threshold, fillRatio*100, len(result.Content), len(guardedOut))
+					guarded := guardedOut
 
 					if spillPath := a.outputOffload.spill(tc.Name, result.Content); spillPath != "" {
 						guarded += spillNotice(spillPath, len(result.Content))
 						debug.Log("agent", "tool output offloaded: tool=%s path=%s originalLen=%d", tc.Name, spillPath, len(result.Content))
 					}
-					result.Content = withTruncationAdvisory(guarded, tc.Name, len(result.Content))
+					result.Content = withTruncationAdvisoryGuard(guarded, tc.Name, len(result.Content), guardRep.Limit)
 					a.truncClaim.recordTruncation(tc.Name, iter)
 
 					a.errorPropagate.recordGuardedTruncation(tc.Name, result.Content)
