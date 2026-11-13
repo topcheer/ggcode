@@ -28,6 +28,8 @@ go build -tags goolm ./cmd/ggcode   # 重新编译使新 dist 生效
 - **设置页**：配置（JSON 编辑）、常规（主题/字号/模型/effort/mode/端点配置）、供应商、MCP、IM、A2A、会话、定时任务（只读）八域
 - **双主题**：暗色/亮色/跟随系统（主题选择先于首帧渲染，无闪白）；侧栏字号循环按钮（12/13/14/16px，localStorage 持久化）
 - **移动端适配**：右活动面板 lg 以下改为顶栏“☰ 面板”唤起的全屏抽屉（遮罩点击关闭）；设置页流式 padding + 网格小屏收单列；命令面板 92vw 封顶；触屏设备（pointer: coarse）输入框回车直发、提示文案同步切换，顶栏 ⌘ 钮等价唤起命令面板（无组合键场景）
+- **右栏可隐藏（桌面）**：lg+ 顶栏 pin 钮收起/展开右侧活动面板（状态持久化 localStorage `ggcode-pane-pinned`，收起后主聊天区占满全宽）；移动端 overlay 语义不受影响
+- **品牌标识**：侧栏品牌位、顶栏与 favicon 使用与 mobile app 同款 icon（`web/public/icon.png`）
 - **只读 API**：`GET /api/workspace/files?q=`（文件搜索）、`GET /api/cron/jobs`（当前 session 定时任务,真相源为活 scheduler 随会话切换;独立 webui 模式回落磁盘聚合）、`GET /api/checkpoints`（最近编辑检查点）
 
 ## 安全
