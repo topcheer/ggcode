@@ -81,12 +81,12 @@ type DaemonBridge struct {
 	// these to its webui server + TunnelCtl; TUI-hosted IM uses tuiSlashDeps).
 	etCtl      webui.EtunnelController
 	etLocalURL string
-	etConfig   func() (subdomain, token string)
+	etConfig   func() (subdomain, token, plan string)
 	etSave     func(subdomain, token string) error
 }
 
 // SetEtunnel wires the /et IM command to the host tunnel controller.
-func (b *DaemonBridge) SetEtunnel(ctl webui.EtunnelController, localURL string, cfgFn func() (subdomain, token string), saveFn func(subdomain, token string) error) {
+func (b *DaemonBridge) SetEtunnel(ctl webui.EtunnelController, localURL string, cfgFn func() (subdomain, token, plan string), saveFn func(subdomain, token string) error) {
 	b.etCtl = ctl
 	b.etLocalURL = localURL
 	b.etConfig = cfgFn
@@ -94,11 +94,11 @@ func (b *DaemonBridge) SetEtunnel(ctl webui.EtunnelController, localURL string, 
 }
 
 func (b *DaemonBridge) EtunnelControl(args []string) (string, error) {
-	var sub, tok string
+	var sub, tok, pln string
 	if b.etConfig != nil {
-		sub, tok = b.etConfig()
+		sub, tok, pln = b.etConfig()
 	}
-	return webui.ControlEt(b.etCtl, b.etLocalURL, sub, tok, b.etSave, args)
+	return webui.ControlEt(b.etCtl, b.etLocalURL, sub, tok, pln, b.etSave, args)
 }
 
 func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store session.Store, sess *session.Session) *DaemonBridge {

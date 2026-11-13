@@ -28,7 +28,7 @@ func (f *fakeEtCtl) TunnelURL() string { return f.url }
 func TestControlEtOnPlanDistinction(t *testing.T) {
 	// paid: /et setup saved a subdomain + token, then /et on
 	f := &fakeEtCtl{}
-	out, err := ControlEt(f, "http://127.0.0.1:1#token=x", "mydom", "sekret123", nil, []string{"on"})
+	out, err := ControlEt(f, "http://127.0.0.1:1#token=x", "mydom", "sekret123", "", nil, []string{"on"})
 	if err != nil {
 		t.Fatalf("paid on: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestControlEtOnPlanDistinction(t *testing.T) {
 	}
 	// free: no config, /et on keeps the free note
 	g := &fakeEtCtl{}
-	out, err = ControlEt(g, "http://127.0.0.1:1#token=x", "", "", nil, []string{"on"})
+	out, err = ControlEt(g, "http://127.0.0.1:1#token=x", "", "", "", nil, []string{"on"})
 	if err != nil || !strings.Contains(out, "free plan: 4h lifetime, 1 Mbps") {
 		t.Fatalf("free on must keep the free note: %q %v", out, err)
 	}
@@ -58,7 +58,7 @@ func TestControlEtOnPlanDistinction(t *testing.T) {
 // must NOT start any flow here. The usage line must mention login.
 func TestControlEtLoginGuidance(t *testing.T) {
 	f := &fakeEtCtl{}
-	out, err := ControlEt(f, "http://127.0.0.1:1#token=x", "", "", nil, []string{"login"})
+	out, err := ControlEt(f, "http://127.0.0.1:1#token=x", "", "", "", nil, []string{"login"})
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -69,41 +69,66 @@ func TestControlEtLoginGuidance(t *testing.T) {
 		t.Fatalf("login must not touch the tunnel controller")
 	}
 	// usage line (unknown sub) mentions login
-	out, _ = ControlEt(f, "", "", "", nil, []string{"bogus"})
+	out, _ = ControlEt(f, "", "", "", "", nil, []string{"bogus"})
 	if !strings.Contains(out, "login") {
 		t.Fatalf("usage line must mention login: %q", out)
+	}
+}
+
+// TestControlEtLoginFreePlanNotPaid pins the login-receipt plan override:
+// a free-tier account that ran /et login has a non-empty token (APIToken)
+// but must NOT be labeled paid — the receipt Plan wins. A paid receipt
+// (plan=pro) must surface the plan name.
+func TestControlEtLoginFreePlanNotPaid(t *testing.T) {
+	f := &fakeEtCtl{}
+	out, err := ControlEt(f, "http://127.0.0.1:1#token=x", "", "", "free", nil, []string{"on"})
+	if err != nil || !strings.Contains(out, "free plan: 4h lifetime, 1 Mbps") {
+		t.Fatalf("login free account on must keep the free note: %q %v", out, err)
+	}
+	if strings.Contains(out, "paid") {
+		t.Fatalf("login free account must NOT be labeled paid: %q", out)
+	}
+	// show with a free receipt
+	out, _ = ControlEt(f, "", "", "", "free", nil, []string{"show"})
+	if !strings.Contains(out, "plan: free") || strings.Contains(out, "paid") {
+		t.Fatalf("login free show must say plan: free: %q", out)
+	}
+	// paid receipt surfaces the plan name
+	out, _ = ControlEt(f, "", "", "", "pro", nil, []string{"show"})
+	if !strings.Contains(out, "paid (pro") {
+		t.Fatalf("paid receipt must surface the plan name: %q", out)
 	}
 }
 
 func TestControlEtShowOffSetup(t *testing.T) {
 	f := &fakeEtCtl{}
 	// show, inactive
-	out, err := ControlEt(f, "http://127.0.0.1:1#token=x", "", "", nil, nil)
+	out, err := ControlEt(f, "http://127.0.0.1:1#token=x", "", "", "", nil, nil)
 	if err != nil || !strings.Contains(out, "not active") {
 		t.Fatalf("show inactive: %q %v", out, err)
 	}
 	// on
-	out, err = ControlEt(f, "http://127.0.0.1:1#token=x", "", "", nil, []string{"on"})
+	out, err = ControlEt(f, "http://127.0.0.1:1#token=x", "", "", "", nil, []string{"on"})
 	if err != nil || !strings.Contains(out, "demo.example.com") || !strings.Contains(out, "#token=x") {
 		t.Fatalf("on: %q %v", out, err)
 	}
 	// off
-	out, err = ControlEt(f, "", "", "", nil, []string{"off"})
+	out, err = ControlEt(f, "", "", "", "", nil, []string{"off"})
 	if err != nil || !strings.Contains(out, "closed") || !f.stopped {
 		t.Fatalf("off: %q %v", out, err)
 	}
 	// setup persists via saveCfg
 	var gotSub, gotTok string
-	out, err = ControlEt(f, "", "", "", func(sub, tok string) error { gotSub, gotTok = sub, tok; return nil }, []string{"setup", "mydom", "sekret123"})
+	out, err = ControlEt(f, "", "", "", "", func(sub, tok string) error { gotSub, gotTok = sub, tok; return nil }, []string{"setup", "mydom", "sekret123"})
 	if err != nil || gotSub != "mydom" || gotTok != "sekret123" || !strings.Contains(out, "****t123") {
 		t.Fatalf("setup: %q %v %s/%s", out, err, gotSub, gotTok)
 	}
 	// nil ctl degrades gracefully
-	if out, _ := ControlEt(nil, "", "", "", nil, []string{"show"}); !strings.Contains(out, "not available") {
+	if out, _ := ControlEt(nil, "", "", "", "", nil, []string{"show"}); !strings.Contains(out, "not available") {
 		t.Fatalf("nil ctl: %q", out)
 	}
 	// usage for unknown sub
-	if out, _ := ControlEt(f, "", "", "", nil, []string{"bogus"}); !strings.Contains(out, "usage") {
+	if out, _ := ControlEt(f, "", "", "", "", nil, []string{"bogus"}); !strings.Contains(out, "usage") {
 		t.Fatalf("usage: %q", out)
 	}
 }

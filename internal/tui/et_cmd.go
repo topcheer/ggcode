@@ -71,6 +71,22 @@ func maskToken(tok string) string {
 	return "****" + tok[len(tok)-4:]
 }
 
+// etPlanLabel 计划标注：login 回执 Plan 为准（free 账户 login 后 token 非空
+// 但并非付费，不得凭 token 误标 paid）；无回执（纯 /et setup 用户）退回
+// #5395 启发式：subdomain/token 任一非空即付费。
+func etPlanLabel(subdomain, token, planReceipt string) string {
+	if planReceipt != "" {
+		if planReceipt == "free" {
+			return "free"
+		}
+		return "paid(" + planReceipt + " 子域名=" + subdomain + " token=" + maskToken(token) + ")"
+	}
+	if subdomain != "" || token != "" {
+		return "paid(子域名=" + subdomain + " token=" + maskToken(token) + ")"
+	}
+	return "free"
+}
+
 // handleEtCommand /et [on|off|show|setup <subdomain> <token>|login]
 func (m Model) handleEtCommand(parts []string) tea.Cmd {
 	sub := ""
@@ -120,10 +136,7 @@ func (m Model) handleEtCommand(parts []string) tea.Cmd {
 			}
 		}
 		cfg := m.config.ETunnel
-		plan := "free"
-		if cfg.Subdomain != "" || cfg.Token != "" {
-			plan = "paid(子域名=" + cfg.Subdomain + " token=" + maskToken(cfg.Token) + ")"
-		}
+		plan := etPlanLabel(cfg.Subdomain, cfg.Token, cfg.Plan)
 		if u := m.webuiTunnel.TunnelURL(); u != "" {
 			m.chatWriteSystem(nextSystemID(), "⬢ et tunnel active: "+u+suffix+"\n计划: "+plan)
 		} else {
@@ -160,9 +173,15 @@ func (m Model) etLoginStart() tea.Cmd {
 
 	authCh := make(chan string, 1)
 	doneCh := make(chan etLoginDoneMsg, 1)
+	// #5561: SDK 在 openBrowser 回调之前有三条失败路径（loopback bind、
+	// auth start 网络失败、空 AuthURL），回调不触发时 authCh 永无消息。
+	// quitCh 在 Login 返回后 close，给阻塞读一个退出路径，避免 bubbletea
+	// Cmd goroutine 永久泄漏。
+	quitCh := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		defer cancel()
+		defer close(quitCh)
 		creds, err := etunnel.Login(ctx, etLoginServer(), func(authURL string) error {
 			select {
 			case authCh <- authURL:
@@ -183,7 +202,14 @@ func (m Model) etLoginStart() tea.Cmd {
 		doneCh <- etLoginDoneMsg{creds: creds, err: err}
 	}()
 	return tea.Batch(
-		func() tea.Msg { return etLoginAuthMsg{authURL: <-authCh} },
+		func() tea.Msg {
+			select {
+			case u := <-authCh:
+				return etLoginAuthMsg{authURL: u}
+			case <-quitCh: // #5561: Login 已返回且回调未触发——退出而非永久阻塞
+				return nil
+			}
+		},
 		func() tea.Msg { return <-doneCh },
 	)
 }
@@ -249,13 +275,11 @@ func (m Model) etTunnelOn() tea.Cmd {
 		return nil
 	}
 	localAddr := u.Host
-	// #5395: 与 show 分支及 StartTunnelOpts 的付费语义一致——subdomain/token
-	// 任一非空即付费路径（Options 直接透传，见 tunnel_ctl.go）。
-	plan := ""
-	if cfg.Subdomain != "" || cfg.Token != "" {
-		plan = "paid(子域名=" + cfg.Subdomain + " token=" + maskToken(cfg.Token) + ")"
-	}
-	if plan != "" {
+	// #5395: 与 show 分支及 StartTunnelOpts 的付费语义一致；login 回执 Plan
+	// 存在时以它为准（free 登录账户 token 非空但走免费路径，不误标 paid）。
+	plan := etPlanLabel(cfg.Subdomain, cfg.Token, cfg.Plan)
+	paid := strings.HasPrefix(plan, "paid")
+	if paid {
 		m.chatWriteSystem(nextSystemID(), "⬢ Opening et tunnel via custom subdomain \""+cfg.Subdomain+"\" …")
 	} else {
 		m.chatWriteSystem(nextSystemID(), "⬢ Opening et tunnel via free plan (random subdomain, ~seconds)。付费定制域名: /et setup <子域名> <token>")
@@ -263,6 +287,11 @@ func (m Model) etTunnelOn() tea.Cmd {
 	return func() tea.Msg {
 		tunnelURL, started, terr := m.webuiTunnel.StartTunnelOpts(localAddr, cfg.Subdomain, cfg.Token)
 		debug.Log("tui", "et tunnel ready: %s started=%v err=%v", tunnelURL, started, terr)
-		return etTunnelReadyMsg{url: tunnelURL, suffix: suffix, err: terr, started: started, plan: plan}
+		// readyMsg.plan 语义：""=free（沿用 4h/1Mbps free 注），非空=已标注计划
+		readyPlan := ""
+		if paid {
+			readyPlan = plan
+		}
+		return etTunnelReadyMsg{url: tunnelURL, suffix: suffix, err: terr, started: started, plan: readyPlan}
 	}
 }
