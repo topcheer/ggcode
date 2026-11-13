@@ -5,10 +5,13 @@ import (
 	"sync"
 )
 
-// searchHealth tracks consecutive empty-result web_search calls within this
-// process (#5578). After a threshold of consecutive empty results, results
-// carry an explicit degradation advisory so downstream agents stop blind
-// retries and switch to web_fetch on known canonical URLs instead.
+// searchHealth tracks consecutive backend-level empty-result web_search
+// calls within this process (#5578). "Empty" means the backend returned
+// zero results BEFORE domain filtering (#5580): a domain filter that
+// empties a non-empty backend result set is a backend hit, never counted
+// toward the streak. After a threshold of consecutive backend empties,
+// results carry an explicit degradation advisory so downstream agents stop
+// blind retries and switch to web_fetch on known canonical URLs instead.
 type searchHealth struct {
 	mu                 sync.Mutex
 	consecutiveEmpties int
@@ -26,9 +29,21 @@ func resetSearchHealth() {
 	searchDegrade.advising = false
 }
 
-// recordSearchEmpty increments the consecutive-empty counter after an
-// empty-result call and returns a degradation advisory once the threshold is
-// crossed (stable text afterwards while the streak continues).
+// recordSearchOutcome feeds the backend-level outcome of one web_search
+// call into the degrade counter (#5580). backendTotal is the result count
+// BEFORE domain filtering: >0 counts as a hit (even if the domain filter
+// then empties the set), 0 counts as a backend empty.
+func recordSearchOutcome(backendTotal int) string {
+	if backendTotal == 0 {
+		return recordSearchEmpty()
+	}
+	return recordSearchHit()
+}
+
+// recordSearchEmpty increments the consecutive-empty counter after a
+// backend-level empty-result call (zero results before domain filtering)
+// and returns a degradation advisory once the threshold is crossed
+// (stable text afterwards while the streak continues).
 func recordSearchEmpty() string {
 	searchDegrade.mu.Lock()
 	defer searchDegrade.mu.Unlock()
@@ -43,8 +58,9 @@ func recordSearchEmpty() string {
 }
 
 // recordSearchHit resets the consecutive-empty counter after a
-// result-bearing call; if the backend had been flagged degraded, emit a
-// recovery note exactly once.
+// result-bearing backend call (backend returned >=1 pre-filter result);
+// if the backend had been flagged degraded, emit a recovery note exactly
+// once.
 func recordSearchHit() string {
 	searchDegrade.mu.Lock()
 	defer searchDegrade.mu.Unlock()

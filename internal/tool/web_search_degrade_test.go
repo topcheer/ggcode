@@ -62,3 +62,45 @@ func TestSearchDegrade_HitResetsCounter(t *testing.T) {
 		t.Errorf("counter should reset after hit, got early advisory: %q", adv)
 	}
 }
+
+// #5580: a domain filter that empties a non-empty backend result set is a
+// backend HIT. recordSearchOutcome(backendTotal>0) must take the hit path
+// (reset the streak), not advance the empty counter.
+func TestSearchDegrade_DomainFilterEmptyIsBackendHit(t *testing.T) {
+	resetSearchHealth()
+	// prime the streak with two real backend empties
+	recordSearchOutcome(0)
+	recordSearchOutcome(0)
+	// backend returned 3 results; allowed_domains filter dropped them all
+	// -> filtered set is empty, but this is a backend hit
+	if adv := recordSearchOutcome(3); adv != "" {
+		t.Errorf("filtered-empty hit below threshold must be silent, got: %q", adv)
+	}
+	// streak was reset: two fresh backend empties must stay below threshold
+	if adv := recordSearchOutcome(0); adv != "" {
+		t.Errorf("streak must have been reset by the filtered-empty hit, got early advisory: %q", adv)
+	}
+	if adv := recordSearchOutcome(0); adv != "" {
+		t.Errorf("streak must have been reset by the filtered-empty hit, got early advisory: %q", adv)
+	}
+	// third backend empty crosses the threshold
+	if adv := recordSearchOutcome(0); !strings.Contains(adv, "[search-degraded]") {
+		t.Errorf("third consecutive backend empty must advise, got: %q", adv)
+	}
+}
+
+// #5580 regression shape: while advising, a filtered-empty call (backend
+// hit) emits the recovery note exactly once - the backend demonstrably works.
+func TestSearchDegrade_FilteredEmptyRecoversStreak(t *testing.T) {
+	resetSearchHealth()
+	recordSearchOutcome(0)
+	recordSearchOutcome(0)
+	recordSearchOutcome(0)        // advising now
+	rec := recordSearchOutcome(2) // backend results, all filtered away
+	if !strings.Contains(rec, "recovered") {
+		t.Errorf("filtered-empty backend hit must emit one-time recovery note, got: %q", rec)
+	}
+	if rec2 := recordSearchOutcome(2); rec2 != "" {
+		t.Errorf("recovery note must fire exactly once, got again: %q", rec2)
+	}
+}
