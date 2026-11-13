@@ -367,6 +367,13 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 			continue
 		}
 		debug.Log("agent", "Iteration %d: tool_calls=%d", i+1, len(toolCalls))
+		// #5549 audit: the empty-counter reset used to live in the main loop
+		// body, so ANY non-empty iteration - including productive tool turns -
+		// reset the consecutive count. The knife-2 move left the reset inside
+		// handleNoToolResponse, which tool turns never reach; interleaved
+		// empty/tool turns then accumulated toward the abort-at-3 threshold
+		// without actually being consecutive. Restore the reset here.
+		st.consecutiveEmptyResponses = 0
 		a.contextManager.Add(resp.Message)
 
 		hedgingHasMutation := false
