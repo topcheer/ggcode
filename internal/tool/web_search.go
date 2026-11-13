@@ -116,6 +116,12 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	results := parseDDGResults(string(body), fetchLimit)
 
+	// #5580: backend-level result count, captured BEFORE domain filtering.
+	// The degrade counter must judge backend health on this, not on the
+	// post-filter count: a domain filter that empties the set is a backend
+	// hit, not a backend failure.
+	backendTotal := len(results)
+
 	results = filterByDomain(results, args.AllowedDomains, args.BlockedDomains)
 
 	results, bestScore := assessSearchResultsScored(args.Query, results, args.AllowedDomains)
@@ -123,14 +129,9 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	total := len(results)
 
 	// #5578: track consecutive empty (backend-level) results for explicit
-	// degradation advisories. Domain-filter empties (total>0, filtered 0)
-	// count as backend hits, not backend failures.
-	var degradeAdvisory string
-	if total == 0 {
-		degradeAdvisory = recordSearchEmpty()
-	} else {
-		degradeAdvisory = recordSearchHit()
-	}
+	// degradation advisories. #5580: judged on backendTotal so domain-filter
+	// empties (backendTotal>0, filtered 0) count as backend hits.
+	degradeAdvisory := recordSearchOutcome(backendTotal)
 
 	if len(results) > args.MaxResults {
 		results = results[:args.MaxResults]
