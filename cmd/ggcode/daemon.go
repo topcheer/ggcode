@@ -1405,7 +1405,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 		// /et over IM inbound (daemon previously did not host the command).
 		bridge.SetEtunnel(etCtl, url,
-			func() (string, string) { return cfg.ETunnel.Subdomain, cfg.ETunnel.Token },
+			func() (string, string, string) { return cfg.ETunnel.Subdomain, cfg.ETunnel.Token, cfg.ETunnel.Plan },
 			func(subdomain, token string) error {
 				cfg.ETunnel.Subdomain = subdomain
 				cfg.ETunnel.Token = token

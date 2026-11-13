@@ -257,7 +257,7 @@ func (d tuiSlashDeps) EtunnelControl(args []string) (string, error) {
 		m.config.ETunnel.Token = token
 		return m.config.SaveScoped(m.configSaveScope)
 	}
-	return webui.ControlEt(ctl, m.webuiURL, m.config.ETunnel.Subdomain, m.config.ETunnel.Token, save, args)
+	return webui.ControlEt(ctl, m.webuiURL, m.config.ETunnel.Subdomain, m.config.ETunnel.Token, m.config.ETunnel.Plan, save, args)
 }
 
 func (d tuiSlashDeps) SessionCostSummary() (string, error) {

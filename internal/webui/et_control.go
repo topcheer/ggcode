@@ -23,7 +23,7 @@ type EtunnelController interface {
 //	args: subcommand tokens after "/et" (may be empty for show).
 //	saveCfg persists a paid-plan config change (subdomain, token); may be nil
 //	for read-only hosts, in which case setup returns an error.
-func ControlEt(ctl EtunnelController, localURL, subdomain, token string, saveCfg func(subdomain, token string) error, args []string) (string, error) {
+func ControlEt(ctl EtunnelController, localURL, subdomain, token, planReceipt string, saveCfg func(subdomain, token string) error, args []string) (string, error) {
 	sub := ""
 	if len(args) > 0 {
 		sub = strings.ToLower(strings.TrimSpace(args[0]))
@@ -44,6 +44,14 @@ func ControlEt(ctl EtunnelController, localURL, subdomain, token string, saveCfg
 		return "****" + tok[len(tok)-4:]
 	}
 	plan := func() string {
+		// login 回执 Plan 为准（free 登录账户 token 非空但非付费）；无回执
+		// （纯 setup 用户）退回 #5395 启发式。
+		if planReceipt != "" {
+			if planReceipt == "free" {
+				return "free"
+			}
+			return "paid (" + planReceipt + " subdomain=" + subdomain + " token=" + mask(token) + ")"
+		}
 		if subdomain != "" || token != "" {
 			return "paid (subdomain=" + subdomain + " token=" + mask(token) + ")"
 		}
@@ -107,7 +115,7 @@ func ControlEt(ctl EtunnelController, localURL, subdomain, token string, saveCfg
 		// free-plan limits unconditionally misleads paid users. Reuse the
 		// same plan() helper the show branch uses.
 		planSuffix := "  (free plan: 4h lifetime, 1 Mbps)"
-		if subdomain != "" || token != "" {
+		if strings.HasPrefix(plan(), "paid") {
 			planSuffix = "\nplan: " + plan()
 		}
 		return "et tunnel active: " + tunnelURL + tokenSuffix() + planSuffix, nil
