@@ -1420,6 +1420,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		// token rides in the #fragment).
 		if etAuto {
 			go func(localURL string) {
+				defer safego.Recover("daemon.etunnel-autostart")
 				msg, err := webui.ControlEt(etCtl, localURL,
 					cfg.ETunnel.Subdomain, cfg.ETunnel.Token, cfg.ETunnel.Plan,
 					nil, []string{"on"})
