@@ -57,7 +57,16 @@ func (m Model) handleEtTunnelReadyMsg(msg etTunnelReadyMsg) (tea.Model, tea.Cmd)
 	if msg.plan != "" {
 		planNote = "\n计划: " + msg.plan
 	}
-	m.chatWriteSystem(nextSystemID(), prefix+": "+msg.url+msg.suffix+planNote)
+	fullURL := msg.url + msg.suffix
+	m.chatWriteSystem(nextSystemID(), prefix+": "+fullURL+planNote+"\n扫码可用手机打开（Esc 关闭二维码）")
+	// QR 内容=完整含 #token= 的 URL（鉴权随码，手机直接打开零输入）。
+	// 复用通用 QR overlay（与 IM 面板同机制），无新增渲染路径。
+	m.openQROverlayDirect(
+		m.t("panel.qr.title")+" — et tunnel",
+		m.t("panel.qr.scan_hint"),
+		renderContactQRCode(fullURL),
+		fullURL,
+	)
 	return m, nil
 }
 
