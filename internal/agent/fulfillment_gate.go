@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -139,7 +140,7 @@ func isInformationalRequest(prompt string) bool {
 
 	actionCount := 0
 	for _, verb := range actionVerbs {
-		if containsWord(prompt, verb) {
+		if containsWordOutsideRefs(prompt, verb) {
 			actionCount++
 		}
 	}
@@ -159,7 +160,7 @@ func isReadOnlyTask(prompt string) bool {
 
 	actionCount := 0
 	for _, verb := range actionVerbs {
-		if containsWord(prompt, verb) {
+		if containsWordOutsideRefs(prompt, verb) {
 			actionCount++
 		}
 	}
@@ -184,6 +185,92 @@ func containsWord(text, word string) bool {
 	return false
 }
 
+// containsWordOutsideRefs reports whether word appears as a standalone word
+// OUTSIDE quoted spans and bracketed issue-reference spans. Verbs inside
+// quotes (e.g. quoted commit titles) or parentheses carrying #NNNN
+// references are quoted material, not instructions aimed at the current
+// session (#5554).
+func containsWordOutsideRefs(text, word string) bool {
+	lower := strings.ToLower(text)
+	w := strings.ToLower(word)
+	idx := strings.Index(lower, w)
+	for idx >= 0 {
+		end := idx + len(w)
+		leftOK := idx == 0 || !isAlphaNum(text[idx-1])
+		rightOK := end >= len(text) || !isAlphaNum(text[end])
+		if leftOK && rightOK && !inReferenceContext(text, idx, end) {
+			return true
+		}
+		next := strings.Index(lower[end:], w)
+		if next < 0 {
+			break
+		}
+		idx = end + next
+	}
+	return false
+}
+
+var issueRefRe = regexp.MustCompile(`#\d{2,6}`)
+
+// inReferenceContext reports whether text[start:end] sits inside a quoted
+// span (straight or curly single/double quotes) or inside a bracket span
+// that contains an #NNNN issue reference. Both carry verbs belonging to
+// foreign material, not to the current session (#5554).
+func inReferenceContext(text string, start, end int) bool {
+	for _, q := range []string{"'", "\""} {
+		if insideSameQuoteSpan(text, q, start) {
+			return true
+		}
+	}
+	for _, pair := range [2][2]string{{"“", "”"}, {"‘", "’"}} {
+		if insideQuotePairSpan(text, pair[0], pair[1], start) {
+			return true
+		}
+	}
+	for _, pair := range [2][2]string{{"(", ")"}, {"（", "）"}} {
+		if insideBracketWithRef(text, pair[0], pair[1], start, end) {
+			return true
+		}
+	}
+	return false
+}
+
+// insideSameQuoteSpan: odd count of the same quote char before start means
+// the position sits between an open and close of that quote type.
+func insideSameQuoteSpan(text, q string, start int) bool {
+	return strings.Count(text[:start], q)%2 == 1
+}
+
+// insideQuotePairSpan: an unclosed opening curly quote exists before start.
+func insideQuotePairSpan(text, open, close string, start int) bool {
+	lastOpen := strings.LastIndex(text[:start], open)
+	if lastOpen < 0 {
+		return false
+	}
+	return strings.Index(text[lastOpen+len(open):start], close) < 0
+}
+
+// insideBracketWithRef: start..end lies inside a bracket span whose full
+// span contains an #NNNN issue reference (e.g. a fullwidth-bracket
+// citation quoting a commit title). Bare parentheses without a reference
+// are NOT exempt, so plain
+// instructions like "fix (urgent) #1234" still count.
+func insideBracketWithRef(text, open, close string, start, end int) bool {
+	lastOpen := strings.LastIndex(text[:start], open)
+	if lastOpen < 0 {
+		return false
+	}
+	if strings.Index(text[lastOpen:start], close) >= 0 {
+		return false
+	}
+	nextClose := strings.Index(text[end:], close)
+	if nextClose < 0 {
+		return false
+	}
+	span := text[lastOpen : end+nextClose+len(close)]
+	return issueRefRe.MatchString(span)
+}
+
 func isAlphaNum(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
 }
@@ -192,7 +279,7 @@ func detectActions(prompt string) []string {
 	var found []string
 	seen := make(map[string]bool)
 	for _, verb := range actionVerbs {
-		if containsWord(prompt, verb) && !seen[verb] {
+		if containsWordOutsideRefs(prompt, verb) && !seen[verb] {
 			found = append(found, verb)
 			seen[verb] = true
 		}
