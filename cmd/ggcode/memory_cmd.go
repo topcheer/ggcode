@@ -74,7 +74,7 @@ func runMemorySweepCmd(cmd *cobra.Command, args []string) error {
 		}
 		return blocksToText(resp.Message.Content), nil
 	})
-	opts := agentruntime.SweepOptions{AuditBase: am.Dir()}
+	opts := agentruntime.SweepOptions{AuditBase: am.Dir(), DryRunRounds: cfg.MemoryCuratorSweepDryRunRounds(), ForceDryRun: cfg.MemoryCuratorSweepForceDryRun()}
 	if gate {
 		rep, ok, gerr := agentruntime.RunMemorySweepGate(context.Background(), am, judge, opts)
 		if gerr != nil {
@@ -100,8 +100,18 @@ func runMemorySweepCmd(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(os.Stdout, "sweep: concurrency slot held by another instance - skipped")
 		return nil
 	}
-	fmt.Fprintf(os.Stdout, "sweep: %d entries judged, %d applied, %d kept, %d noop, %d deferred (audit: %s)\n",
-		rep.Entries, rep.Applied, rep.Kept, rep.Noop, len(rep.Deferred), rep.AuditPath)
+	fmt.Fprintf(os.Stdout, "sweep: %d entries judged, %d applied, %d kept, %d noop, %d deferred (audit: %s)%s",
+		rep.Entries, rep.Applied, rep.Kept, rep.Noop, len(rep.Deferred), rep.AuditPath, dryRunSuffix(rep))
 	_ = debug.Log // keep debug linked for the manual path
 	return nil
+}
+
+// dryRunSuffix renders the #5527 dry-run observation state for the manual
+// sweep command so operators can tell observe-only rounds from applied
+// ones at a glance.
+func dryRunSuffix(rep *agentruntime.SweepReport) string {
+	if rep == nil || !rep.DryRun {
+		return "\n"
+	}
+	return " [DRY-RUN: verdict table only, store untouched (#5527)]\n"
 }

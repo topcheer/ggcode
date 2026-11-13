@@ -380,6 +380,15 @@ type MemoryCuratorConfig struct {
 	// adjudication round over global memory). Defaults to false (off);
 	// read live at each trigger so toggling takes effect without restart.
 	Sweep *bool `yaml:"sweep,omitempty" json:"sweep,omitempty"`
+	// DryRunRounds is the #5527 opt-in observation window: the first N
+	// sweep rounds produce a verdict table only (audit records marked
+	// dry_run) with zero store mutation; round N+1 onward auto-applies.
+	// Defaults to 0 (nil) = existing behavior byte-identical.
+	DryRunRounds *int `yaml:"dry_run_rounds,omitempty" json:"dry_run_rounds,omitempty"`
+	// DryRun force-pins observe-only mode for every round regardless of
+	// the rounds window (#5527 debug surface). Unsetting returns to the
+	// schedule.
+	DryRun *bool `yaml:"dry_run,omitempty" json:"dry_run,omitempty"`
 }
 
 // MemoryCuratorEnabled reports whether the memory curator should start.
@@ -398,6 +407,29 @@ func (c *Config) MemoryCuratorSweepEnabled() bool {
 		return false
 	}
 	return *c.Memory.Curator.Sweep
+}
+
+// MemoryCuratorSweepDryRunRounds returns the #5527 opt-in observation
+// window: the first N sweep rounds are observe-only (verdict table, audit
+// marked dry_run, zero store mutation). 0 (nil/negative) = off, existing
+// behavior byte-identical.
+func (c *Config) MemoryCuratorSweepDryRunRounds() int {
+	if c == nil || c.Memory.Curator.DryRunRounds == nil {
+		return 0
+	}
+	if *c.Memory.Curator.DryRunRounds < 0 {
+		return 0
+	}
+	return *c.Memory.Curator.DryRunRounds
+}
+
+// MemoryCuratorSweepForceDryRun reports whether the #5527 debug force-pin
+// is set: every sweep round is observe-only until the flag is unset.
+func (c *Config) MemoryCuratorSweepForceDryRun() bool {
+	if c == nil || c.Memory.Curator.DryRun == nil {
+		return false
+	}
+	return *c.Memory.Curator.DryRun
 }
 
 type LSPServerConfig struct {

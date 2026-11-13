@@ -411,6 +411,9 @@ memory:
   curator:
     enabled: true         # resident background curator (default true)
     model: ""             # curator LLM; empty = current provider default model
+    sweep: false          # #5512 weekly autonomous adjudication sweep (default off)
+    dry_run_rounds: 0     # #5527 observation window (default 0 = off)
+    dry_run: false        # #5527 debug force-pin (default false)
 ```
 
 - The curator watches `save_memory`/`delete_memory` events, batches them
@@ -423,6 +426,17 @@ memory:
   every 6h), so large stores converge instead of only curating new
   deltas. Consecutive failures trip a 10-minute breaker; nothing is
   retried on its own.
+- `sweep: true` opts into the #5512 autonomous weekly adjudication round
+  over global memory (`ggcode memory sweep` runs one on demand,
+  `--gate` the double-run go-live self-certification). `dry_run_rounds: N`
+  (#5527) is the opt-in observation window: the first N sweep rounds
+  produce a verdict table only — full five-action schema with rationale,
+  written to `sweep-audit.jsonl` with `dry_run:true` per record — while
+  the store stays untouched; round N+1 onward auto-applies. The rounds
+  count persists in `sweep-state.json` and observe-only rounds still
+  count toward sweep scheduling. `dry_run: true` force-pins observe-only
+  for every round (unbounded) until unset. Both default off; the flag is
+  read live at each tick.
 
 ## Environment Variables
 
