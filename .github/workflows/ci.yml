@@ -62,8 +62,14 @@ jobs:
           corepack enable
           # #5366: the pnpm project lives in web/ (no root manifest) - mirror
           # the Makefile webui-build target instead of running at repo root.
-          corepack pnpm -C web install --frozen-lockfile --prefer-offline
-          corepack pnpm -C web run build
+          # Run corepack FROM web/ so it reads web/package.json's
+          # packageManager pin; from the repo root corepack resolves its
+          # default pnpm (12.18.0), whose binary download fails on the
+          # current runner image (silent exit-1 kills, seen on #5568).
+          cd web
+          corepack pnpm install --frozen-lockfile --prefer-offline
+          corepack pnpm run build
+          cd ..
           if ! git diff --quiet -- internal/webui/dist; then
             echo "::error::internal/webui/dist is stale: the committed dist does not match a rebuild of web/. Run 'make build-all' (webui-build + webui-sync-artifacts) and commit the refreshed artifacts."
             git diff --stat -- internal/webui/dist
