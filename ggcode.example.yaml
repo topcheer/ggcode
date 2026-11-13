@@ -714,6 +714,12 @@ memory:
                           # weekly adjudication round over global memory + manual
                           # `ggcode memory sweep [--gate]`; read live at each tick,
                           # so toggling needs no restart
+    dry_run_rounds: 0     # #5527 opt-in observation window (default 0 = off): the
+                          # first N sweep rounds produce a verdict table ONLY
+                          # (audit marked dry_run:true, zero store mutation); round
+                          # N+1 onward auto-applies; read live at each tick
+    dry_run: false        # #5527 debug force-pin (default false): every round is
+                          # observe-only (unbounded) until unset — no N-window
 
 hooks:
   # Before user message reaches the LLM - sync, can block.

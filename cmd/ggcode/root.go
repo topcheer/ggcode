@@ -761,7 +761,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 					}
 					return blocksToText(resp.Message.Content), nil
 				})
-				if _, serr := agentruntime.RunMemorySweep(context.Background(), autoMem, judge, agentruntime.SweepOptions{AuditBase: autoMem.Dir()}); serr != nil {
+				if _, serr := agentruntime.RunMemorySweep(context.Background(), autoMem, judge, agentruntime.SweepOptions{
+					AuditBase:    autoMem.Dir(),
+					DryRunRounds: cfg.MemoryCuratorSweepDryRunRounds(),
+					ForceDryRun:  cfg.MemoryCuratorSweepForceDryRun(),
+				}); serr != nil {
 					debug.Log("root", "memory sweep round failed: %v", serr)
 				}
 			}
