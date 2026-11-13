@@ -308,6 +308,21 @@ func (s *Server) routes() {
 		}))
 	}
 
+	// dist 根级静态文件(icon.png/favicon):web/index.html 以绝对路径引用,
+	// 不在 /assets/ 子树内;无显式路由时被 "/" catch-all 的 serveSPA 以
+	// text/html 兜底,浏览器按 Strict MIME 拒绝(favicon 静默失效、隧道
+	// 域名上 /icon.png 返回空 HTML)。从嵌入 FS 直读并应答 png MIME。
+	s.mux.HandleFunc("/icon.png", func(w http.ResponseWriter, r *http.Request) {
+		data, err := fs.ReadFile(spafs, "icon.png")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(data)
+	})
+
 	s.mux.HandleFunc("/", s.serveSPA)
 
 	a := s.requireAuth
