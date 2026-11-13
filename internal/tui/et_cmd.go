@@ -12,6 +12,7 @@ import (
 	etunnel "github.com/topcheer/etunnel/sdk"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // /et 命令族(顶级命令,与 /webui 解耦):etunnel 隧道生命周期管理。
@@ -179,7 +180,7 @@ func (m Model) etLoginStart() tea.Cmd {
 	// Cmd goroutine 永久泄漏。
 	quitCh := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
+	safego.Go("tui.etLogin", func() {
 		defer cancel()
 		defer close(quitCh)
 		creds, err := etunnel.Login(ctx, etLoginServer(), func(authURL string) error {
@@ -200,7 +201,7 @@ func (m Model) etLoginStart() tea.Cmd {
 		})
 		debug.Log("tui", "et login done: plan=%s err=%v", credsPlan(creds), err)
 		doneCh <- etLoginDoneMsg{creds: creds, err: err}
-	}()
+	})
 	return tea.Batch(
 		func() tea.Msg {
 			select {
