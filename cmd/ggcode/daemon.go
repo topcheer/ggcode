@@ -29,6 +29,7 @@ import (
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/qrcode"
 	"github.com/topcheer/ggcode/internal/restart"
 	"github.com/topcheer/ggcode/internal/runfile"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -41,7 +42,7 @@ import (
 )
 
 func newDaemonCmd(cfgFile *string) *cobra.Command {
-	var bypassFlag, followFlag, backgroundFlag, tunnelFlag, fullLoadFlag bool
+	var bypassFlag, followFlag, backgroundFlag, tunnelFlag, fullLoadFlag, etunnelFlag bool
 	var resumeID string
 
 	cmd := &cobra.Command{
@@ -80,7 +81,7 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 			newSession, _ := cmd.Flags().GetBool("new-session")
 			if daemonized, _ := cmd.Flags().GetBool("__daemonized"); daemonized {
 				noIM, _ := cmd.Flags().GetBool("__no-im")
-				return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, true, noIM, tunnelFlag, newSession, fullLoadFlag)
+				return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, true, noIM, tunnelFlag, newSession, fullLoadFlag, etunnelFlag)
 			}
 
 			if backgroundFlag {
@@ -88,12 +89,13 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 			}
 
 			noIM, _ := cmd.Flags().GetBool("__no-im")
-			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, false, noIM, tunnelFlag, newSession, fullLoadFlag)
+			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, false, noIM, tunnelFlag, newSession, fullLoadFlag, etunnelFlag)
 		},
 	}
 
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops)")
 	cmd.Flags().BoolVar(&followFlag, "follow", false, "auto-enable follow mode")
+	cmd.Flags().BoolVar(&etunnelFlag, "etunnel", false, "auto-start the et WebUI tunnel after init and print URL + QR (works with --follow)")
 	cmd.Flags().BoolVarP(&backgroundFlag, "background", "b", false, "start in background")
 	cmd.Flags().BoolVar(&tunnelFlag, "tunnel", false, "start with mobile tunnel (QR code for GGCode Mobile)")
 	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID; use --resume-picker for interactive selection")
@@ -151,7 +153,7 @@ func runtimeBypassActive(policy permission.PermissionPolicy, mode permission.Per
 	return mode == permission.BypassMode
 }
 
-func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool, newSession bool, fullLoad bool) error {
+func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool, newSession bool, fullLoad bool, etAuto bool) error {
 	// #5367: post-exec self-check, daemon side. If this process was started
 	// by a restart exec, verify the running image matches the recorded intent
 	// and report the actually-running revision (loud banner on mismatch).
@@ -1412,6 +1414,29 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				return cfg.Save()
 			})
 		fmt.Fprintf(os.Stderr, "\x1b[34m\u2B21 WebUI:\x1b[0m \x1b[32m%s\x1b[0m\r\n", url)
+
+		// --etunnel: auto-start the public WebUI tunnel after init and print
+		// the URL plus a scannable terminal QR (mobile opens it directly,
+		// token rides in the #fragment).
+		if etAuto {
+			go func(localURL string) {
+				msg, err := webui.ControlEt(etCtl, localURL,
+					cfg.ETunnel.Subdomain, cfg.ETunnel.Token, cfg.ETunnel.Plan,
+					nil, []string{"on"})
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\x1b[33m\u26A0 --etunnel: %v\x1b[0m\r\n", err)
+					return
+				}
+				fmt.Fprintf(os.Stderr, "\x1b[34m\u2B21 %s\x1b[0m\r\n", msg)
+				fullURL := etCtl.TunnelURL()
+				if tk := webuiSrv.Token(); tk != "" && fullURL != "" {
+					fullURL += "#token=" + tk
+				}
+				if qr, qerr := qrcode.RenderCompact(fullURL); qerr == nil {
+					fmt.Fprintf(os.Stderr, "%s\r\n\x1b[8m(scan to open the WebUI from mobile)\x1b[0m\r\n", qr)
+				}
+			}(url)
+		}
 
 		runfile.Write(runfile.PortFile{
 			Addr:      actualAddr,
