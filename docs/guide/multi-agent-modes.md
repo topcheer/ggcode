@@ -60,6 +60,7 @@ By default the sub-agent edits files directly in the parent's working tree, whic
 - Worktrees and branches are **kept after the run** (never auto-removed) — clean them up with `git worktree remove` once merged.
 - If worktree creation fails (not a git repo, git errors), the spawn is rejected and the sub-agent cancelled rather than silently downgraded to non-isolated.
 - Note: the worktree starts from the last commit (`HEAD`); uncommitted changes in the parent tree are not visible to the sub-agent.
+- Go builds in a fresh worktree run against a **cold `GOCACHE`**, making full-repo verification 3-5x slower than the main tree — a hidden incentive to work in the shared tree instead. Set a shared cache before building: `export GOCACHE="$HOME/.cache/go-build"` (the content-addressed store is race-safe for concurrent builds). The main tree usually already points there, so reusing it keeps worktree verification costs on par with main-tree work (#4804).
 
 ### Hard tool-call budget (`max_tool_calls`)
 
