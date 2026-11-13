@@ -157,6 +157,69 @@ func TestExtractRequestKeywords(t *testing.T) {
 	}
 }
 
+func TestDetectActions_QuotedReferenceExempt(t *testing.T) {
+	// #5554: verbs inside a #NNNN-referencing bracket citation are quoted
+	// material (a commit title), not session instructions.
+	got := detectActions("二进制同步令：main 已至 21e9549（含 #5508 counterfactual repair 腿，CI 绿）。凡 19:18Z 后换过二进制的席请立即 restart。")
+	for _, v := range got {
+		if v == "repair" {
+			t.Errorf("expected 'repair' inside #NNNN bracket citation to be exempt, got actions: %v", got)
+		}
+	}
+}
+
+func TestDetectActions_QuotedTitleExempt(t *testing.T) {
+	// #5554: verbs inside quoted commit titles are exempt (straight quotes).
+	got := detectActions("A binary-sync order body quotes a commit title containing '#5508 counterfactual repair'.")
+	for _, v := range got {
+		if v == "repair" {
+			t.Errorf("expected 'repair' inside quoted title to be exempt, got actions: %v", got)
+		}
+	}
+}
+
+func TestDetectActions_BareInstructionStillCounts(t *testing.T) {
+	// Negative control: bare "fix #1234" is a real instruction and must NOT
+	// be exempt (no quotes, no reference-carrying bracket around the verb).
+	got := detectActions("please fix #1234 as soon as possible")
+	found := false
+	for _, v := range got {
+		if v == "fix" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected bare instruction verb 'fix' to still be detected, got: %v", got)
+	}
+}
+
+func TestFulfillmentGate_SyncOrderQuotedTitleNoIntervention(t *testing.T) {
+	// Issue #5554 acceptance: a sync-order body quoting arbitrary commit
+	// titles produces zero completion-checker interventions when the actual
+	// request (restart to load) is already complete (tools ran, no edits).
+	a := newFulfillmentTestAgent()
+	stats := &RunStats{
+		ToolCalls: map[string]int{"restart": 1, "run_command": 1},
+	}
+	body := "[二进制同步令·P0] main 已至 21e9549（含 #5508 counterfactual repair：D2 named-return toolDefs 未赋值→LLM 零工具定义；修复已 CI 绿+本席重启实证工具链恢复）。凡换过二进制的席请立即 restart 加载修复版。"
+	if msg := a.checkFulfillmentGate(body, stats, ""); msg != "" {
+		t.Errorf("expected zero interventions for sync-order with quoted titles, got: %s", msg)
+	}
+}
+
+func TestFulfillmentGate_RealActionStillFires(t *testing.T) {
+	// Negative control: a real edit request with zero edits/commands must
+	// still fire — the exemption must not swallow genuine instructions.
+	a := newFulfillmentTestAgent()
+	stats := &RunStats{
+		ToolCalls: map[string]int{"read_file": 3},
+	}
+	msg := a.checkFulfillmentGate("add a retry wrapper around the provider call", stats, "")
+	if msg == "" {
+		t.Error("expected fulfillment gate to fire for real action request with no edits")
+	}
+}
+
 func newFulfillmentTestAgent() *Agent {
 	a := &Agent{}
 	a.fulfillmentGate = newFulfillmentGateState()
