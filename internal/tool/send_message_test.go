@@ -18,7 +18,8 @@ func TestSendMessageToolDescriptionsClarifyWorkerSemantics(t *testing.T) {
 		"delivers to inbox",
 		"prefer swarm_task_create",
 		"sub-agents (agent-*)",
-		"unreliable for new work",
+		"still-running sub-agent",
+		"finished runs never see them",
 		"spawn a new agent",
 		"best-effort broadcast",
 	} {
@@ -30,7 +31,7 @@ func TestSendMessageToolDescriptionsClarifyWorkerSemantics(t *testing.T) {
 	params := string(tool.Parameters())
 	for _, want := range []string{
 		"task-like inbox work",
-		"only receive mailbox messages",
+		"still-running sub-agent's conversation",
 		"For tracked teammate work, use swarm_task_create",
 		"provide the team ID",
 	} {
@@ -57,7 +58,7 @@ func TestSendMessageToSubAgentWarnsBestEffort(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected tool error: %s", result.Content)
 	}
-	for _, want := range []string{"Mailbox message", "best-effort", "one-shot", "spawn_agent"} {
+	for _, want := range []string{"Mailbox message", "best-effort", "next iteration", "spawn_agent"} {
 		if !strings.Contains(result.Content, want) {
 			t.Fatalf("sub-agent send result should mention %q, got %q", want, result.Content)
 		}

@@ -198,6 +198,7 @@ type Agent struct {
 	diffConfirm                  DiffConfirmFunc
 	onInterrupt                  interruptionHandler
 	subagentCompletionFeed       func() []SubagentCompletion
+	mailboxFeed                  MailboxFeed
 	subagentNotified             map[string]bool
 	subagentNotifiedMu           sync.Mutex
 	projectMemory                map[string]struct{}

@@ -180,6 +180,22 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			sid.SetSessionID(cfg.SubAgentID)
 		}
 	}
+
+	// send_message consumption: bind this run's mailbox into the agent
+	// loop so send_message deliveries drain (non-blocking, select/default)
+	// at the next iteration boundary and surface as user-role input
+	// instead of dead letters. Symmetric with injectSubagentCompletions,
+	// which carries sub-agent results back the other way.
+	if cfg.Manager != nil {
+		if mf, ok := subAgent.(interface {
+			SetMailboxFeed(func() []AgentMessage)
+		}); ok {
+			mgr, id := cfg.Manager, cfg.SubAgentID
+			mf.SetMailboxFeed(func() []AgentMessage {
+				return mgr.DrainMailbox(id)
+			})
+		}
+	}
 	if cfg.OnUsage != nil {
 		if usageAware, ok := subAgent.(usageHandlerSetter); ok {
 			usageAware.SetUsageHandler(cfg.OnUsage)

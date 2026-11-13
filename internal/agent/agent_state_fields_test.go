@@ -34,6 +34,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"idleMaint":                 "optional sleep-time-compute watcher (r373), injected via SetIdleMaintainer; nil = idle maintenance disabled (default)",
 		"onInterrupt":               "optional interruption handler, injected via setter",
 		"subagentCompletionFeed":    "optional P1-1 completion feed, injected via SetSubagentCompletionFeed; nil = push disabled",
+		"mailboxFeed":               "optional mailbox drain, injected via SetMailboxFeed; nil = no mailbox consumption (default)",
 		"subagentNotified":          "P1-1 seen-set, lazily initialized on first injectSubagentCompletions poll (baseline swallow)",
 		"onMetric":                  "optional metrics callback, injected via setter",
 		"onRunHealth":               "optional callback, injected via setter",

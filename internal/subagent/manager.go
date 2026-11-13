@@ -1161,6 +1161,29 @@ func (m *Manager) SendToAgent(id string, msg AgentMessage) error {
 	}
 }
 
+// DrainMailbox non-blockingly drains all pending mailbox messages for
+// sub-agent id (select/default - never blocks the caller, bounded by the
+// channel capacity). Messages are consumed exactly once: a drained message
+// is never returned again. This is the consumption side of the send_message
+// mailbox channel, wired into the sub-agent's agent loop by runner.Run.
+func (m *Manager) DrainMailbox(id string) []AgentMessage {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok || sa.Mailbox == nil {
+		return nil
+	}
+	var drained []AgentMessage
+	for {
+		select {
+		case msg := <-sa.Mailbox:
+			drained = append(drained, msg)
+		default:
+			return drained
+		}
+	}
+}
+
 func (m *Manager) Broadcast(msg AgentMessage) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
