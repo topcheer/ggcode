@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/qr_scanner.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/l10n/app_localizations.dart';
 import '../../core/providers/connection_store.dart';
 import '../../core/providers/session_provider.dart';
+import '../../core/qr_scanner.dart';
 import '../../core/theme/app_theme.dart';
 
 class ConnectScreen extends ConsumerStatefulWidget {
@@ -71,12 +72,52 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   }
 
   void _handleQrCode(String code) {
-    final url = normalizeTunnelUrl(code);
+    final trimmed = code.trim();
+    // Router: a plain http(s) URL is not a relay session QR (those use the
+    // ggcode:// scheme) — most likely an et-tunnel WebUI QR. Offer to open
+    // it in the browser instead of force-feeding it into the relay connect.
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      setState(() => _showScanner = false);
+      _offerOpenWebUrl(trimmed);
+      return;
+    }
+    final url = normalizeTunnelUrl(trimmed);
     setState(() {
       _showScanner = false;
       _urlController.text = url;
     });
     ref.read(connectionProvider.notifier).connect(url);
+  }
+
+  Future<void> _offerOpenWebUrl(String url) async {
+    final open = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Open Web UI?'),
+        content: Text(
+          'Scanned a web URL:\n$url\n\nOpen it in the browser?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Open'),
+          ),
+        ],
+      ),
+    );
+    if (open != true) return;
+    final uri = Uri.tryParse(url);
+    if (uri != null && await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open: $url')),
+      );
+    }
   }
 
   void _reconnect(StoredConnection conn) {
