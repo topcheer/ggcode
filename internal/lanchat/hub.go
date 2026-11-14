@@ -107,6 +107,12 @@ type Hub struct {
 
 	onInboundDM func(fromNodeID string)
 
+	// onNickRestored fires (asynchronously) when SetSessionID restores a
+	// persisted nick, so callers that stamped an identity earlier (e.g. the
+	// a2a registry seat-nick roster stamp, #5616) can re-stamp with the
+	// real nick instead of the pre-restore RandomNick placeholder.
+	onNickRestored func(nick string)
+
 	httpClient *http.Client
 
 	udpTransport *UDPTransport
@@ -229,11 +235,14 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 	h.sessionID = sessionID
 	h.store = NewStore(sessionDir)
 
+	var restoredNick string
+	var nickRestoredCb func(string)
 	if persisted, err := LoadNick(h.store.dir); err == nil && persisted != "" {
 		h.humanNick = persisted
 		h.agentNick = AgentNick(persisted)
+		restoredNick = persisted
+		nickRestoredCb = h.onNickRestored
 	} else {
-
 		_ = SaveNick(h.store.dir, h.humanNick)
 	}
 
@@ -259,6 +268,12 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 	}
 	h.mu.Unlock()
 
+	if nickRestoredCb != nil {
+		cb, nick := nickRestoredCb, restoredNick
+		debug.Log("lanchat", "persisted nick restored: %s; notifying identity stamp callback", nick)
+		safego.Go("lanchat.nickRestored", func() { cb(nick) })
+	}
+
 	for _, peer := range h.Participants() {
 		if peer.NodeID == h.nodeID || !peer.Online {
 			continue
@@ -272,6 +287,16 @@ func (h *Hub) Attachments() *AttachmentManager {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.attachments
+}
+
+// SetOnNickRestored registers a callback fired (asynchronously) when
+// SetSessionID restores a persisted nick. Callers that stamped an identity
+// before the restore (a2a seat-nick roster stamp, #5616) use it to re-stamp
+// with the real nick instead of the pre-restore RandomNick placeholder.
+func (h *Hub) SetOnNickRestored(cb func(nick string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onNickRestored = cb
 }
 
 func (h *Hub) APIKey() string {

@@ -1034,37 +1034,25 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 
 		// #5616: publish our seat nick into the roster so cross-process
 		// resolvers (one-shot CLI) can address this seat by nick. The
-		// persisted nick is restored later, when the hub's SetSessionID
-		// runs during session load (tui/model.go) - so if it is not
-		// available yet, retry in the background until it is instead of
-		// stamping an empty identity once and never again.
+		// immediate stamp is correct for seats with no persisted nick;
+		// for TUI seats the hub may still carry the pre-restore
+		// RandomNick placeholder at this point (the persisted nick is
+		// restored later by hub.SetSessionID during session load), so
+		// re-stamp from the onNickRestored callback once it fires.
 		if a2aRegistry != nil {
-			stampSeatNick := func() bool {
+			stampSeatNick := func() {
 				nick := lanchatHub.AgentNick()
 				if nick == "" {
 					nick = lanchatHub.HumanNick()
 				}
-				if nick == "" {
-					return false
+				if nick != "" {
+					a2aRegistry.SetSelfIdentity(nick, "", "")
 				}
-				a2aRegistry.SetSelfIdentity(nick, "", "")
-				return true
 			}
-			if !stampSeatNick() {
-				safego.Go("a2a.seatNickStampRetry", func() {
-					// TUI resume can take minutes (process start -> nudge
-					// injection -> session attach -> SetSessionID nick
-					// restore), so keep sampling for up to 10 minutes.
-					deadline := time.Now().Add(10 * time.Minute)
-					for time.Now().Before(deadline) {
-						time.Sleep(5 * time.Second)
-						if stampSeatNick() {
-							return
-						}
-					}
-					debug.Log("a2a", "seat nick stamp retry gave up after 10m: nick never restored")
-				})
-			}
+			stampSeatNick()
+			lanchatHub.SetOnNickRestored(func(string) {
+				stampSeatNick()
+			})
 		}
 
 		syncCtx, syncCancel := context.WithCancel(context.Background())
