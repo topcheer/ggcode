@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -1172,6 +1173,35 @@ func normalizeResponseID(id json.RawMessage) json.RawMessage {
 // SetIntrospector replaces the phase-1 stub once the runtime chains
 // (lanchat hub, cron scheduler, task board) are up (#5575 phase 2).
 func (s *Server) SetIntrospectorV3(inst RuntimeIntrospectorV3) { s.introspectorV3 = inst }
+
+// WorkspaceGateDecision implements the #5597/#5605A caller gate:
+// loopback source passes (same machine shares the physical .git
+// family); otherwise the caller host must match a roster endpoint whose
+// workspace equals self. Exported so the wiring stays one line and the
+// decision is pin-injectable.
+func WorkspaceGateDecision(remoteAddr string, roster []InstanceInfo, selfWorkspace string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	for _, inst := range roster {
+		u, uerr := url.Parse(inst.Endpoint)
+		if uerr != nil {
+			continue
+		}
+		ih, _, ierr := net.SplitHostPort(u.Host)
+		if ierr != nil {
+			ih = u.Host
+		}
+		if ih == host {
+			return inst.Workspace == selfWorkspace
+		}
+	}
+	return false
+}
 
 // SetWorkspaceGate installs the roster reverse-lookup gate post-construction.
 func (s *Server) SetWorkspaceGate(gate func(*http.Request) bool) { s.workspaceGate = gate }

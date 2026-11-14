@@ -164,3 +164,39 @@ func TestIssue5597_ClientRoundTrip(t *testing.T) {
 	}
 	_ = time.Now
 }
+
+// #5605 reviewer follow-up: the A-arm (loopback) is a NEW trust branch
+// and needs its own pins - plus the B-face service-name shape.
+func TestIssue5605_LoopbackPasses(t *testing.T) {
+	if !WorkspaceGateDecision("127.0.0.1:54321", nil, "/w") {
+		t.Fatal("loopback source must pass (one-shot CLI arm)")
+	}
+	if !WorkspaceGateDecision("[::1]:54321", nil, "/w") {
+		t.Fatal("IPv6 loopback must pass")
+	}
+}
+
+func TestIssue5605_CrossMachineRosterReject(t *testing.T) {
+	roster := []InstanceInfo{{Workspace: "/w", Endpoint: "http://192.168.1.50:9700"}}
+	if WorkspaceGateDecision("192.168.1.99:5555", roster, "/w") {
+		t.Fatal("non-loopback host absent from roster must fail closed")
+	}
+	if WorkspaceGateDecision("192.168.1.50:5555", []InstanceInfo{{Workspace: "/OTHER", Endpoint: "http://192.168.1.50:9700"}}, "/w") {
+		t.Fatal("roster hit with foreign workspace must fail closed")
+	}
+	if !WorkspaceGateDecision("192.168.1.50:5555", roster, "/w") {
+		t.Fatal("roster hit with same workspace must pass")
+	}
+}
+
+func TestIssue5605_ServiceNameShape(t *testing.T) {
+	// B face: no double-dot malformation ("_ggcode._tcp.local.." was the
+	// zero-response root cause).
+	full := mDNSServiceType + "." + mDNSDomain + "."
+	if strings.Contains(full, "..") {
+		t.Fatalf("malformed service name %q (double dot)", full)
+	}
+	if mDNSServiceType != "_ggcode._tcp" {
+		t.Fatalf("service type drifted: %q", mDNSServiceType)
+	}
+}
