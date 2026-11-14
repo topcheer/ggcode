@@ -272,6 +272,11 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if new == "" {
 			new = "(unknown)"
 		}
+		// #5625: a no-change rename (A -> A) is broadcast noise from
+		// old-bin peers re-asserting identity - never render it.
+		if old == new {
+			return m, nil
+		}
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s is now known as %s", old, new))
 		return m, nil
 	case lanchatAutoApproveMsg:
