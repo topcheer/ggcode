@@ -45,9 +45,8 @@ type Server struct {
 
 	// #5575 runtime introspection (additive; empty mode = handler absent,
 	// legacy behavior byte-identical).
-	introspectionMode string
-	introspector      RuntimeIntrospector
-	domainKey         []byte
+	introspectorV3 RuntimeIntrospectorV3
+	workspaceGate  func(*http.Request) bool
 
 	extensions []AgentExtension
 
@@ -71,10 +70,11 @@ type ServerConfig struct {
 
 	Delegation DelegationPolicy
 
-	// #5575: empty mode = introspection off (handler not registered).
-	IntrospectionMode string
-	Introspector      RuntimeIntrospector
-	DomainKey         []byte
+	// #5597 v3: plain always-on introspector (trust machinery removed).
+	IntrospectorV3 RuntimeIntrospectorV3
+	// WorkspaceGate, when set, reverse-lookups the caller in the local
+	// roster and requires the same workspace (#5597 roster gate).
+	WorkspaceGate func(*http.Request) bool
 }
 
 func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
@@ -86,9 +86,8 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 	s := &Server{
 		handler:                  handler,
 		apiKeys:                  apiKeys,
-		introspectionMode:        cfg.IntrospectionMode,
-		introspector:             cfg.Introspector,
-		domainKey:                cfg.DomainKey,
+		introspectorV3:           cfg.IntrospectorV3,
+		workspaceGate:            cfg.WorkspaceGate,
 		extensions:               cfg.Extensions,
 		delegation:               cfg.Delegation,
 		done:                     make(chan struct{}),
@@ -377,7 +376,9 @@ func (s *Server) routeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRe
 	// #5575: runtime/* is a gated additive namespace. With introspection
 	// off (or no injected source) the request falls through to the default
 	// arm below, so the method-not-found error is byte-identical to today.
-	if strings.HasPrefix(req.Method, "runtime/") && s.introspectionMode != IntrospectionOff && s.introspector != nil {
+	// #5597 v3: runtime/snapshot is a PLAIN method behind the existing
+	// first gate - no mode gate (default ON), no HMAC second factor.
+	if req.Method == MethodRuntimeSnapshot {
 		s.handleRuntimeRPC(w, r, req)
 		return
 	}
@@ -409,18 +410,20 @@ func (s *Server) routeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRe
 	}
 }
 
-// handleRuntimeRPC serves the runtime/* namespace. The legacy auth
-// middleware has already run (first gate, unchanged); the workspace domain
-// HMAC proof is the second factor stacked only here (#5575).
+// handleRuntimeRPC serves runtime/snapshot as a plain JSON-RPC method
+// (#5597 v3 ruling: trust machinery removed; the legacy auth middleware
+// has already run - identical trust to message/send).
 func (s *Server) handleRuntimeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRequest) {
-	nonce := r.Header.Get("X-A2A-Introspection-Nonce")
-	sig := r.Header.Get("X-A2A-Introspection-Signature")
-	if !VerifyIntrospectionProof(s.domainKey, req.Method, nonce, sig) {
-		writeRPCError(w, req.ID, ErrIntrospectionDenied)
+	if s.workspaceGate != nil && !s.workspaceGate(r) {
+		writeRPCError(w, req.ID, &JSONRPCError{Code: -32003, Message: "Cross-workspace introspection denied"})
 		return
 	}
-	handle := NewRuntimeSnapshotHandler(s.introspector, s.introspectionMode, time.Now)
-	result, rpcErr := handle(req.Method, nonce, sig)
+	if s.introspectorV3 == nil {
+		writeRPCError(w, req.ID, &JSONRPCError{Code: -32002, Message: "Introspection source unavailable"})
+		return
+	}
+	handle := NewRuntimeSnapshotHandlerV3(s.introspectorV3, time.Now)
+	result, rpcErr := handle(req.Params)
 	if rpcErr != nil {
 		writeRPCError(w, req.ID, rpcErr)
 		return
@@ -1165,8 +1168,10 @@ func normalizeResponseID(id json.RawMessage) json.RawMessage {
 
 // SetDomainKey installs the workspace domain key post-construction (the
 // assembly layer resolves it from the working dir after server creation).
-func (s *Server) SetDomainKey(key []byte) { s.domainKey = key }
 
 // SetIntrospector replaces the phase-1 stub once the runtime chains
 // (lanchat hub, cron scheduler, task board) are up (#5575 phase 2).
-func (s *Server) SetIntrospector(inst RuntimeIntrospector) { s.introspector = inst }
+func (s *Server) SetIntrospectorV3(inst RuntimeIntrospectorV3) { s.introspectorV3 = inst }
+
+// SetWorkspaceGate installs the roster reverse-lookup gate post-construction.
+func (s *Server) SetWorkspaceGate(gate func(*http.Request) bool) { s.workspaceGate = gate }

@@ -2,10 +2,6 @@ package a2a
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,67 +11,37 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// SignIntrospectionProof is the client-side twin of VerifyIntrospectionProof:
-// sig = HMAC-SHA256(key, nonce + "|" + method). Same-workspace peers share
-// the domain key (#5575), so an agent holding the key can prove membership
-// without a session state machine (#5593).
-func SignIntrospectionProof(key []byte, method, nonce string) string {
-	if len(key) == 0 || nonce == "" {
-		return ""
+// IntrospectPeerV3 requests a runtime/snapshot from a peer over the plain
+// A2A JSON-RPC transport (#5597 v3: no HMAC/nonce headers - identical trust
+// to message/send, the server's existing first gate applies).
+func IntrospectPeerV3(ctx context.Context, endpoint, apiKey string, req SnapshotRequest) (*RuntimeSnapshotV3, error) {
+	if req.Depth == "" {
+		req.Depth = DepthFull
 	}
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(nonce + "|" + method))
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-// NewIntrospectionNonce returns a fresh random nonce for one runtime/*
-// request. Crypto-random by design: the proof is stateless, so the nonce is
-// the caller-supplied entropy.
-func NewIntrospectionNonce() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
-}
-
-// IntrospectPeer requests a runtime/snapshot from a same-domain peer over
-// the existing A2A transport (JSON-RPC POST + the two introspection
-// headers). domainKey is the caller's workspace domain key; the peer
-// verifies with its own copy — a mismatch fails closed (#5593).
-func IntrospectPeer(ctx context.Context, endpoint, apiKey string, domainKey []byte, mode string) (*RuntimeSnapshotV2, error) {
-	if mode == "" {
-		mode = IntrospectionFull
-	}
-	nonce, err := NewIntrospectionNonce()
+	params, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("a2a introspect: nonce: %w", err)
+		return nil, err
 	}
-	const method = "runtime/snapshot"
-	sig := SignIntrospectionProof(domainKey, method, nonce)
-
 	reqID, _ := json.Marshal(fmt.Sprintf("introspect-%d", time.Now().UnixNano()))
 	body, err := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      reqID,
-		Method:  method,
-		Params:  json.RawMessage(`{"mode":` + quoteJSON(mode) + `}`),
+		Method:  MethodRuntimeSnapshot,
+		Params:  params,
 	})
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-A2A-Introspection-Nonce", nonce)
-	req.Header.Set("X-A2A-Introspection-Signature", sig)
+	hreq.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
-		req.Header.Set("X-API-Key", apiKey)
+		hreq.Header.Set("X-API-Key", apiKey)
 	}
-	httpClient := &http.Client{Timeout: 10 * time.Second}
-	resp, err := httpClient.Do(req)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(hreq)
 	if err != nil {
 		return nil, fmt.Errorf("a2a introspect: transport: %w", err)
 	}
@@ -85,45 +51,38 @@ func IntrospectPeer(ctx context.Context, endpoint, apiKey string, domainKey []by
 		return nil, fmt.Errorf("a2a introspect: decode: %w", err)
 	}
 	if rpcResp.Error != nil {
-		return nil, fmt.Errorf("a2a introspect: peer denied (code %d): %s", rpcResp.Error.Code, rpcResp.Error.Message)
+		return nil, fmt.Errorf("a2a introspect: peer error (code %d): %s", rpcResp.Error.Code, rpcResp.Error.Message)
 	}
 	raw, err := json.Marshal(rpcResp.Result)
 	if err != nil {
-		return nil, fmt.Errorf("a2a introspect: snapshot decode: %w", err)
+		return nil, err
 	}
-	var snap RuntimeSnapshotV2
+	var snap RuntimeSnapshotV3
 	if err := json.Unmarshal(raw, &snap); err != nil {
 		return nil, fmt.Errorf("a2a introspect: snapshot decode: %w", err)
 	}
 	return &snap, nil
 }
 
-func quoteJSON(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
-}
-
-// IntrospectTool is the agent-facing one-hop runtime snapshot client
-// (#5593): with the shared domain key an agent can read any same-workspace
-// peer's five faces without hand-building HMAC headers.
+// IntrospectTool is the agent-facing peer context client (#5597 v3):
+// one hop, seven faces, verbatim. target="list" enumerates peers.
 type IntrospectTool struct {
 	registry  *Registry
 	apiKey    string
-	localDir  string // workspace dir whose domain key signs the request
 	localTool *RemoteTool
 }
 
-func NewIntrospectTool(reg *Registry, apiKey, localDir string) *IntrospectTool {
+func NewIntrospectTool(reg *Registry, apiKey, _ string) *IntrospectTool {
 	rt := NewRemoteTool(reg, apiKey)
-	return &IntrospectTool{registry: reg, apiKey: apiKey, localDir: localDir, localTool: rt}
+	return &IntrospectTool{registry: reg, apiKey: apiKey, localTool: rt}
 }
 
 func (t *IntrospectTool) Name() string { return "a2a_introspect" }
 
 func (t *IntrospectTool) Description() string {
-	return "Read a same-workspace peer ggcode instance's runtime snapshot (five faces: busy, todos, crons, recent tool traces, conversation digest) over the A2A runtime/* namespace. " +
-		"Auth is the shared workspace domain key (HMAC proof, no session state) - works only between instances of the SAME workspace family. " +
-		"Use this to check what another agent is doing right now; use 'a2a_remote' to delegate work, 'lanchat' to talk."
+	return "Read a peer ggcode instance's full current context (seven faces: status / inflight / conversation verbatim with cursor / activity / children / schedule / env) in ONE hop over the A2A runtime/snapshot method. " +
+		"Same-workspace trust domain: raw verbatim content, no redaction. Use target='list' to enumerate peers; depth='brief' for headers only; cursors paginate conversation/activity. " +
+		"Use 'a2a_remote' to delegate work, 'lanchat' to talk."
 }
 
 func (t *IntrospectTool) Parameters() json.RawMessage {
@@ -132,13 +91,20 @@ func (t *IntrospectTool) Parameters() json.RawMessage {
 		"properties": {
 			"target": {
 				"type": "string",
-				"description": "Target instance name (project name, e.g. 'order-service'). Required."
+				"description": "Target instance name (project name), or 'list' to enumerate peers."
 			},
-			"mode": {
+			"depth": {
 				"type": "string",
-				"enum": ["full", "metadata"],
-				"description": "full = all five faces (default); metadata = face headers only, content faces dropped."
-			}
+				"enum": ["brief", "full"],
+				"description": "brief = face headers/counters; full (default) = verbatim conversation (20 turns) + activity (50 events)."
+			},
+			"faces": {
+				"type": "array",
+				"items": {"type": "string", "enum": ["status","inflight","conversation","activity","children","schedule","env"]},
+				"description": "Optional subset filter."
+			},
+			"cursor_conversation": {"type": "string", "description": "Opaque cursor from a previous conversation face."},
+			"cursor_activity": {"type": "string", "description": "Opaque cursor from a previous activity face."}
 		},
 		"required": ["target"]
 	}`)
@@ -146,80 +112,119 @@ func (t *IntrospectTool) Parameters() json.RawMessage {
 
 func (t *IntrospectTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
 	var params struct {
-		Target string `json:"target"`
-		Mode   string `json:"mode"`
+		Target     string   `json:"target"`
+		Depth      string   `json:"depth"`
+		Faces      []string `json:"faces"`
+		CursorConv string   `json:"cursor_conversation"`
+		CursorAct  string   `json:"cursor_activity"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return tool.Result{Content: fmt.Sprintf("Invalid input: %v", err), IsError: true}, nil
+	}
+	if params.Target == "" || params.Target == "list" {
+		return t.localTool.listInstances(ctx)
 	}
 	inst, err := t.localTool.FindInstance(params.Target)
 	if err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}, nil
 	}
-	key, err := LoadOrCreateDomainKey(t.localDir)
-	if err != nil {
-		return tool.Result{Content: fmt.Sprintf("domain key: %v", err), IsError: true}, nil
-	}
-	snap, err := IntrospectPeer(ctx, inst.Endpoint, t.apiKey, key, params.Mode)
+	snap, err := IntrospectPeerV3(ctx, inst.Endpoint, t.apiKey, SnapshotRequest{
+		Depth:      params.Depth,
+		Faces:      params.Faces,
+		CursorConv: params.CursorConv,
+		CursorAct:  params.CursorAct,
+	})
 	if err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}, nil
 	}
-	out := FormatSnapshot(params.Target, inst.Workspace, snap)
-	return tool.Result{Content: out}, nil
+	return tool.Result{Content: FormatSnapshotV3(params.Target, inst.Workspace, snap)}, nil
 }
 
-// formatSnapshot renders the five faces compactly for an agent consumer.
-func FormatSnapshot(target, workspace string, s *RuntimeSnapshotV2) string {
+// FormatSnapshotV3 renders the seven faces for an agent consumer.
+func FormatSnapshotV3(target, workspace string, s *RuntimeSnapshotV3) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Runtime snapshot: %s (%s) at %s\n", target, workspace, s.TakenAt))
-	b.WriteString(fmt.Sprintf("Mode: %s | Schema: %s\n", s.Mode, s.Schema))
-	b.WriteString(fmt.Sprintf("Busy: %v", s.Busy.Busy))
-	if s.Busy.Busy {
-		if s.Busy.InFlightTool != "" {
-			b.WriteString(fmt.Sprintf(" since %s in-flight=%s", s.Busy.BusySince, s.Busy.InFlightTool))
+	b.WriteString(fmt.Sprintf("Peer context: %s (%s) taken %s depth=%s\n", target, workspace, s.TakenAt, s.Depth))
+	if s.Status != nil {
+		st := s.Status
+		busy := "idle"
+		if st.Busy {
+			busy = "BUSY since " + st.BusySince
+			if st.Spinner != "" {
+				busy += " (" + st.Spinner + ")"
+			}
 		}
+		b.WriteString(fmt.Sprintf("status: %s | model=%s goal=%q iter=%d tokens=%d/%d ctx=%.0f%%\n",
+			busy, st.Model, st.Goal, st.Iteration, st.TokensIn, st.TokensOut, st.ContextPct))
 	}
-	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("Todos: %d", len(s.Todos)))
-	if len(s.Todos) > 0 {
-		top := s.Todos
-		if len(top) > 5 {
-			top = top[:5]
-		}
-		for _, tk := range top {
-			b.WriteString(fmt.Sprintf("\n  - [%s] %s", tk.Status, tk.Subject))
-		}
-		if len(s.Todos) > 5 {
-			b.WriteString(fmt.Sprintf("\n  ... +%d more", len(s.Todos)-5))
-		}
+	if s.Inflight != nil {
+		b.WriteString(fmt.Sprintf("inflight: tool=%s params=%s started=%s pendingApprovals=%d\n",
+			s.Inflight.Tool, s.Inflight.ParamsHead, s.Inflight.StartedAt, s.Inflight.PendingApprovals))
 	}
-	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("Crons: %d", len(s.Crons)))
-	for i, c := range s.Crons {
-		if i >= 5 {
-			b.WriteString(fmt.Sprintf("\n  ... +%d more", len(s.Crons)-5))
-			break
-		}
-		b.WriteString(fmt.Sprintf("\n  - %s %s", c.Cron, c.ID))
-	}
-	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("Recent: %d traces\n", len(s.Recent)))
-	for i, tr := range s.Recent {
-		if i >= 5 {
-			b.WriteString(fmt.Sprintf("  ... +%d more\n", len(s.Recent)-5))
-			break
-		}
-		b.WriteString(fmt.Sprintf("  - %s %s: %s\n", tr.TS, tr.Tool, tr.Summary))
-	}
-	if len(s.Conversation) > 0 {
-		b.WriteString(fmt.Sprintf("Conversation: %d windowed turns\n", len(s.Conversation)))
-		for i, cv := range s.Conversation {
-			if i >= 3 {
-				b.WriteString(fmt.Sprintf("  ... +%d more\n", len(s.Conversation)-3))
+	if s.Conversation != nil {
+		b.WriteString(fmt.Sprintf("conversation: %d turns (next_cursor=%s truncated=%v)\n",
+			len(s.Conversation.Turns), s.Conversation.NextCursor, s.Conversation.Truncated))
+		for i, tr := range s.Conversation.Turns {
+			txt := tr.Text
+			if s.Depth == DepthBrief && len(txt) > 120 {
+				txt = txt[:120] + "..."
+			} else if len(txt) > 2000 {
+				txt = txt[:2000] + "..."
+			}
+			b.WriteString(fmt.Sprintf("  [%s] %s\n", tr.Role, txt))
+			if i >= 40 {
+				b.WriteString("  ... (render cap; use cursors)\n")
 				break
 			}
-			b.WriteString(fmt.Sprintf("  - %s %s\n", cv.Role, cv.Summary))
 		}
+	}
+	if s.Activity != nil {
+		b.WriteString(fmt.Sprintf("activity: %d events, %d files (next_cursor=%s)\n",
+			len(s.Activity.Events), len(s.Activity.Files), s.Activity.NextCursor))
+		for i, ev := range s.Activity.Events {
+			if i >= 20 {
+				b.WriteString("  ... (render cap; use cursors)\n")
+				break
+			}
+			status := "ok"
+			if !ev.OK {
+				status = "FAIL"
+			}
+			b.WriteString(fmt.Sprintf("  - %s %s %s\n", ev.TS, ev.Tool, status))
+		}
+		for i, f := range s.Activity.Files {
+			if i >= 15 {
+				break
+			}
+			b.WriteString(fmt.Sprintf("  file[%s]: %s\n", f.Op, f.Path))
+		}
+	}
+	if s.Children != nil {
+		b.WriteString(fmt.Sprintf("children: %d subagents, %d jobs\n", len(s.Children.Subagents), len(s.Children.Jobs)))
+		for _, sa := range s.Children.Subagents {
+			b.WriteString(fmt.Sprintf("  - subagent %s: %s (%s)\n", sa.ID, sa.TaskHead, sa.State))
+		}
+		for _, j := range s.Children.Jobs {
+			b.WriteString(fmt.Sprintf("  - job %s: %s (%s)\n", j.ID, j.CmdHead, j.State))
+		}
+	}
+	if s.Schedule != nil {
+		b.WriteString(fmt.Sprintf("schedule: %d crons, %d todos\n", len(s.Schedule.Crons), len(s.Schedule.Todos)))
+		for i, c := range s.Schedule.Crons {
+			if i >= 5 {
+				break
+			}
+			b.WriteString(fmt.Sprintf("  cron %s %s next=%s\n", c.ID, c.Cron, c.NextFire))
+		}
+		for i, tk := range s.Schedule.Todos {
+			if i >= 5 {
+				break
+			}
+			b.WriteString(fmt.Sprintf("  todo [%s] %s\n", tk.Status, tk.Subject))
+		}
+	}
+	if s.Env != nil {
+		b.WriteString(fmt.Sprintf("env: workspace=%s branch=%s head=%s dirty=%d provider=%s\n",
+			s.Env.Workspace, s.Env.Branch, s.Env.Head, s.Env.DirtyFiles, s.Env.Provider))
 	}
 	return b.String()
 }

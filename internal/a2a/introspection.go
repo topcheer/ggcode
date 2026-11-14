@@ -1,140 +1,129 @@
 package a2a
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
-	"errors"
-	"os"
-	"path/filepath"
-	"strings"
+	"encoding/json"
 	"time"
 )
 
-// #5575 same-workspace runtime introspection: zero-LLM runtime/* namespace.
-//
-// Trust model (issue #5575 final design, five-round convergence):
-//   - Domain key lives at <gitdir>/a2a.key (0600, inside .git so it is never
-//     committed). Worktrees resolve their .git pointer file to the main
-//     gitdir, so the whole .git family shares one key automatically.
-//   - Cross-machine clones carry different .git => different key => natural
-//     isolation; scope checks trust the key only, never workspace strings.
-//   - HMAC(key, nonce+method) is a stateless per-request proof stacked ONLY
-//     on runtime/* methods; legacy methods never see this check.
+// #5597 runtime introspection v3. FINAL DESIGN RULING (user, 2026-11-14):
+// all trust machinery REMOVED as over-engineering - same workspace has no
+// sensitive faces. runtime/snapshot is a PLAIN a2a JSON-RPC method behind
+// the server's existing first gate (X-API-Key if configured), identical
+// trust to message/send. No .git/a2a.key, no HMAC/nonce/signature headers,
+// no server-side redaction (raw verbatim is the requirement). The v1/v2
+// HMAC helpers, domain key, and RedactSnapshotStrings are deleted.
 
-// DomainKeyFile is the key name inside the resolved git directory.
-const DomainKeyFile = "a2a.key"
-
-// Introspection modes for a2a.introspection config ("" = off = handler not
-// registered, byte-identical behavior with today).
+// Depth tiers: brief = face headers/counters; full = verbatim content
+// (conversation N turns, activity K events) with cursor pagination.
 const (
-	IntrospectionOff      = ""
-	IntrospectionMetadata = "metadata"
-	IntrospectionFull     = "full"
+	DepthBrief = "brief"
+	DepthFull  = "full"
 )
 
-// ErrIntrospectionDenied is returned when the runtime/* proof fails. It uses
-// the JSON-RPC error envelope; message is distinct from Method-not-found so
-// operators can tell "feature off" from "wrong key".
-var ErrIntrospectionDenied = &JSONRPCError{Code: -32001, Message: "Introspection denied"}
-
-// ResolveGitDir returns the real git directory for dir. In a linked worktree
-// dir/.git is a pointer file ("gitdir: /path/to/main/.git/wt"); the domain
-// key must live in the shared main gitdir so the family shares one key.
-func ResolveGitDir(dir string) (string, error) {
-	dot := filepath.Join(dir, ".git")
-	fi, err := os.Stat(dot)
-	if err != nil {
-		return "", err
-	}
-	if fi.IsDir() {
-		return dot, nil
-	}
-	raw, err := os.ReadFile(dot)
-	if err != nil {
-		return "", err
-	}
-	s := strings.TrimSpace(string(raw))
-	const p = "gitdir:"
-	if !strings.HasPrefix(s, p) {
-		return "", errors.New("a2a: malformed .git pointer file")
-	}
-	gd := strings.TrimSpace(strings.TrimPrefix(s, p))
-	// Linked worktrees point at <main>/.git/worktrees/<name>; the domain
-	// key lives at the shared main .git root so the whole family trusts one
-	// key (#5575). Walk the worktrees suffix up to the main gitdir.
-	if i := strings.LastIndex(gd, "/worktrees/"); i >= 0 {
-		gd = gd[:i]
-	}
-	return gd, nil
+// SnapshotRequest is the caller-facing query shape (agent tool / CLI).
+type SnapshotRequest struct {
+	Depth      string   `json:"depth"`               // brief|full (default full)
+	Faces      []string `json:"faces,omitempty"`     // optional subset filter
+	CursorConv string   `json:"cursor_conversation"` // opaque cursor, conversation face
+	CursorAct  string   `json:"cursor_activity"`     // opaque cursor, activity face
+	LimitConv  int      `json:"limit_conversation"`  // override default 20
+	LimitAct   int      `json:"limit_activity"`      // override default 50
 }
 
-// LoadOrCreateDomainKey returns the workspace domain key bytes for dir,
-// generating a fresh 32-byte key on first use (0600, never committed because
-// it lives inside the git directory).
-func LoadOrCreateDomainKey(dir string) ([]byte, error) {
-	gd, err := ResolveGitDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	path := filepath.Join(gd, DomainKeyFile)
-	if b, err := os.ReadFile(path); err == nil && len(b) >= 32 {
-		return b[:32], nil
-	}
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return nil, err
-	}
-	enc := []byte(hex.EncodeToString(raw))
-	if err := os.WriteFile(path, enc, 0o600); err != nil {
-		return nil, err
-	}
-	return enc[:32], nil // encoded form doubles as key material (stable)
+// RuntimeStatus is face 1: one-glance "what is this seat".
+type RuntimeStatus struct {
+	Busy       bool    `json:"busy"`
+	BusySince  string  `json:"busy_since,omitempty"`
+	Spinner    string  `json:"spinner,omitempty"`
+	Goal       string  `json:"goal,omitempty"`
+	Model      string  `json:"model,omitempty"`
+	Iteration  int     `json:"iteration,omitempty"`
+	TokensIn   int64   `json:"tokens_in,omitempty"`
+	TokensOut  int64   `json:"tokens_out,omitempty"`
+	ContextPct float64 `json:"context_pct,omitempty"`
 }
 
-// VerifyIntrospectionProof checks the stateless HMAC second factor for a
-// runtime/* request: sig == HMAC-SHA256(key, nonce + "|" + method). Constant-
-// time compare; nonce is an input factor only (no session state machine by
-// design).
-func VerifyIntrospectionProof(key []byte, method, nonce, sigHex string) bool {
-	if len(key) == 0 || nonce == "" || sigHex == "" {
-		return false
-	}
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(nonce + "|" + method))
-	want := mac.Sum(nil)
-	got, err := hex.DecodeString(strings.ToLower(sigHex))
-	if err != nil || len(got) != len(want) {
-		return false
-	}
-	return subtle.ConstantTimeCompare(got, want) == 1
+// RuntimeInflight is face 2: the tool call executing RIGHT NOW.
+// P1 ships the shape; loop instrumentation lands in P2 (spec §6).
+type RuntimeInflight struct {
+	Tool             string `json:"tool,omitempty"`
+	ParamsHead       string `json:"params_head,omitempty"`
+	StartedAt        string `json:"started_at,omitempty"`
+	PendingApprovals int    `json:"pending_approvals,omitempty"`
 }
 
-// --- snapshot v2 payload types (five faces; first ship: busy/todos/recent) ---
-
-// RuntimeToolTrace is one recent-activity ring entry.
-type RuntimeToolTrace struct {
-	TS         string `json:"ts"`
-	Tool       string `json:"tool"`
-	Summary    string `json:"summary"`
-	DurationMs int64  `json:"duration_ms,omitempty"`
+// RuntimeConversationTurn is face 3 verbatim: role + full text.
+type RuntimeConversationTurn struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+	TS   string `json:"ts,omitempty"`
 }
 
-// RuntimeBusy is the busy/current face from the existing busy-state machine.
-type RuntimeBusy struct {
-	Busy         bool   `json:"busy"`
-	BusySince    string `json:"busy_since,omitempty"`
-	Spinner      string `json:"spinner,omitempty"`
-	InFlightTool string `json:"in_flight_tool,omitempty"`
-	InFlightArgs string `json:"in_flight_args_summary,omitempty"`
-	Iteration    int    `json:"iteration,omitempty"`
-	TokenUsage   int64  `json:"token_usage,omitempty"`
-	ContextPct   int    `json:"context_pct,omitempty"`
+// RuntimeConversation is the conversation face with cursor pagination.
+type RuntimeConversation struct {
+	Turns      []RuntimeConversationTurn `json:"turns"`
+	NextCursor string                    `json:"next_cursor,omitempty"`
+	Truncated  bool                      `json:"truncated,omitempty"`
 }
 
-// RuntimeTodo is one task-board row.
+// RuntimeActivityEvent is face 4: one recent tool call/result.
+type RuntimeActivityEvent struct {
+	Tool string `json:"tool"`
+	OK   bool   `json:"ok"`
+	Size int    `json:"size,omitempty"`
+	TS   string `json:"ts,omitempty"`
+}
+
+// RuntimeFileTouch is a touched file (read/edited) in the activity window.
+type RuntimeFileTouch struct {
+	Path string `json:"path"`
+	Op   string `json:"op"` // read|edit|write
+	TS   string `json:"ts,omitempty"`
+}
+
+// RuntimeActivity is the activity face with cursor pagination.
+type RuntimeActivity struct {
+	Events     []RuntimeActivityEvent `json:"events"`
+	Files      []RuntimeFileTouch     `json:"files,omitempty"`
+	NextCursor string                 `json:"next_cursor,omitempty"`
+	Truncated  bool                   `json:"truncated,omitempty"`
+}
+
+// RuntimeSubagent is a running sub-agent (children face; #5589 data in P2).
+type RuntimeSubagent struct {
+	ID       string `json:"id"`
+	TaskHead string `json:"task_head,omitempty"`
+	State    string `json:"state,omitempty"`
+}
+
+// RuntimeJob is a background command job (children face; P2 wiring).
+type RuntimeJob struct {
+	ID      string `json:"id"`
+	CmdHead string `json:"cmd_head,omitempty"`
+	State   string `json:"state,omitempty"`
+}
+
+// RuntimeChildren is face 5: subagents + background jobs.
+type RuntimeChildren struct {
+	Subagents []RuntimeSubagent `json:"subagents,omitempty"`
+	Jobs      []RuntimeJob      `json:"jobs,omitempty"`
+}
+
+// RuntimeSchedule is face 6: crons + task board.
+type RuntimeSchedule struct {
+	Crons []RuntimeCron `json:"crons,omitempty"`
+	Todos []RuntimeTodo `json:"todos,omitempty"`
+}
+
+// RuntimeCron is one scheduled job summary.
+type RuntimeCron struct {
+	ID       string `json:"id"`
+	Cron     string `json:"cron,omitempty"`
+	NextFire string `json:"next_fire,omitempty"`
+	Prompt   string `json:"prompt,omitempty"`
+}
+
+// RuntimeTodo is one task-board entry.
 type RuntimeTodo struct {
 	ID         string `json:"id"`
 	Subject    string `json:"subject"`
@@ -142,121 +131,71 @@ type RuntimeTodo struct {
 	ActiveForm string `json:"active_form,omitempty"`
 }
 
-// RuntimeConversationTurn is one recent conversation trace entry (head of
-// the user instruction / one-line assistant+tool summary, 200-char caps).
-type RuntimeConversationTurn struct {
-	Role    string `json:"role"`
-	Summary string `json:"summary"`
+// RuntimeEnv is face 7: workspace environment.
+type RuntimeEnv struct {
+	Workspace  string `json:"workspace,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+	Head       string `json:"head,omitempty"`
+	DirtyFiles int    `json:"dirty_files,omitempty"`
+	Provider   string `json:"provider,omitempty"`
 }
 
-// RuntimeCron is one cron-registry row.
-type RuntimeCron struct {
-	ID       string `json:"id"`
-	Cron     string `json:"cron,omitempty"`
-	NextFire string `json:"next_fire,omitempty"`
-	Prompt   string `json:"prompt_head,omitempty"`
+// RuntimeSnapshotV3 is the runtime/snapshot result: seven faces, zero LLM,
+// raw verbatim content (user ruling: same workspace = trust domain).
+type RuntimeSnapshotV3 struct {
+	Schema       string               `json:"schema"` // "v3"
+	TakenAt      string               `json:"taken_at"`
+	Depth        string               `json:"depth"`
+	Status       *RuntimeStatus       `json:"status,omitempty"`
+	Inflight     *RuntimeInflight     `json:"inflight,omitempty"`
+	Conversation *RuntimeConversation `json:"conversation,omitempty"`
+	Activity     *RuntimeActivity     `json:"activity,omitempty"`
+	Children     *RuntimeChildren     `json:"children,omitempty"`
+	Schedule     *RuntimeSchedule     `json:"schedule,omitempty"`
+	Env          *RuntimeEnv          `json:"env,omitempty"`
 }
 
-// RuntimeSnapshotV2 is the runtime/snapshot result. Faces not populated
-// stay nil so the JSON shape is forward-compatible across phases.
-type RuntimeSnapshotV2 struct {
-	Schema       string                    `json:"schema"` // "v2"
-	Mode         string                    `json:"mode"`   // metadata|full
-	TakenAt      string                    `json:"taken_at"`
-	Busy         *RuntimeBusy              `json:"busy,omitempty"`
-	Todos        []RuntimeTodo             `json:"todos,omitempty"`
-	Recent       []RuntimeToolTrace        `json:"recent,omitempty"`
-	Conversation []RuntimeConversationTurn `json:"conversation,omitempty"`
-	Crons        []RuntimeCron             `json:"crons,omitempty"`
+// RuntimeIntrospectorV3 is injected by the assembly layer (cmd/ggcode
+// root); the a2a server stays free of agent/lanchat imports.
+type RuntimeIntrospectorV3 interface {
+	RuntimeSnapshotV3(req SnapshotRequest) (*RuntimeSnapshotV3, error)
 }
 
-// RuntimeIntrospector is injected by the assembly layer (cmd/ggcode root);
-// the a2a server itself stays free of agent/lanchat imports. Zero LLM by
-// contract: implementations must read in-memory state only.
-type RuntimeIntrospector interface {
-	RuntimeSnapshot(mode string) (*RuntimeSnapshotV2, error)
+// RuntimeIntrospectorV3Func adapts a function to the interface.
+type RuntimeIntrospectorV3Func func(req SnapshotRequest) (*RuntimeSnapshotV3, error)
+
+func (f RuntimeIntrospectorV3Func) RuntimeSnapshotV3(req SnapshotRequest) (*RuntimeSnapshotV3, error) {
+	return f(req)
 }
 
-// secretRedactPatterns are appended by tests via RegisterSecretPattern for
-// pin coverage; core set covers common token shapes.
-var secretRedactPatterns = []string{
-	"api_key=", "apikey=", "token=", "password=", "secret=", "authorization:",
-}
+// MethodRuntimeSnapshot is the plain JSON-RPC method name.
+const MethodRuntimeSnapshot = "runtime/snapshot"
 
-// RegisterSecretPattern adds a literal marker redacted from snapshot output
-// (test hook for the DoD secrets pin).
-func RegisterSecretPattern(p string) { secretRedactPatterns = append(secretRedactPatterns, p) }
-
-// RedactSnapshotStrings masks secret-looking fragments across all text
-// faces. Truncation discipline (200-char heads) is applied here too so a
-// full dump can never ride through the summary fields.
-func RedactSnapshotStrings(s *RuntimeSnapshotV2) {
-	const head = 200
-	trunc := func(v string) string {
-		v = strings.TrimSpace(v)
-		for _, p := range secretRedactPatterns {
-			if i := strings.Index(strings.ToLower(v), p); i >= 0 {
-				v = v[:i] + "[REDACTED]"
+// NewRuntimeSnapshotHandlerV3 builds the plain method handler: no second
+// gate, no nonce/signature - the legacy auth middleware has already run.
+// The params (depth/faces/cursors/limits) arrive as the JSON-RPC params
+// object; nil params default to full depth.
+func NewRuntimeSnapshotHandlerV3(inst RuntimeIntrospectorV3, now func() time.Time) func(params json.RawMessage) (*RuntimeSnapshotV3, *JSONRPCError) {
+	return func(params json.RawMessage) (*RuntimeSnapshotV3, *JSONRPCError) {
+		if inst == nil {
+			return nil, &JSONRPCError{Code: -32002, Message: "Introspection source unavailable"}
+		}
+		req := SnapshotRequest{Depth: DepthFull}
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, &req); err != nil {
+				return nil, ErrInvalidParams
 			}
 		}
-		if len(v) > head {
-			return v[:head] + "…"
+		if req.Depth == "" {
+			req.Depth = DepthFull
 		}
-		return v
-	}
-	if s == nil {
-		return
-	}
-	if s.Busy != nil {
-		s.Busy.Spinner = trunc(s.Busy.Spinner)
-		s.Busy.InFlightArgs = trunc(s.Busy.InFlightArgs)
-	}
-	for i := range s.Todos {
-		s.Todos[i].Subject = trunc(s.Todos[i].Subject)
-		s.Todos[i].ActiveForm = trunc(s.Todos[i].ActiveForm)
-	}
-	for i := range s.Recent {
-		s.Recent[i].Summary = trunc(s.Recent[i].Summary)
-	}
-	for i := range s.Conversation {
-		s.Conversation[i].Summary = trunc(s.Conversation[i].Summary)
-	}
-	for i := range s.Crons {
-		s.Crons[i].Prompt = trunc(s.Crons[i].Prompt)
-	}
-}
-
-// NewRuntimeSnapshotHandler wires the introspector and mode; nil introspector
-// means the feature is configured but has no source (denies everything).
-func NewRuntimeSnapshotHandler(inst RuntimeIntrospector, mode string, now func() time.Time) func(method, nonce, sig string) (*RuntimeSnapshotV2, *JSONRPCError) {
-	return func(method, nonce, sig string) (*RuntimeSnapshotV2, *JSONRPCError) {
-		if inst == nil {
-			return nil, ErrIntrospectionDenied
-		}
-		if method != "runtime/snapshot" {
-			return nil, ErrMethodNotFound
-		}
-		snap, err := inst.RuntimeSnapshot(mode)
+		snap, err := inst.RuntimeSnapshotV3(req)
 		if err != nil {
 			return nil, &JSONRPCError{Code: -32002, Message: "Snapshot source error: " + err.Error()}
 		}
 		if snap == nil {
-			snap = &RuntimeSnapshotV2{Schema: "v2", Mode: mode}
+			return nil, &JSONRPCError{Code: -32002, Message: "Snapshot source unavailable"}
 		}
-		snap.Schema = "v2"
-		snap.Mode = mode
-		if now != nil {
-			snap.TakenAt = now().UTC().Format(time.RFC3339)
-		}
-		RedactSnapshotStrings(snap)
 		return snap, nil
 	}
-}
-
-// RuntimeIntrospectorFunc adapts a plain function to RuntimeIntrospector
-// (assembly-layer convenience for phase-staged wiring).
-type RuntimeIntrospectorFunc func(mode string) (*RuntimeSnapshotV2, error)
-
-func (f RuntimeIntrospectorFunc) RuntimeSnapshot(mode string) (*RuntimeSnapshotV2, error) {
-	return f(mode)
 }
