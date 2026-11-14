@@ -197,8 +197,11 @@ func pickHealthy(target string, cands []InstanceInfo, lookup IdentityLookup, now
 }
 
 // matchNick returns instances whose seat nick matches the target exactly
-// (case-insensitive). HumanNick and the composite agent nick
-// (<nick>_<role>) both resolve to the bare-nick seat.
+// (case-insensitive). The lanchat bridges stamp the AgentNick
+// (HumanNick + "_agent", e.g. "dev_ggcode_agent"), while targets may use
+// the documented bare human nick ("dev_ggcode"), the exact agent nick, or
+// the composite nick_role ("dev_ggcode_ggcode") — all resolve to the
+// same seat.
 func matchNick(instances []InstanceInfo, target string) []InstanceInfo {
 	var out []InstanceInfo
 	for i := range instances {
@@ -206,7 +209,13 @@ func matchNick(instances []InstanceInfo, target string) []InstanceInfo {
 		if n == "" {
 			continue
 		}
-		if n == target || n+"_"+strings.ToLower(instances[i].Role) == target {
+		// #5617: normalize away the "_agent" suffix the production bridges
+		// (seatNickRepublisher / seatIdentityLookup stamp hub.AgentNick())
+		// append, so the documented bare-nick target form keeps matching
+		// end-to-end instead of falling through to the project-name tier,
+		// where a same-workspace fleet is 12-way ambiguous.
+		bare := strings.TrimSuffix(n, "_agent")
+		if n == target || bare == target || bare+"_"+strings.ToLower(instances[i].Role) == target {
 			out = append(out, instances[i])
 		}
 	}

@@ -169,6 +169,36 @@ func TestSeatNamePortExact(t *testing.T) {
 	}
 }
 
+// Ruler 1 (#5617 full-chain form): production bridges stamp the AgentNick
+// (HumanNick + "_agent"), so target=dev_ggcode must still hit that seat —
+// the exact seam that broke end-to-end nick addressing while unit tests
+// (which stamp bare nicks) stayed green.
+func TestSeatNickAgentSuffixFullChain(t *testing.T) {
+	e := &seatAddrTestEnv{t: t}
+	e.addLiveInstance("dev_ggcode_agent", "/w/ggcode", "2026-11-14T10:00:00Z")
+	e.addLiveInstance("reviewer_seat_agent", "/w/ggcode", "2026-11-14T10:01:00Z")
+	e.rebuild()
+
+	for _, target := range []string{
+		"dev_ggcode",       // documented bare human nick
+		"dev_ggcode_agent", // exact agent nick as stamped
+		"dev_ggcode_dev",   // composite nick_role (env stamps role=dev)
+	} {
+		inst, err := find(t, e.rt, target)
+		if err != nil {
+			t.Fatalf("target %q: %v", target, err)
+		}
+		if inst.Nick != "dev_ggcode_agent" {
+			t.Fatalf("target %q resolved to %q, want dev_ggcode_agent", target, inst.Nick)
+		}
+	}
+
+	// The other seat is equally addressable by its bare nick.
+	if inst, err := find(t, e.rt, "reviewer_seat"); err != nil || inst.Nick != "reviewer_seat_agent" {
+		t.Fatalf("reviewer_seat: inst=%v err=%v", inst, err)
+	}
+}
+
 // Roster/mDNS entries carry nick through discovery.
 func TestSeatNickTXTAndRoster(t *testing.T) {
 	fields := []string{"id=x", "workspace=/w", "nick=dev_ggcode", "role=dev", "team=ggcode"}
