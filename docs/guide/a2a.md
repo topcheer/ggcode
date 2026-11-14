@@ -18,6 +18,16 @@ List all connected ggcode instances:
 a2a_discover
 ```
 
+### Warm Roster File (zero-wait discovery)
+
+Each running ggcode daemon keeps a seat record in
+`<workspace>/.ggcode/a2a-roster.json` (written on startup, refreshed every
+15 seconds, removed on shutdown; entries older than 10 minutes are treated
+as stale). When the mDNS browse window of a one-shot CLI comes up empty —
+`ggcode a2a introspect list` — the CLI falls back to this file, so the
+same-machine fleet roster is available with zero wait. mDNS remains the
+primary channel and continues to cover cross-machine peers.
+
 ### Signed Agent Cards (A2A §8.4)
 
 Publishers may attach JWS (RFC 7515) signatures to their Agent Card. A
