@@ -1713,8 +1713,14 @@ var a2aTimeoutWarnf = func(format string, args ...any) {
 // identity whenever the hub nick becomes known or changes. Hub identity
 // restores asynchronously after construction, so the immediate post-hub
 // publish races an empty nick; the sync tick re-publishes lazily (#5616).
+// seatNickRepublisher returns a closure that re-stamps the registry self
+// entry on EVERY sync tick. RosterUpsert is the roster heartbeat (entries
+// age out after ~10m TTL): a change-detection guard here starved unchanged
+// seats to death (fleet-verified - entries registered once, probed
+// unreachable, TTL-purged). SetSelfIdentity writes the registry/roster file
+// only; it never LAN-broadcasts, so per-tick re-stamping is silent (#5626
+// guards hub-side identity broadcasts separately).
 func seatNickRepublisher(hub *lanchat.Hub, reg *a2a.Registry) func() {
-	var last string
 	return func() {
 		if hub == nil || reg == nil {
 			return
@@ -1723,11 +1729,10 @@ func seatNickRepublisher(hub *lanchat.Hub, reg *a2a.Registry) func() {
 		if nick == "" {
 			nick = hub.HumanNick()
 		}
-		if nick == "" || nick == last {
+		if nick == "" {
 			return
 		}
-		reg.SetSelfIdentity(nick, "", "")
-		last = nick
+		reg.SetSelfIdentity(nick, hub.Role(), hub.Team())
 	}
 }
 
