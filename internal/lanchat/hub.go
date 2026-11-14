@@ -633,7 +633,12 @@ func (h *Hub) SetNickRoleTeam(nick, role, team string) error {
 	h.role = role
 	h.team = team
 	sessionDir := h.store.dir
+	nickCb := h.onNickRestored
 	h.mu.Unlock()
+	if nickCb != nil {
+		cb, n := nickCb, composite
+		safego.Go("lanchat.nickRestored", func() { cb(n) })
+	}
 
 	if err := SaveNick(sessionDir, composite); err != nil {
 		debug.Log("lanchat", "failed to persist session nick: %v", err)
@@ -793,7 +798,12 @@ func (h *Hub) resolveNickConflict() {
 	sessionDir := h.store.dir
 
 	role, team := h.role, h.team
+	nickCb := h.onNickRestored
 	h.mu.Unlock()
+	if nickCb != nil {
+		cb, n := nickCb, newNick
+		safego.Go("lanchat.nickRestored", func() { cb(n) })
+	}
 
 	debug.Log("lanchat", "nick conflict: %s -> %s", myNick, newNick)
 	_ = SaveNick(sessionDir, newNick)
