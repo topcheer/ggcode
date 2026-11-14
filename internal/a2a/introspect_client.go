@@ -84,6 +84,12 @@ func NewIntrospectTool(reg *Registry, apiKey, _ string) *IntrospectTool {
 	return &IntrospectTool{registry: reg, apiKey: apiKey, localTool: rt}
 }
 
+// SetIdentityLookup wires the seat-identity bridge through to the internal
+// resolver (#5616) so nick targets work for introspect too.
+func (t *IntrospectTool) SetIdentityLookup(fn IdentityLookup) {
+	t.localTool.SetIdentityLookup(fn)
+}
+
 func (t *IntrospectTool) Name() string { return "a2a_introspect" }
 
 func (t *IntrospectTool) Description() string {
@@ -98,7 +104,7 @@ func (t *IntrospectTool) Parameters() json.RawMessage {
 		"properties": {
 			"target": {
 				"type": "string",
-				"description": "Target instance name (project name), or 'list' to enumerate peers."
+				"description": "Target seat: project name, seat nick in a shared-workspace fleet (e.g. 'dev_ggcode'), or 'name:port' to pin an exact instance; or 'list' to enumerate peers."
 			},
 			"depth": {
 				"type": "string",

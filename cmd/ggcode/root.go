@@ -981,7 +981,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	var a2aTaskHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
 
-		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir)
+		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir, seatIdentityLookup(lanchatHub))
 		if err != nil {
 
 			debug.Log("root", "A2A server startup warning: %v", err)
@@ -1026,6 +1026,16 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		lanchatHub.SetRequireAgentApproval(cfg.LanChat.RequireApprovalForAgents)
 		lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
+
+		// #5616: publish our seat nick into the roster so cross-process
+		// resolvers (one-shot CLI) can address this seat by nick.
+		if a2aRegistry != nil {
+			nick := lanchatHub.AgentNick()
+			if nick == "" {
+				nick = lanchatHub.HumanNick()
+			}
+			a2aRegistry.SetSelfIdentity(nick, "", "")
+		}
 
 		syncCtx, syncCancel := context.WithCancel(context.Background())
 		defer syncCancel()
@@ -1697,6 +1707,39 @@ var a2aTimeoutWarnf = func(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format, args...)
 }
 
+// seatIdentityLookup bridges a lanchat hub's seat registry into the a2a
+// identity domain (#5616): endpoint-keyed nick/role/team plus heartbeat
+// freshness. Nil-safe: a nil hub yields a lookup that never matches.
+func seatIdentityLookup(hub *lanchat.Hub) a2a.IdentityLookup {
+	return func(endpoint string) (a2a.Identity, bool) {
+		if hub == nil {
+			return a2a.Identity{}, false
+		}
+		want := endpoint
+		want = strings.TrimPrefix(want, "http://")
+		want = strings.TrimPrefix(want, "https://")
+		for _, p := range hub.Participants() {
+			pe := p.Endpoint
+			pe = strings.TrimPrefix(pe, "http://")
+			pe = strings.TrimPrefix(pe, "https://")
+			if pe == want {
+				nick := p.AgentNick
+				if nick == "" {
+					nick = p.HumanNick
+				}
+				return a2a.Identity{
+					Nick:     nick,
+					Role:     p.Role,
+					Team:     p.Team,
+					LastSeen: p.LastSeen,
+					Online:   p.Online,
+				}, true
+			}
+		}
+		return a2a.Identity{}, false
+	}
+}
+
 func parseA2ATimeout(s string) time.Duration {
 	if s == "" {
 		return 5 * time.Minute
@@ -1714,7 +1757,7 @@ func parseA2ATimeout(s string) time.Duration {
 	return d
 }
 
-func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, *a2a.TaskHandler, func(), error) {
+func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string, identityFn a2a.IdentityLookup) (*a2a.Server, *a2a.Registry, *a2a.TaskHandler, func(), error) {
 	a2aReg, err := a2a.NewRegistry()
 	if err != nil {
 		return nil, nil, nil, func() {}, fmt.Errorf("a2a registry: %w", err)
@@ -1884,6 +1927,15 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	// #5593: one-hop peer runtime snapshot for agents (same domain key).
 	introspectTool := a2a.NewIntrospectTool(a2aReg, a2aAPIKey(cfg), workingDir)
 	_ = reg.Register(introspectTool)
+
+	// #5616 seat addressing: bridge lanchat seat identity (nick/role/team,
+	// heartbeat freshness) into a2a target resolution so same-workspace
+	// fleets are addressable by nick and same-name candidates resolve
+	// healthy-first (dead endpoints never answer a seat lookup).
+	if identityFn != nil {
+		remoteTool.SetIdentityLookup(identityFn)
+		introspectTool.SetIdentityLookup(identityFn)
+	}
 
 	refreshCtx, refreshCancel := context.WithCancel(context.Background())
 	safego.Go("root.a2a.refreshCache", func() {

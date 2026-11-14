@@ -23,6 +23,14 @@ type InstanceInfo struct {
 	Endpoint     string `json:"endpoint"`
 	AgentCardURL string `json:"agent_card_url"`
 	Status       string `json:"status"`
+	// Seat identity (#5616): lanchat-derived nick/role/team so a2a target
+	// resolution can address a concrete seat inside a same-workspace fleet
+	// where every instance registers under the same project name. Empty for
+	// peers that never joined lanchat or for pre-#5616 roster/mDNS entries.
+	Nick     string `json:"nick,omitempty"`
+	Role     string `json:"role,omitempty"`
+	Team     string `json:"team,omitempty"`
+	LastSeen int64  `json:"last_seen,omitempty"` // unix seconds; 0 = unknown
 }
 
 func (i InstanceInfo) DisplayName() string {
@@ -88,6 +96,33 @@ func (r *Registry) SelfInfo() *InstanceInfo {
 	}
 	c := *r.selfInfo
 	return &c
+}
+
+// SetSelfIdentity stamps the lanchat seat identity (nick/role/team) onto
+// the registered self and republishes the roster entry so cross-process
+// resolvers (one-shot CLI with no lanchat hub) can address this seat by
+// nick (#5616). Call after Register, once the hub exists.
+func (r *Registry) SetSelfIdentity(nick, role, team string) {
+	r.mu.Lock()
+	if r.selfInfo == nil {
+		r.mu.Unlock()
+		return
+	}
+	if nick != "" {
+		r.selfInfo.Nick = nick
+	}
+	if role != "" {
+		r.selfInfo.Role = role
+	}
+	if team != "" {
+		r.selfInfo.Team = team
+	}
+	info := *r.selfInfo
+	ws := info.Workspace
+	r.mu.Unlock()
+	if ws != "" {
+		RosterUpsert(ws, info)
+	}
 }
 
 func (r *Registry) SelfID() string {
