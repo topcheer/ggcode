@@ -158,7 +158,7 @@ func (t *IntrospectTool) Execute(ctx context.Context, input json.RawMessage) (to
 	return tool.Result{Content: FormatSnapshotV3(params.Target, inst.Workspace, snap)}, nil
 }
 
-// FormatSnapshotV3 renders the seven faces for an agent consumer.
+// FormatSnapshotV3 renders the eight faces for an agent consumer.
 func FormatSnapshotV3(target, workspace string, s *RuntimeSnapshotV3) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Peer context: %s (%s) taken %s depth=%s\n", target, workspace, s.TakenAt, s.Depth))
@@ -243,6 +243,39 @@ func FormatSnapshotV3(target, workspace string, s *RuntimeSnapshotV3) string {
 	if s.Env != nil {
 		b.WriteString(fmt.Sprintf("env: workspace=%s branch=%s head=%s dirty=%d provider=%s\n",
 			s.Env.Workspace, s.Env.Branch, s.Env.Head, s.Env.DirtyFiles, s.Env.Provider))
+	}
+	if s.Plan != nil {
+		b.WriteString(fmt.Sprintf("plan: %d todos, %d goal nodes, %d board tasks\n",
+			len(s.Plan.Todos), len(s.Plan.GoalNodes), len(s.Plan.Tasks)))
+		for i, t := range s.Plan.Todos {
+			if i >= 10 {
+				b.WriteString("  ... (todo render cap)\n")
+				break
+			}
+			b.WriteString(fmt.Sprintf("  todo [%s] %s\n", t.Status, t.Content))
+		}
+		for i, g := range s.Plan.GoalNodes {
+			if i >= 10 {
+				b.WriteString("  ... (goal render cap)\n")
+				break
+			}
+			b.WriteString(fmt.Sprintf("  goal[%s] %s %s", g.Status, g.Level, g.Title))
+			if g.NextStep != "" {
+				b.WriteString(fmt.Sprintf(" -> %s", g.NextStep))
+			}
+			b.WriteString("\n")
+		}
+		for i, tk := range s.Plan.Tasks {
+			if i >= 10 {
+				b.WriteString("  ... (task render cap)\n")
+				break
+			}
+			b.WriteString(fmt.Sprintf("  task [%s] %s", tk.Status, tk.Subject))
+			if tk.Owner != "" {
+				b.WriteString(fmt.Sprintf(" (owner=%s)", tk.Owner))
+			}
+			b.WriteString("\n")
+		}
 	}
 	return b.String()
 }
