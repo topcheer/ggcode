@@ -744,6 +744,18 @@ func irrevIsGroundingAction(toolName string) bool {
 	return false
 }
 
+// irrevIsIdleWaitAction reports whether the tool is a pure idle/wait
+// call: no grounding opportunity, no state change. #5478: such actions
+// are exempt from the grounding window - they neither accumulate nor
+// evict credit (decided before the window append; see recordAction).
+func irrevIsIdleWaitAction(toolName string) bool {
+	switch toolName {
+	case "sleep", "wait_agent", "wait_command":
+		return true
+	}
+	return false
+}
+
 func (s *irrevGateState) recordOutcome(toolName string, isError bool) {
 	if !isError || len(s.grounding) == 0 {
 		return
@@ -771,6 +783,17 @@ func (s *irrevGateState) recordAction(toolName, args string) string {
 	// even as a first action, exactly as #1798 pinned. Only non-shell medium
 	// tools (git_commit / file_ops / batch_replace / lsp_rename ...) get the
 	// first-action exemption.
+	// #5478 residual: idle-wait actions (sleep / wait_agent / wait_command)
+	// must occupy NO grounding-window slot: a wait has no grounding
+	// opportunity, and appending `false` evicts real credit - the watchdog
+	// seat's sleep->read-only patrol rounds diluted their window and fired
+	// the "0 grounding" banner every round (8/8 field rounds, all false
+	// positives). The exemption skips window mutation entirely (neither
+	// accumulate nor evict), decided BEFORE the append so no
+	// append-then-remove intermediate state exists. Tier gating is
+	// untouched: idle-wait tools classify LOW and cannot reach the gate.
+	idleWait := irrevIsIdleWaitAction(toolName)
+
 	firstAction := len(s.grounding) == 0 && toolName != "run_command" && toolName != "start_command"
 
 	recentGrounding := 0
@@ -784,13 +807,15 @@ func (s *irrevGateState) recordAction(toolName, args string) string {
 		}
 	}
 
-	if len(s.grounding) >= irrevMaxHistory {
-		s.grounding = s.grounding[1:]
-	}
-	s.grounding = append(s.grounding, isGrounding)
-	if isGrounding {
-		s.totalGrounded++
-		s.lastGroundingTool = toolName
+	if !idleWait {
+		if len(s.grounding) >= irrevMaxHistory {
+			s.grounding = s.grounding[1:]
+		}
+		s.grounding = append(s.grounding, isGrounding)
+		if isGrounding {
+			s.totalGrounded++
+			s.lastGroundingTool = toolName
+		}
 	}
 
 	if tier < irrevTierMedium {
