@@ -17,10 +17,11 @@ func TestActivityFromRingEntries_ParsesToolAndOK(t *testing.T) {
 		{Category: "agent", Message: "[agent] tool result ERROR: tool=run_command output=boom", Time: "04:00:00.001"},
 		{Category: "agent", Message: "[agent] tool output guarded: tool=read_file tokens=10", Time: "04:00:00.002"},
 		{Category: "ctx", Message: "[ctx] plain diagnostic line", Time: "04:00:00.003"},
+		{Category: "agent", Message: "[agent] tool output guarded: tool=edit_file path=/x/ERRORHANDLER_test.go", Time: "04:00:00.004"},
 	}
 	events := ActivityFromRingEntries(entries)
-	if len(events) != 3 {
-		t.Fatalf("got %d events, want 3", len(events))
+	if len(events) != 4 {
+		t.Fatalf("got %d events, want 4", len(events))
 	}
 	if events[0].Tool != "run_command" || events[0].OK {
 		t.Errorf("event0 = %+v, want Tool=run_command OK=false", events[0])
@@ -33,6 +34,11 @@ func TestActivityFromRingEntries_ParsesToolAndOK(t *testing.T) {
 	}
 	if events[0].TS != "04:00:00.001" {
 		t.Errorf("TS = %q, want the ring timestamp", events[0].TS)
+	}
+	// Regression: a payload merely CONTAINING the word ERROR (a path here)
+	// must not tint the OK flag; only the writer-side marker does.
+	if len(events) < 4 || events[3].Tool != "edit_file" || !events[3].OK {
+		t.Errorf("event3 = %+v, want Tool=edit_file OK=true (bare ERROR in payload must not tint)", events[len(events)-1])
 	}
 }
 

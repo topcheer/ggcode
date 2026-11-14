@@ -26,7 +26,11 @@ func ActivityFromRingEntries(entries []debug.RingEntry) []a2a.RuntimeActivityEve
 		}
 		if name, ok := toolFromLogLine(e.Message); ok {
 			ev.Tool = name
-			ev.OK = !strings.Contains(e.Message, "ERROR")
+			// Match the writer-side marker (chat_tool_loop.go logs
+			// "tool result ERROR: tool=<name>"), not a bare "ERROR"
+			// substring: ordinary payloads carrying the word ERROR
+			// (paths, params) must not tint the OK flag.
+			ev.OK = !strings.Contains(e.Message, "result ERROR: tool=")
 		}
 		events = append(events, ev)
 	}
