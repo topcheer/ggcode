@@ -18,6 +18,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/topcheer/ggcode/internal/a2a"
+	"github.com/topcheer/ggcode/internal/a2aintrospect"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/auth"
@@ -1167,6 +1168,27 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)
 	fileWatch.Start()
 	defer fileWatch.Stop()
+
+	// #5575 phase 2b: swap the phase-1 stub introspector for the real
+	// busy face (lanchat hub self-participant - the "what is it doing right
+	// now" answer, zero LLM). Remaining faces (crons/todos/conversation/
+	// recent tails) keep their Sources injection slots for phase 2c.
+	if a2aServer != nil && !cfg.A2A.Disabled && cfg.A2A.Introspection != "" {
+		a2aServer.SetIntrospector(&a2aintrospect.Sources{
+			Busy: func() *a2a.RuntimeBusy {
+				p := lanchatHub.SelfParticipant()
+				b := &a2a.RuntimeBusy{
+					Busy:         p.AgentBusy,
+					Spinner:      p.AgentStatus,
+					InFlightTool: p.AgentStatus,
+				}
+				if p.AgentStatusSince > 0 {
+					b.BusySince = time.Unix(p.AgentStatusSince, 0).UTC().Format(time.RFC3339)
+				}
+				return b
+			},
+		})
+	}
 
 	idleMaint := agentruntime.ApplyIdleMaintenance(ag, cfg.Idle)
 
