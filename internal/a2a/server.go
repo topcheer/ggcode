@@ -40,6 +40,11 @@ type Server struct {
 	mtlsEnabled    bool
 	tlsConfig      *tls.Config
 
+	// #125/G3: when true, refuse the unauthenticated same-machine (loopback)
+	// open arm even with no credentials configured. Default false = legacy
+	// behavior preserved.
+	requireAuth bool
+
 	pushGuard                *pushGuard
 	allowWildcardPushConfigs bool
 	pushClient               *http.Client
@@ -296,7 +301,13 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.authenticate(r) {
+	if ok, reason := s.authenticateRequest(r); !ok {
+		// #125/G1+G2: RFC 7235 challenge headers + machine-readable reason;
+		// body stays "unauthorized" for wire compatibility.
+		for _, ch := range s.challengeHeaders() {
+			w.Header().Add("WWW-Authenticate", ch)
+		}
+		w.Header().Set("X-Auth-Reason", reason)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -335,42 +346,70 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 	s.routeRPC(w, r, &req)
 }
 
-func (s *Server) authenticate(r *http.Request) bool {
-	if len(s.apiKeys) > 0 {
-		if provided := r.Header.Get("X-API-Key"); provided != "" {
-			for _, key := range s.apiKeys {
-				if subtle.ConstantTimeCompare([]byte(provided), []byte(key)) == 1 {
-					return true
-				}
+// authenticateRequest classifies the first failing auth arm (#125/G2).
+// Reasons: api_key_missing / api_key_invalid / bearer_validator_absent /
+// bearer_invalid / mtls_client_cert_missing / unauthenticated_denied.
+// Precedence: a presented-but-invalid credential is rejected outright
+// (channel mismatch must not silently fall through to another arm).
+func (s *Server) authenticateRequest(r *http.Request) (bool, string) {
+	if provided := r.Header.Get("X-API-Key"); provided != "" {
+		for _, key := range s.apiKeys {
+			if subtle.ConstantTimeCompare([]byte(provided), []byte(key)) == 1 {
+				return true, ""
 			}
 		}
+		return false, "api_key_invalid"
 	}
 
 	if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if s.tokenValidator != nil {
-			_, err := s.tokenValidator.ValidateToken(r.Context(), token)
-			if err == nil {
-				return true
-			}
-		}
 		if s.tokenValidator == nil {
-			return false
+			return false, "bearer_validator_absent"
 		}
+		if _, err := s.tokenValidator.ValidateToken(r.Context(), token); err == nil {
+			return true, ""
+		}
+		return false, "bearer_invalid"
 	}
 
 	if s.mtlsEnabled {
 		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-			return true
+			return true, ""
 		}
-		return false
+		return false, "mtls_client_cert_missing"
 	}
 
-	if len(s.apiKeys) == 0 && s.tokenValidator == nil && !s.mtlsEnabled {
-		return true
+	switch {
+	case len(s.apiKeys) > 0:
+		return false, "api_key_missing"
+	case s.tokenValidator != nil:
+		return false, "bearer_missing"
+	case s.mtlsEnabled:
+		return false, "mtls_client_cert_missing"
 	}
 
-	return false
+	// Nothing configured: legacy same-machine open arm (#125/G3 switch).
+	if s.requireAuth {
+		return false, "unauthenticated_denied"
+	}
+	return true, ""
+}
+
+func (s *Server) authenticate(r *http.Request) bool {
+	ok, _ := s.authenticateRequest(r)
+	return ok
+}
+
+// challengeHeaders lists the acceptable schemes per RFC 7235 (#125/G1).
+func (s *Server) challengeHeaders() []string {
+	var out []string
+	if len(s.apiKeys) > 0 {
+		out = append(out, `X-API-Key realm="ggcode-a2a"`)
+	}
+	if s.tokenValidator != nil {
+		out = append(out, `Bearer realm="ggcode-a2a"`)
+	}
+	return out
 }
 
 func (s *Server) routeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRequest) {
@@ -911,6 +950,12 @@ func (s *Server) SetTokenValidator(v *auth.TokenValidator) {
 func (s *Server) SetMTLSEnabled(enabled bool) {
 	s.mtlsEnabled = enabled
 	s.rebuildSecuritySchemes()
+}
+
+// SetRequireAuth refuses the unauthenticated same-machine open arm
+// (#125/G3). Default false preserves the legacy loopback arm.
+func (s *Server) SetRequireAuth(enabled bool) {
+	s.requireAuth = enabled
 }
 
 func (s *Server) SetTLSConfig(tlsCfg *tls.Config) {

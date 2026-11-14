@@ -535,13 +535,17 @@ func (c LanChatConfig) EffectiveAPIKey() string {
 const DefaultA2AAPIKey = "ggcode-lan-a2a-v1"
 
 type A2AConfig struct {
-	Disabled    bool                `yaml:"disabled,omitempty"`
-	Port        int                 `yaml:"port"`
-	Host        string              `yaml:"host"`
-	MaxTasks    int                 `yaml:"max_tasks"`
-	TaskTimeout string              `yaml:"task_timeout"`
-	Interfaces  []string            `yaml:"interfaces,omitempty"`
-	Auth        A2AAuthConfig       `yaml:"auth,omitempty"`
+	Disabled    bool          `yaml:"disabled,omitempty"`
+	Port        int           `yaml:"port"`
+	Host        string        `yaml:"host"`
+	MaxTasks    int           `yaml:"max_tasks"`
+	TaskTimeout string        `yaml:"task_timeout"`
+	Interfaces  []string      `yaml:"interfaces,omitempty"`
+	Auth        A2AAuthConfig `yaml:"auth,omitempty"`
+
+	// #125/G3: refuse the unauthenticated same-machine (loopback) arm even
+	// when no credentials are configured. Default false = legacy open arm.
+	RequireAuth bool                `yaml:"require_auth,omitempty"`
 	Delegation  A2ADelegationConfig `yaml:"delegation,omitempty"`
 
 	Extensions []A2AExtensionConfig `yaml:"extensions,omitempty"`
