@@ -1052,14 +1052,17 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			}
 			if !stampSeatNick() {
 				safego.Go("a2a.seatNickStampRetry", func() {
-					deadline := time.Now().Add(60 * time.Second)
+					// TUI resume can take minutes (process start -> nudge
+					// injection -> session attach -> SetSessionID nick
+					// restore), so keep sampling for up to 10 minutes.
+					deadline := time.Now().Add(10 * time.Minute)
 					for time.Now().Before(deadline) {
-						time.Sleep(2 * time.Second)
+						time.Sleep(5 * time.Second)
 						if stampSeatNick() {
 							return
 						}
 					}
-					debug.Log("a2a", "seat nick stamp retry gave up after 60s: nick never restored")
+					debug.Log("a2a", "seat nick stamp retry gave up after 10m: nick never restored")
 				})
 			}
 		}
