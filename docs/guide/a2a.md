@@ -279,9 +279,16 @@ instance of the SAME workspace, otherwise -32003).
   (the declared working set: session todos, durable goal graph, task
   board - intent and standing, not just activity).
 - Depth tiers: `brief` (headers/clipped) and `full` (default, verbatim).
+- Category pull (#5635 user ruling ②): `--category mounts|state|content`
+  (agent tool param `category`) selects a face subset by layer -
+  `mounts` = env (mounted MCP/IM/skills/mobile), `state` = status /
+  inflight / children / schedule / plan, `content` = the heavy verbatim
+  faces (conversation + activity, cursor-paginated). Category expands
+  to a faces subset server-side; an explicit `faces` list intersects
+  within the category. Unknown category names error.
 - Agent tool `a2a_introspect`: `target` (or `list`), `depth`, `faces`,
-  `cursor_conversation`, `cursor_activity`.
-- CLI: `ggcode a2a introspect <peer> [--depth brief|full] [--faces ...]`.
+  `category`, `cursor_conversation`, `cursor_activity`.
+- CLI: `ggcode a2a introspect <peer> [--depth brief|full] [--faces ...] [--category mounts|state|content]`.
 - Zero config: introspection is always ON (`a2a.introspection` is
   deprecated and ignored). `message/send` / `a2a_remote` keep
   cross-workspace reach - that is a feature, not a gap.

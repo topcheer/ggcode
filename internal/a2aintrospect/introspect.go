@@ -2,6 +2,7 @@ package a2aintrospect
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -10,9 +11,10 @@ import (
 	"github.com/topcheer/ggcode/internal/a2a"
 )
 
-// Sources aggregates the seven v3 faces from real runtime sources (#5597).
-// All content is VERBATIM (user ruling: same workspace = trust domain, no
-// redaction layers). Faces left nil are omitted from the snapshot.
+// Sources aggregates the eight v3 faces from real runtime sources (#5597
+// + #5635 P2 plan face). All content is VERBATIM (user ruling: same
+// workspace = trust domain, no redaction layers). Faces left nil are
+// omitted from the snapshot.
 type Sources struct {
 	Status   func() *a2a.RuntimeStatus
 	Inflight func() *a2a.RuntimeInflight
@@ -82,6 +84,31 @@ func (s *Sources) RuntimeSnapshotV3(req a2a.SnapshotRequest) (*a2a.RuntimeSnapsh
 		snap.Depth = a2a.DepthFull
 	}
 	faces := req.Faces
+	// #5635 category pull: expand the category into its faces subset and
+	// intersect with any explicit faces list (explicit faces still narrow
+	// within the category; an unknown category name is a caller error the
+	// agent-tool layer already rejects).
+	if req.Category != "" {
+		cat, ok := a2a.ExpandCategoryFaces(req.Category)
+		if !ok {
+			return nil, fmt.Errorf("unknown category %q (want mounts|state|content)", req.Category)
+		}
+		if len(faces) == 0 {
+			faces = cat
+		} else {
+			set := make(map[string]bool, len(cat))
+			for _, f := range cat {
+				set[strings.ToLower(f)] = true
+			}
+			keep := faces[:0]
+			for _, f := range faces {
+				if set[strings.ToLower(f)] {
+					keep = append(keep, f)
+				}
+			}
+			faces = keep
+		}
+	}
 
 	if s.wants(faces, "status") && s.Status != nil {
 		snap.Status = s.Status()
