@@ -1203,6 +1203,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 				st.BusySince = time.Unix(p.AgentStatusSince, 0).UTC().Format(time.RFC3339)
 				st.Spinner = p.AgentStatus
 			}
+			// #5635 P2: live run counters from the agent's thread-safe
+			// snapshot - these fields existed on RuntimeStatus but were
+			// never filled (issue #5635 status-face gap).
+			rs := ag.RuntimeStats()
+			st.Goal = rs.Goal
+			st.Iteration = rs.Iterations
+			st.TokensIn = rs.TokensIn
+			st.TokensOut = rs.TokensOut
+			st.ContextPct = rs.ContextPct
 			return st
 		}
 		scheduleFace := func() *a2a.RuntimeSchedule {
@@ -1224,14 +1233,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			return sch
 		}
 		activityFace := func(cursor string, limit int) ([]a2a.RuntimeActivityEvent, []a2a.RuntimeFileTouch, string, bool) {
-			lines := a2aintrospect.TailJSONL(debug.MainLogPath(), limit)
-			events := make([]a2a.RuntimeActivityEvent, 0, len(lines))
-			for i, l := range lines {
-				events = append(events, a2a.RuntimeActivityEvent{
-					TS: fmt.Sprintf("-%d", len(lines)-i), Tool: "log", OK: true, Size: len(l),
-				})
-			}
-			return events, nil, "", false
+			// #5635 P2: read the in-memory debug ring (debug.Log dual-writes
+			// disk + ring) instead of tailing the on-disk JSONL - no disk
+			// I/O on the introspection path, and tool name / OK come from the
+			// log line shape where available.
+			return a2aintrospect.ActivityFromRingEntries(debug.RingHistory(limit, "")), nil, "", false
 		}
 		convStore := func() []a2a.RuntimeConversationTurn {
 			// #5635: interactive seats (REPL) have no cron session ID - the
@@ -1333,7 +1339,19 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			return ev
 		}
 		inflightFace := func() *a2a.RuntimeInflight {
-			return a2aintrospect.InflightFromSubagents(subMgr.List())
+			// #5635 P2: the MAIN agent's in-flight tool call (loop
+			// instrumentation) takes precedence - it is the seat's own
+			// current action; sub-agent inflight remains the fallback.
+			inflight := a2aintrospect.InflightFromSubagents(subMgr.List())
+			if ct := ag.CurrentTool(); ct.Tool != "" {
+				if inflight == nil {
+					inflight = &a2a.RuntimeInflight{}
+				}
+				inflight.Tool = ct.Tool
+				inflight.ParamsHead = ct.ParamsHead
+				inflight.StartedAt = ct.StartedAt.UTC().Format(time.RFC3339)
+			}
+			return inflight
 		}
 		childrenFace := func() *a2a.RuntimeChildren {
 			ch := &a2a.RuntimeChildren{
