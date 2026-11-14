@@ -1011,6 +1011,10 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 			// window per #5520) on restart; nil scheduler leaves the nudge
 			// disabled, restart still works.
 			rtt.Nudger = r.cronScheduler
+			// #5553: pre-arm smoke gate — the exec-target binary must
+			// prove its agent-core plumbing (selfcheck round-trip +
+			// darwin codesign verify) before the restart arms.
+			rtt.Smoke = tool.RestartSmoke
 		}
 	}
 }

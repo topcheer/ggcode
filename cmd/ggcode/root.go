@@ -255,6 +255,11 @@ func NewRootCmd() *cobra.Command {
 	}
 	cmd.AddCommand(versionCmd)
 
+	// #5553: hidden pre-restart agent-core smoke probe (registry boot +
+	// run_command echo round-trip); driven by the restart tool's pre-arm
+	// smoke gate, also usable manually after a binary swap.
+	cmd.AddCommand(newSelfcheckCmd())
+
 	cmd.AddCommand(newConfigCmd(&cfgFile))
 
 	completionCmd := &cobra.Command{
