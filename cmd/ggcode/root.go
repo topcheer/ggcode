@@ -1217,6 +1217,34 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 				}
 				return traces
 			},
+			// #5575 phase 3: conversation tail face. Raw content passthrough
+			// per the phase-3 ruling (domain gate = trust boundary, no
+			// Redactor pre-pass); truncation is size discipline only.
+			Conversation: func() []a2a.RuntimeConversationTurn {
+				if cronSessionID == "" || cronSessionID == "__new__" {
+					return nil
+				}
+				const k = 8
+				const maxRunes = 400
+				dir, err := session.DefaultDir()
+				if err != nil {
+					return nil
+				}
+				st, err := session.NewJSONLStore(dir)
+				if err != nil {
+					return nil
+				}
+				msgs := st.RecentMessages(cronSessionID, k)
+				turns := make([]a2a.RuntimeConversationTurn, 0, len(msgs))
+				for _, m := range msgs {
+					r := []rune(m.Content)
+					if len(r) > maxRunes {
+						r = r[:maxRunes]
+					}
+					turns = append(turns, a2a.RuntimeConversationTurn{Role: m.Role, Summary: string(r)})
+				}
+				return turns
+			},
 			Busy: func() *a2a.RuntimeBusy {
 				p := lanchatHub.SelfParticipant()
 				b := &a2a.RuntimeBusy{

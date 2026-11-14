@@ -746,6 +746,62 @@ func (s *JSONLStore) sessionPath(id string) string {
 	return filepath.Join(s.dir, id+".jsonl")
 }
 
+// RecentMessage is one conversation turn exposed by the introspection read
+// port (#5575 phase 3): role plus concatenated text content.
+type RecentMessage struct {
+	Role    string
+	Content string
+}
+
+// RecentMessages returns the tail n messages (role+text) of session id's
+// jsonl. Each jsonl line is a full Session snapshot appended on save, so
+// the LAST decodable line wins and its Messages provide the tail. Missing
+// file or invalid id yields an empty slice and nil error — an absent source
+// is an empty face, not an error (introspection convention). Read-only.
+func (s *JSONLStore) RecentMessages(id string, n int) []RecentMessage {
+	if n <= 0 {
+		return nil
+	}
+	path := s.sessionPath(id)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var last *Session
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var ses Session
+		if json.Unmarshal([]byte(line), &ses) != nil {
+			continue
+		}
+		last = &ses
+	}
+	if last == nil {
+		return nil
+	}
+	msgs := last.Messages
+	if len(msgs) > n {
+		msgs = msgs[len(msgs)-n:]
+	}
+	out := make([]RecentMessage, 0, len(msgs))
+	for _, m := range msgs {
+		var b strings.Builder
+		for _, blk := range m.Content {
+			if blk.Type == "text" && blk.Text != "" {
+				if b.Len() > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(blk.Text)
+			}
+		}
+		out = append(out, RecentMessage{Role: m.Role, Content: b.String()})
+	}
+	return out
+}
+
 func (s *Session) HasUserInteraction() bool {
 	for _, m := range s.Messages {
 		if m.Role != "user" {
