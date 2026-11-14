@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,7 +20,7 @@ func (t CronCreateTool) Name() string { return "cron_create" }
 func (t CronCreateTool) Description() string {
 	return "Create a scheduled job that enqueues a prompt at cron-specified intervals. " +
 		"Set recurring=false for one-shot reminders (in-memory only, not persisted). " +
-		"One-shot jobs whose computed next fire is more than 90 days away are rejected unless far=true — " +
+		"One-shot jobs whose computed next fire is more than 90 days away are rejected unless far=true - " +
 		"far-future one-shot schedules are almost always a cron field parsing slip. " +
 		"queue_if_busy=false (default) skips if agent is busy; true queues the prompt for later."
 }
@@ -49,7 +50,7 @@ func (t CronCreateTool) Parameters() json.RawMessage {
 		},
 		"queue_if_busy": {
 			"type": "boolean",
-			"description": "Whether to queue the prompt if the agent is busy when the job fires. Default: false (skip if busy). Set to true for important tasks that must run even if the agent is busy — the prompt will queue and execute after the current task finishes."
+			"description": "Whether to queue the prompt if the agent is busy when the job fires. Default: false (skip if busy). Set to true for important tasks that must run even if the agent is busy - the prompt will queue and execute after the current task finishes."
 		},
 		"durable": {
 			"type": "boolean",
@@ -122,6 +123,17 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	far := (args.Far != nil && *args.Far) || (args.FarAck != nil && *args.FarAck)
 	farFutureDays := -1
 	if !recurring {
+		// #5594: a stale-date one-shot (system prompt embeds yesterday's
+		// date) rolls forward ~1 year - cron.NextTime finds the next
+		// matching calendar occurrence, so the computed next fire lands
+		// ~364 days out and far=true becomes an escape hatch for a
+		// silently mis-scheduled job. A specified date/time already in the
+		// past (including earlier today) is not a horizon question:
+		// reject unconditionally BEFORE the far gate - far=true must not
+		// bypass a past-date rejection (#5594 DoD 2).
+		if msg, past := oneShotPastDateRejection(args.Cron, time.Now()); past {
+			return Result{IsError: true, Content: msg}, nil
+		}
 		if next, err := cron.NextTime(args.Cron, time.Now()); err == nil {
 			if days := int(time.Until(next).Hours() / 24); days > oneShotFarFutureDays {
 				if !far {
@@ -147,7 +159,7 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	if !recurring {
 		suffix = "\n(one-shot: fires once and is removed automatically; not persisted across restarts)"
 		if farFutureDays > 0 {
-			suffix += fmt.Sprintf("\nWARNING: far-future one-shot accepted via far=true — next fire is %d days away. Far-future one-shots are usually cron field slips (minute hour day-of-month month day-of-week); verify the expression before relying on it.", farFutureDays)
+			suffix += fmt.Sprintf("\nWARNING: far-future one-shot accepted via far=true - next fire is %d days away. Far-future one-shots are usually cron field slips (minute hour day-of-month month day-of-week); verify the expression before relying on it.", farFutureDays)
 		}
 	}
 	return Result{Content: string(out) + suffix + "\n"}, nil
@@ -162,6 +174,101 @@ func oneShotFarFutureRejection(next time.Time, days int) string {
 			"Re-check the 5-field expression (minute hour day-of-month month day-of-week). If the far-future fire is intentional, retry with \"far\": true.",
 		days, next.Format(time.RFC3339), oneShotFarFutureDays,
 	)
+}
+
+// #5594 oneShotPastDateRejection detects a one-shot whose explicitly
+// specified date/time has already passed (including "earlier today"). The
+// cron package keeps its parsed field sets unexported, so simple field
+// forms are parsed locally. The check only fires when BOTH day-of-month and
+// month are explicit: a stale day-of-month alone rolls at most ~31 days,
+// which the regular 90-day horizon guard already scopes. If any explicit
+// candidate moment is still ahead of now (including later today), the
+// schedule has a legitimate upcoming fire and the check stays silent.
+func oneShotPastDateRejection(expr string, now time.Time) (string, bool) {
+	fields := strings.Fields(expr)
+	if len(fields) != 5 {
+		return "", false
+	}
+	minutes, minOK := parseSimpleField(fields[0])
+	hours, hourOK := parseSimpleField(fields[1])
+	days, dayOK := parseSimpleField(fields[2])
+	months, monthOK := parseSimpleField(fields[3])
+	if !minOK || !hourOK || !dayOK || !monthOK ||
+		len(days) == 0 || len(months) == 0 || len(hours) == 0 || len(minutes) == 0 {
+		return "", false
+	}
+	var latest time.Time
+	found := false
+	for m := range months {
+		for d := range days {
+			if d < 1 || d > daysInMonth(now.Year(), m) {
+				continue // impossible date (e.g. Feb 30) - not evidence of intent
+			}
+			for h := range hours {
+				for mi := range minutes {
+					c := time.Date(now.Year(), time.Month(m), d, h, mi, 0, 0, now.Location())
+					if !found || c.After(latest) {
+						latest = c
+						found = true
+					}
+				}
+			}
+		}
+	}
+	if !found || latest.After(now) {
+		return "", false
+	}
+	daysAgo := int(now.Sub(latest).Hours() / 24)
+	when := "earlier today"
+	if daysAgo > 0 {
+		when = fmt.Sprintf("%d days ago", daysAgo)
+	}
+	return fmt.Sprintf(
+		"one-shot cron rejected: the specified date/time is in the past (%s: %s). "+
+			"A stale date would silently roll the fire ~1 year forward. "+
+			"Recompute the schedule from the current date (explicit day+month+HH:MM) or use a recurring expression instead. "+
+			"far=true does not bypass a past-date rejection.",
+		when, latest.Format("2006-01-02 15:04"),
+	), true
+}
+
+// parseSimpleField parses simple cron field forms (lists, ranges, optional
+// step) into a value set. It returns explicit=false for wildcards ("*",
+// "*/n", "?") or unrecognized forms so the caller falls back to the regular
+// horizon guard instead of guessing intent.
+func parseSimpleField(field string) (map[int]bool, bool) {
+	if field == "" || strings.ContainsAny(field, "*?") {
+		return nil, false
+	}
+	values := make(map[int]bool)
+	for _, part := range strings.Split(field, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, false
+		}
+		if i := strings.Index(part, "/"); i >= 0 {
+			part = part[:i] // range with step: keep the range bounds
+		}
+		loHi := strings.SplitN(part, "-", 2)
+		lo, err := strconv.Atoi(strings.TrimSpace(loHi[0]))
+		if err != nil {
+			return nil, false
+		}
+		hi := lo
+		if len(loHi) == 2 {
+			if hi, err = strconv.Atoi(strings.TrimSpace(loHi[1])); err != nil {
+				return nil, false
+			}
+		}
+		for v := lo; v <= hi; v++ {
+			values[v] = true
+		}
+	}
+	return values, true
+}
+
+func daysInMonth(year int, month int) int {
+	return time.Date(year, time.Month(month)+1, 0, 0, 0, 0, 0, time.UTC).Day()
 }
 
 type CronDeleteTool struct {
@@ -340,7 +447,7 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "prompt cannot be empty"}, nil
 	}
 
-	// #5353: the far-future trap applies on update too — a seat re-specifying
+	// #5353: the far-future trap applies on update too - a seat re-specifying
 	// the schedule of an existing one-shot can introduce the same >1 year
 	// NextFire slip. Guard only one-shot targets; recurring jobs legitimately
 	// have distant first fires only when the expression is legitimately rare.
@@ -374,7 +481,7 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	if !job.NextFire.IsZero() {
 		sb.WriteString(fmt.Sprintf("  Next fire: %s\n", job.NextFire.Format("2006-01-02 15:04 MST")))
 		if farAccepted && !job.Recurring && time.Until(job.NextFire).Hours()/24 > oneShotFarFutureDays {
-			sb.WriteString(fmt.Sprintf("  WARNING: far-future one-shot accepted via far=true — next fire is %d days away; verify the expression before relying on it.\n", int(time.Until(job.NextFire).Hours()/24)))
+			sb.WriteString(fmt.Sprintf("  WARNING: far-future one-shot accepted via far=true - next fire is %d days away; verify the expression before relying on it.\n", int(time.Until(job.NextFire).Hours()/24)))
 		}
 	}
 	promptPreview := job.Prompt

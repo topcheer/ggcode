@@ -544,8 +544,12 @@ func firstJobID(t *testing.T, s *cron.Scheduler) string {
 func TestCronCreateTool_FarHorizonAckDualLayer(t *testing.T) {
 	s := cron.NewScheduler(nil, "")
 	tool := CronCreateTool{Scheduler: s}
+	// Day-of-month wildcard: the #5594 past-date gate scopes single
+	// specified dates; these fixtures exercise the far horizon layers, so
+	// the month-explicit/wildcard-day form keeps the ~5-month distance
+	// deterministic without a specified date to go stale.
 	target := time.Now().AddDate(0, 5, 0)
-	expr := fmt.Sprintf("0 9 %d %d *", target.Day(), int(target.Month()))
+	expr := fmt.Sprintf("0 9 * %d *", int(target.Month()))
 
 	rejectIn := fmt.Sprintf(`{"cron":%q,"prompt":"far reminder","one_shot":true,"description":"t"}`, expr)
 	res, err := tool.Execute(context.Background(), json.RawMessage(rejectIn))
@@ -579,8 +583,9 @@ func TestCronCreateTool_FarParamContract(t *testing.T) {
 	}
 	s := cron.NewScheduler(nil, "")
 	tool := CronCreateTool{Scheduler: s}
+	// Wildcard day per #5594 scoping (see FarHorizonAckDualLayer note).
 	target := time.Now().AddDate(0, 5, 0)
-	expr := fmt.Sprintf("0 9 %d %d *", target.Day(), int(target.Month()))
+	expr := fmt.Sprintf("0 9 * %d *", int(target.Month()))
 	// legacy alias payload alone must pass both layers
 	in := fmt.Sprintf(`{"cron":%q,"prompt":"r","one_shot":true,"far_horizon_ack":true,"description":"t"}`, expr)
 	res, err := tool.Execute(context.Background(), json.RawMessage(in))
