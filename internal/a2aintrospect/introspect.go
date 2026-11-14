@@ -29,6 +29,7 @@ type Sources struct {
 	Children func() *a2a.RuntimeChildren
 	Schedule func() *a2a.RuntimeSchedule
 	Env      func() *a2a.RuntimeEnv
+	Plan     func() *a2a.RuntimePlan
 
 	DefaultConvLimit int // default 20
 	DefaultActLimit  int // default 50
@@ -119,6 +120,9 @@ func (s *Sources) RuntimeSnapshotV3(req a2a.SnapshotRequest) (*a2a.RuntimeSnapsh
 	}
 	if s.wants(faces, "env") && s.Env != nil {
 		snap.Env = s.Env()
+	}
+	if s.wants(faces, "plan") && s.Plan != nil {
+		snap.Plan = s.Plan()
 	}
 	return snap, nil
 }

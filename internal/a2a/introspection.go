@@ -181,7 +181,42 @@ type RuntimeMobileState struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
-// RuntimeSnapshotV3 is the runtime/snapshot result: seven faces, zero LLM,
+// RuntimePlan is the "plan" face: the agent's declared working set -
+// session todos, the durable goal graph, and the task board. Peers see
+// not just what the agent is doing (inflight) but what it intends and
+// where each item stands.
+type RuntimePlan struct {
+	Todos     []RuntimePlanTodo `json:"todos,omitempty"`
+	GoalNodes []RuntimeGoalNode `json:"goal_nodes,omitempty"`
+	Tasks     []RuntimePlanTask `json:"tasks,omitempty"`
+}
+
+type RuntimePlanTodo struct {
+	ID      string `json:"id"`
+	Content string `json:"content"`
+	Status  string `json:"status"`
+}
+
+type RuntimeGoalNode struct {
+	ID       string `json:"id"`
+	Level    string `json:"level"`
+	Title    string `json:"title"`
+	Parent   string `json:"parent,omitempty"`
+	Status   string `json:"status"`
+	NextStep string `json:"next_step,omitempty"`
+}
+
+type RuntimePlanTask struct {
+	ID         string   `json:"id"`
+	Subject    string   `json:"subject"`
+	Status     string   `json:"status"`
+	Owner      string   `json:"owner,omitempty"`
+	ActiveForm string   `json:"active_form,omitempty"`
+	Blocks     []string `json:"blocks,omitempty"`
+	BlockedBy  []string `json:"blocked_by,omitempty"`
+}
+
+// RuntimeSnapshotV3 is the runtime/snapshot result: eight faces, zero LLM,
 // raw verbatim content (user ruling: same workspace = trust domain).
 type RuntimeSnapshotV3 struct {
 	Schema       string               `json:"schema"` // "v3"
@@ -194,6 +229,7 @@ type RuntimeSnapshotV3 struct {
 	Children     *RuntimeChildren     `json:"children,omitempty"`
 	Schedule     *RuntimeSchedule     `json:"schedule,omitempty"`
 	Env          *RuntimeEnv          `json:"env,omitempty"`
+	Plan         *RuntimePlan         `json:"plan,omitempty"`
 }
 
 // RuntimeIntrospectorV3 is injected by the assembly layer (cmd/ggcode

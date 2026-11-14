@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1346,6 +1348,53 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			}
 			return ch
 		}
+		// #5635 P2: plan face - the declared working set (todos / goal
+		// graph / task board), same truth the tools persist. Files are read
+		// live so a peer sees the current state without tool round-trips.
+		planFace := func() *a2a.RuntimePlan {
+			pl := &a2a.RuntimePlan{}
+			sid := ""
+			if repl != nil {
+				sid = repl.CurrentSessionID()
+			}
+			if b, err := os.ReadFile(tool.TodoFilePath(sid)); err == nil {
+				var todos []tool.Todo
+				if json.Unmarshal(b, &todos) == nil {
+					for _, t := range todos {
+						pl.Todos = append(pl.Todos, a2a.RuntimePlanTodo{ID: t.ID, Content: t.Content, Status: t.Status})
+					}
+				}
+			}
+			if b, err := os.ReadFile(filepath.Join(workingDir, ".ggcode", "goal-graph.json")); err == nil {
+				var gg struct {
+					Nodes map[string]struct {
+						ID       string `json:"id"`
+						Level    string `json:"level"`
+						Title    string `json:"title"`
+						Parent   string `json:"parent"`
+						Status   string `json:"status"`
+						NextStep string `json:"next_step"`
+					} `json:"nodes"`
+				}
+				if json.Unmarshal(b, &gg) == nil {
+					ids := make([]string, 0, len(gg.Nodes))
+					for id := range gg.Nodes {
+						ids = append(ids, id)
+					}
+					sort.Strings(ids)
+					for _, id := range ids {
+						n := gg.Nodes[id]
+						pl.GoalNodes = append(pl.GoalNodes, a2a.RuntimeGoalNode{ID: n.ID, Level: n.Level, Title: n.Title, Parent: n.Parent, Status: n.Status, NextStep: n.NextStep})
+					}
+				}
+			}
+			if taskMgr != nil {
+				for _, t := range taskMgr.List() {
+					pl.Tasks = append(pl.Tasks, a2a.RuntimePlanTask{ID: t.ID, Subject: t.Subject, Status: string(t.Status), Owner: t.Owner, ActiveForm: t.ActiveForm, Blocks: t.Blocks, BlockedBy: t.BlockedBy})
+				}
+			}
+			return pl
+		}
 		a2aServer.SetIntrospectorV3(&a2aintrospect.Sources{
 			Status:   statusFace,
 			Inflight: inflightFace,
@@ -1355,7 +1404,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			Conversation: func(cursor string, limit int) ([]a2a.RuntimeConversationTurn, string, bool) {
 				return a2aintrospect.ConversationFromTurns(convStore())(cursor, limit)
 			},
-			Env: envFace,
+			Env:  envFace,
+			Plan: planFace,
 		})
 	}
 
