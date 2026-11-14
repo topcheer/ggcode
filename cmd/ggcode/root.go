@@ -1175,6 +1175,48 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	// recent tails) keep their Sources injection slots for phase 2c.
 	if a2aServer != nil && !cfg.A2A.Disabled && cfg.A2A.Introspection != "" {
 		a2aServer.SetIntrospector(&a2aintrospect.Sources{
+			Redactor: agent.RedactExternalContent,
+			Todos: func() []a2a.RuntimeTodo {
+				m := repl.TaskManager()
+				if m == nil {
+					return nil
+				}
+				tasks := m.List()
+				out := make([]a2a.RuntimeTodo, 0, len(tasks))
+				for _, tk := range tasks {
+					out = append(out, a2a.RuntimeTodo{
+						ID:         tk.ID,
+						Subject:    tk.Subject,
+						Status:     string(tk.Status),
+						ActiveForm: tk.ActiveForm,
+					})
+				}
+				return out
+			},
+			Crons: func() []a2a.RuntimeCron {
+				out := make([]a2a.RuntimeCron, 0)
+				for _, j := range cronScheduler.List() {
+					rc := a2a.RuntimeCron{ID: j.ID, Cron: j.CronExpr, Prompt: j.Prompt}
+					if !j.NextFire.IsZero() {
+						rc.NextFire = j.NextFire.UTC().Format(time.RFC3339)
+					}
+					out = append(out, rc)
+				}
+				return out
+			},
+			Recent: func() []a2a.RuntimeToolTrace {
+				const k = 16
+				lines := a2aintrospect.TailJSONL(debug.MainLogPath(), k)
+				traces := make([]a2a.RuntimeToolTrace, 0, len(lines))
+				for i, l := range lines {
+					r := []rune(l)
+					if len(r) > 200 {
+						r = r[:200]
+					}
+					traces = append(traces, a2a.RuntimeToolTrace{TS: fmt.Sprintf("-%d", len(lines)-i), Summary: string(r)})
+				}
+				return traces
+			},
 			Busy: func() *a2a.RuntimeBusy {
 				p := lanchatHub.SelfParticipant()
 				b := &a2a.RuntimeBusy{

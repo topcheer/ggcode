@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/a2a"
+	"github.com/topcheer/ggcode/internal/agent"
 )
 
 func TestPhase2_AggregatesAllFaces(t *testing.T) {
@@ -76,5 +77,55 @@ func TestPhase2_SecretRedactionPassesThrough(t *testing.T) {
 	snap, _ := src.RuntimeSnapshot(a2a.IntrospectionFull)
 	if strings.Contains(snap.Conversation[0].Summary, "sk-live-leak") {
 		t.Fatal("secret leaked through aggregation")
+	}
+}
+
+func TestPhase2c_RedactorPrePassLayers(t *testing.T) {
+	var seen string
+	src := &Sources{
+		Redactor: func(s string) string { seen = s; return "cleaned " + s },
+		Recent: func() []a2a.RuntimeToolTrace {
+			return []a2a.RuntimeToolTrace{{TS: "t", Tool: "run_command", Summary: "deploy api_key=sk-live-xyz"}}
+		},
+	}
+	snap, _ := src.RuntimeSnapshot(a2a.IntrospectionFull)
+	if !strings.HasPrefix(snap.Recent[0].Summary, "cleaned") {
+		t.Fatalf("redactor pre-pass missing: %q", snap.Recent[0].Summary)
+	}
+	if !strings.Contains(seen, "sk-live-xyz") {
+		t.Fatal("redactor must receive raw content before masking")
+	}
+}
+
+func TestPhase2c_CronsFaceMappingAndRedaction(t *testing.T) {
+	src := &Sources{
+		Redactor: agent.RedactExternalContent,
+		Crons: func() []a2a.RuntimeCron {
+			return []a2a.RuntimeCron{{ID: "c9", Cron: "*/5 * * * *", NextFire: "2026-11-13T12:00:00Z", Prompt: "deploy with api_key=AKIAIOSFODNN7EXAMPLE now"}}
+		},
+	}
+	snap, _ := src.RuntimeSnapshot(a2a.IntrospectionFull)
+	if snap.Crons[0].ID != "c9" || snap.Crons[0].NextFire == "" {
+		t.Fatalf("crons mapping broke: %+v", snap.Crons[0])
+	}
+	if strings.Contains(snap.Crons[0].Prompt, "AKIAIOSFODNN7EXAMPLE") {
+		t.Fatalf("aws key leaked through crons prompt: %q", snap.Crons[0].Prompt)
+	}
+
+}
+
+func TestPhase2d_TodosFaceMappingAndRedaction(t *testing.T) {
+	src := &Sources{
+		Redactor: agent.RedactExternalContent,
+		Todos: func() []a2a.RuntimeTodo {
+			return []a2a.RuntimeTodo{{ID: "7", Subject: "rotate AKIAIOSFODNN7EXAMPLE key", Status: "in_progress", ActiveForm: "rotating token=ghp_leak123"}}
+		},
+	}
+	snap, _ := src.RuntimeSnapshot(a2a.IntrospectionFull)
+	if snap.Todos[0].ID != "7" || snap.Todos[0].Status != "in_progress" {
+		t.Fatalf("todos mapping broke: %+v", snap.Todos[0])
+	}
+	if strings.Contains(snap.Todos[0].Subject, "AKIAIOSFODNN7EXAMPLE") || strings.Contains(snap.Todos[0].ActiveForm, "ghp_leak123") {
+		t.Fatalf("secrets leaked through todos face: %+v", snap.Todos[0])
 	}
 }

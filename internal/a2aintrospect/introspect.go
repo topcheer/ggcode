@@ -21,6 +21,11 @@ type Sources struct {
 	Conversation func() []a2a.RuntimeConversationTurn
 	Crons        func() []a2a.RuntimeCron
 
+	// Redactor is an optional pre-pass over conversation/recent summaries
+	// (e.g. agent.RedactExternalContent). Applied BEFORE a2a's own pattern
+	// redaction + truncation, so content faces get two layers (#5575 2c).
+	Redactor func(string) string
+
 	// Now overrides the snapshot clock in tests.
 	Now func() time.Time
 }
@@ -50,6 +55,21 @@ func (s *Sources) RuntimeSnapshot(mode string) (*a2a.RuntimeSnapshotV2, error) {
 		}
 		if s.Conversation != nil {
 			snap.Conversation = s.Conversation()
+		}
+	}
+	if s.Redactor != nil {
+		for i := range snap.Conversation {
+			snap.Conversation[i].Summary = s.Redactor(snap.Conversation[i].Summary)
+		}
+		for i := range snap.Recent {
+			snap.Recent[i].Summary = s.Redactor(snap.Recent[i].Summary)
+		}
+		for i := range snap.Todos {
+			snap.Todos[i].Subject = s.Redactor(snap.Todos[i].Subject)
+			snap.Todos[i].ActiveForm = s.Redactor(snap.Todos[i].ActiveForm)
+		}
+		for i := range snap.Crons {
+			snap.Crons[i].Prompt = s.Redactor(snap.Crons[i].Prompt)
 		}
 	}
 	a2a.RedactSnapshotStrings(snap)
