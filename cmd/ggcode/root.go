@@ -1308,6 +1308,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			ch := &a2a.RuntimeChildren{
 				Subagents: a2aintrospect.FromSubagents(subMgr.List()),
 			}
+			// #5637: peer-side in-flight visibility of running sub-agents.
+			a2aintrospect.AttachSubagentEvents(ch.Subagents, subMgr, 10)
 			if registry != nil {
 				if jm := registry.JobManager(); jm != nil {
 					ch.Jobs = a2aintrospect.FromCommandJobs(jm.List())

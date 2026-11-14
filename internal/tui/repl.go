@@ -789,6 +789,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		ParentModel:  spawnAgentModelResolver,
 		CascadeHints: cascadeHints,
 	})
+	tools.Register(tool.SubagentContextTool{Manager: mgr})
 	tools.Register(tool.ListAgentsTool{
 		Manager:      mgr,
 		ParentModel:  spawnAgentModelResolver,

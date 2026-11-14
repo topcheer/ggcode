@@ -681,6 +681,53 @@ func (m *Manager) Snapshot(id string) (Snapshot, bool) {
 	return sa.snapshot(), true
 }
 
+// RecentEvents returns the last n events (oldest-first) from a sub-agent's
+// in-memory event ring (#5637). n<=0 or n>maxAgentEvents is clamped. The
+// second return is false when the agent ID is unknown. Safe to call while
+// the agent is running - it locks per-agent.
+func (m *Manager) RecentEvents(id string, n int) ([]AgentEvent, bool) {
+	if n <= 0 {
+		n = 20
+	}
+	if n > maxAgentEvents {
+		n = maxAgentEvents
+	}
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return nil, false
+	}
+	sa.mu.Lock()
+	defer sa.mu.Unlock()
+	if len(sa.events) <= n {
+		out := make([]AgentEvent, len(sa.events))
+		copy(out, sa.events)
+		return out, true
+	}
+	out := make([]AgentEvent, n)
+	copy(out, sa.events[len(sa.events)-n:])
+	return out, true
+}
+
+// EmitForTest appends events to a sub-agent's ring directly. It exists so
+// tool-layer tests can pin rendering against a manager without spawning a
+// provider-backed run (#5637). Production code never calls it.
+func (m *Manager) EmitForTest(id string, events ...AgentEvent) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	sa.mu.Lock()
+	sa.events = append(sa.events, events...)
+	if len(sa.events) > maxAgentEvents {
+		sa.events = sa.events[len(sa.events)-maxAgentEvents:]
+	}
+	sa.mu.Unlock()
+}
+
 func (m *Manager) Statuses() []StatusInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
