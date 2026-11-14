@@ -131,6 +131,9 @@ func (t *RemoteTool) listInstances(ctx context.Context) (tool.Result, error) {
 	if len(instances) == 0 {
 		return tool.Result{Content: "No other ggcode instances found. Start ggcode in other workspaces to enable A2A."}, nil
 	}
+	// #5616: list must render seat identity too - the same enrichment the
+	// resolution path gets, so agents can pick nick targets from the roster.
+	instances = enrichInstances(instances, t.identity)
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Found %d ggcode instance(s):\n\n", len(instances)))
@@ -243,6 +246,26 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	instances, err := t.registry.Discover()
 	if err != nil {
 		return nil, err
+	}
+
+	// #5616: mDNS TXT carries no seat nick; the local workspace roster file
+	// does (SetSelfIdentity republishes it). Overlay roster identity onto
+	// mDNS entries by normalized endpoint so cross-process resolvers and the
+	// list view see seat nicks even without a live lanchat bridge.
+	if ws := t.registry.SelfWorkspace(); ws != "" {
+		for _, r := range ReadRoster(ws, t.registry.SelfID()) {
+			if r.Nick == "" {
+				continue
+			}
+			ep := normEndpoint(r.Endpoint)
+			for i := range instances {
+				if instances[i].Nick == "" && normEndpoint(instances[i].Endpoint) == ep {
+					instances[i].Nick = r.Nick
+					instances[i].Role = r.Role
+					instances[i].Team = r.Team
+				}
+			}
+		}
 	}
 
 	t.mu.Lock()

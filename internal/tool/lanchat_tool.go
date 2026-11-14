@@ -600,6 +600,26 @@ func (t LanChatTool) freshHoldersFrom(idSet map[string]bool) map[string]bool {
 	return fresh
 }
 
+// bestHolder picks the best delivery candidate among same-nick holders:
+// online first, then newest last_seen (#5622). Empty string when no
+// candidate is currently known.
+func (t LanChatTool) bestHolder(idSet map[string]bool) string {
+	best := ""
+	bestOnline := false
+	bestSeen := int64(0)
+	for _, p := range t.Hub.Participants() {
+		if !idSet[p.NodeID] {
+			continue
+		}
+		if best == "" || (p.Online && !bestOnline) || (p.Online == bestOnline && p.LastSeen > bestSeen) {
+			best = p.NodeID
+			bestOnline = p.Online
+			bestSeen = p.LastSeen
+		}
+	}
+	return best
+}
+
 func (t LanChatTool) resolveRecipients(ids []string) ([]string, []string) {
 	resolved, ambiguous, _ := t.resolveRecipientsFull(ids)
 	return resolved, ambiguous
@@ -666,17 +686,16 @@ func (t LanChatTool) resolveRecipientsFull(ids []string) ([]string, []string, []
 			// holders count; the stale twin must not make nick addressing
 			// ambiguous.
 			freshSet := t.freshHoldersFrom(idSet)
-			if len(freshSet) > 1 {
-				ambiguous = append(ambiguous, fmt.Sprintf("%q matches %d peers with the same nick: %s - address by node_id instead",
-					raw, len(freshSet), joinNodeIDs(freshSet)))
-				continue
-			}
-			if len(freshSet) == 1 {
-				for id := range freshSet {
-					if !seen[id] {
-						resolved = append(resolved, id)
-						seen[id] = true
-					}
+			// #5622: a nick is the network-unique seat identity - same-nick
+			// fresh holders are restart twins / fleet seats of ONE identity,
+			// never different people. Resolve best-effort (online first, then
+			// newest last_seen) and let delivery failure, not resolution,
+			// decide the outcome. Never bounce a nick DM at resolve time.
+			if len(freshSet) > 0 {
+				best := t.bestHolder(freshSet)
+				if best != "" && !seen[best] {
+					resolved = append(resolved, best)
+					seen[best] = true
 				}
 				continue
 			}

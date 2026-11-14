@@ -986,7 +986,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	var a2aTaskHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
 
-		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir, seatIdentityLookup(lanchatHub))
+		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir, seatIdentityLookup(func() *lanchat.Hub { return lanchatHub }))
 		if err != nil {
 
 			debug.Log("root", "A2A server startup warning: %v", err)
@@ -1033,14 +1033,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
 
 		// #5616: publish our seat nick into the roster so cross-process
-		// resolvers (one-shot CLI) can address this seat by nick.
-		if a2aRegistry != nil {
-			nick := lanchatHub.AgentNick()
-			if nick == "" {
-				nick = lanchatHub.HumanNick()
-			}
-			a2aRegistry.SetSelfIdentity(nick, "", "")
-		}
+		// resolvers (one-shot CLI) can address this seat by nick. Lazy
+		// republish on every sync tick - hub identity restores async.
+		republishSeatNick := seatNickRepublisher(lanchatHub, a2aRegistry)
+		republishSeatNick()
 
 		syncCtx, syncCancel := context.WithCancel(context.Background())
 		defer syncCancel()
@@ -1058,6 +1054,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 					})
 				}
 				lanchatHub.UpdatePeers(peers)
+				republishSeatNick()
 			}
 
 			time.Sleep(3 * time.Second)
@@ -1712,11 +1709,37 @@ var a2aTimeoutWarnf = func(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format, args...)
 }
 
+// seatNickRepublisher returns a closure that re-stamps the registry self
+// identity whenever the hub nick becomes known or changes. Hub identity
+// restores asynchronously after construction, so the immediate post-hub
+// publish races an empty nick; the sync tick re-publishes lazily (#5616).
+func seatNickRepublisher(hub *lanchat.Hub, reg *a2a.Registry) func() {
+	var last string
+	return func() {
+		if hub == nil || reg == nil {
+			return
+		}
+		nick := hub.AgentNick()
+		if nick == "" {
+			nick = hub.HumanNick()
+		}
+		if nick == "" || nick == last {
+			return
+		}
+		reg.SetSelfIdentity(nick, "", "")
+		last = nick
+	}
+}
+
 // seatIdentityLookup bridges a lanchat hub's seat registry into the a2a
 // identity domain (#5616): endpoint-keyed nick/role/team plus heartbeat
-// freshness. Nil-safe: a nil hub yields a lookup that never matches.
-func seatIdentityLookup(hub *lanchat.Hub) a2a.IdentityLookup {
+// freshness. Takes a hub GETTER, not a pointer: call sites fire before the
+// hub is constructed, and a pointer parameter would freeze the nil copy
+// forever - the getter closure captures the variable by reference so the
+// later assignment is visible. Nil-safe: a nil hub never matches.
+func seatIdentityLookup(hubOf func() *lanchat.Hub) a2a.IdentityLookup {
 	return func(endpoint string) (a2a.Identity, bool) {
+		hub := hubOf()
 		if hub == nil {
 			return a2a.Identity{}, false
 		}
