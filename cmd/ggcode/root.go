@@ -1843,6 +1843,15 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		if err != nil {
 			host = r.RemoteAddr
 		}
+		// #5605 A: one-shot CLI callers originate from an ephemeral
+		// LOOPBACK port that never matches any roster endpoint - the
+		// roster-lookup gate structurally rejected them. Ruling: a
+		// loopback source is same-machine, and same machine shares the
+		// physical .git family, so loopback callers pass; cross-machine
+		// callers still need the roster workspace match.
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			return true
+		}
 		for _, inst := range a2aReg.CachedInstances() {
 			u, uerr := neturl.Parse(inst.Endpoint)
 			if uerr != nil {

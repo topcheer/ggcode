@@ -15,7 +15,7 @@ import (
 
 const (
 	mDNSServiceType = "_ggcode._tcp"
-	mDNSDomain      = "local."
+	mDNSDomain      = "local" // no trailing dot: lib appends "." itself; "local." yielded "_ggcode._tcp.local.." and zero dns-sd hits (#5605 B)
 )
 
 type mdnsService struct {
