@@ -2,6 +2,8 @@ package tool
 
 import (
 	"fmt"
+	"hash/fnv"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -129,6 +131,65 @@ func (t *FileIntegrityTracker) SnapshotTracked() map[string]time.Time {
 	return out
 }
 
+// trackedFileDigest is a bounded FNV-64a content fingerprint of a tracked
+// file. Only files at or under maxDigestBytes get a digest; larger files
+// fall back to mtime-only so the post-command reconciliation never reads
+// megabytes per candidate (#5268 item 2: the phantom files-changed advisory).
+const maxDigestBytes = 512 * 1024
+
+func trackedFileDigest(path string) (uint64, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+	buf := make([]byte, maxDigestBytes)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return 0, false
+	}
+	h := fnv.New64a()
+	if _, err := h.Write(buf[:n]); err != nil {
+		return 0, false
+	}
+	return h.Sum64(), true
+}
+
+// TrackedFile records the identity of one tracked file at snapshot time.
+// Digest is present only for files small enough to fingerprint (see
+// trackedFileDigest); zero digest means mtime-only comparison.
+type TrackedFile struct {
+	Modtime time.Time
+	Digest  uint64
+}
+
+// SnapshotTrackedWithDigests returns tracked files with both mtime and, where
+// affordable, a content digest. It is the #5268 item-2 snapshot: the
+// run_command post-exec comparison confirms every mtime delta by content so
+// identical-content rewrites (mtime touch, touch-identical sync tools) and
+// writes that predate the command no longer emit the files-changed advisory.
+func (t *FileIntegrityTracker) SnapshotTrackedWithDigests() map[string]TrackedFile {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make(map[string]TrackedFile, len(t.modtimes))
+	for k, v := range t.modtimes {
+		out[k] = TrackedFile{Modtime: v}
+	}
+	for k := range out {
+		if d, ok := trackedFileDigest(k); ok {
+			tf := out[k]
+			tf.Digest = d
+			out[k] = tf
+		}
+	}
+	return out
+}
+
+// ChangedSince reports tracked files whose mtime is newer than the
+// snapshot (mtime-only, no content confirmation). Prefer
+// SnapshotTrackedWithDigests + ChangedSinceDigests on the run_command
+// post-exec path (#5268 item 2); this mtime-only variant remains for
+// callers that only need stat-level reconciliation.
 func (t *FileIntegrityTracker) ChangedSince(snapshot map[string]time.Time) []string {
 	var changed []string
 	for path, oldMtime := range snapshot {
@@ -138,11 +199,43 @@ func (t *FileIntegrityTracker) ChangedSince(snapshot map[string]time.Time) []str
 		}
 		if info.ModTime().After(oldMtime) {
 			changed = append(changed, path)
-
 			t.mu.Lock()
 			t.modtimes[path] = info.ModTime()
 			t.mu.Unlock()
 		}
+	}
+	return changed
+}
+
+// ChangedSinceDigests is the digest-confirming counterpart of ChangedSince:
+// a file counts as changed only when its mtime moved AND (when a snapshot
+// digest exists) its content digest differs. Identical-content mtime bumps
+// are attributed to no command; the tracker's baseline advances to the new
+// mtime either way so repeated no-op commands do not re-flag the file.
+func (t *FileIntegrityTracker) ChangedSinceDigests(snapshot map[string]TrackedFile) []string {
+	var changed []string
+	for path, old := range snapshot {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if !info.ModTime().After(old.Modtime) {
+			continue
+		}
+		if old.Digest != 0 {
+			if d, ok := trackedFileDigest(path); ok && d == old.Digest {
+				// mtime moved but content is byte-identical - not a command
+				// write. Advance the baseline so the delta is not re-seen.
+				t.mu.Lock()
+				t.modtimes[path] = info.ModTime()
+				t.mu.Unlock()
+				continue
+			}
+		}
+		changed = append(changed, path)
+		t.mu.Lock()
+		t.modtimes[path] = info.ModTime()
+		t.mu.Unlock()
 	}
 	return changed
 }
@@ -166,6 +259,14 @@ func (t *FileIntegrityTracker) Reset() {
 // run_command where os.Stat now fails for them (external mv/rm). Only keys
 // that were tracked before the command are considered, keeping the gate
 // deterministic (#5026).
+func (t *FileIntegrityTracker) recordVacatedDigests(snapshot map[string]TrackedFile) {
+	plain := make(map[string]time.Time, len(snapshot))
+	for k, v := range snapshot {
+		plain[k] = v.Modtime
+	}
+	t.RecordVacated(plain)
+}
+
 func (t *FileIntegrityTracker) RecordVacated(snapshot map[string]time.Time) {
 	var vacated []string
 	for path := range snapshot {
@@ -207,14 +308,14 @@ func (t *FileIntegrityTracker) ClearVacated(path string) {
 	t.mu.Unlock()
 }
 
-func detectChangedFilesFromCommand(snapshot map[string]time.Time) string {
+func detectChangedFilesFromCommand(snapshot map[string]TrackedFile) string {
 	// Vacancy recording is deterministic and stat-based: any pre-command
 	// tracked key that no longer exists afterwards was vacated by the
 	// command (mv/rm) — the write gate refuses it until acknowledged
 	// (#5026). rm coverage comes free; file_ops moves migrate tracking
 	// themselves and never reach here.
-	defaultFileTracker.RecordVacated(snapshot)
-	changed := defaultFileTracker.ChangedSince(snapshot)
+	defaultFileTracker.recordVacatedDigests(snapshot)
+	changed := defaultFileTracker.ChangedSinceDigests(snapshot)
 	if len(changed) == 0 {
 		return ""
 	}

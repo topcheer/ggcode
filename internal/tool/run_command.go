@@ -185,7 +185,9 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		debug.Log("run_command", "description: %s", args.Description)
 	}
 
-	mtimeSnapshot := defaultFileTracker.SnapshotTracked()
+	// #5268: digest snapshot - mtime plus content fingerprint - so the
+	// post-command comparison can confirm mtime deltas by content.
+	mtimeSnapshot := defaultFileTracker.SnapshotTrackedWithDigests()
 
 	gate := NewCommandGate()
 	var cleanedCmd, preWarn string
@@ -377,7 +379,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	return result, nil
 }
 
-func (t RunCommand) finalizeCommandResult(ctx context.Context, command, preWarning, output, errOutput string, runErr error, mtimeSnapshot map[string]time.Time) Result {
+func (t RunCommand) finalizeCommandResult(ctx context.Context, command, preWarning, output, errOutput string, runErr error, mtimeSnapshot map[string]TrackedFile) Result {
 
 	output = truncateMiddleSpill(output, maxOutputSize, "output", t.OmittedOutputSpiller)
 	errOutput = truncateMiddleSpill(errOutput, maxOutputSize, "stderr", t.OmittedOutputSpiller)

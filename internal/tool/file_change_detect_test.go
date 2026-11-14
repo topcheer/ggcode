@@ -55,7 +55,7 @@ func TestDetectChangedFilesFromCommand(t *testing.T) {
 	}
 	defaultFileTracker.RecordRead(path)
 
-	snap := defaultFileTracker.SnapshotTracked()
+	snap := defaultFileTracker.SnapshotTrackedWithDigests()
 	if detectChangedFilesFromCommand(snap) != "" {
 		t.Errorf("expected empty notice when nothing changed")
 	}
@@ -63,6 +63,7 @@ func TestDetectChangedFilesFromCommand(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	_ = os.WriteFile(path, []byte("package main // formatted\n"), 0644)
 
+	// #5268 item 2: content changed -> advisory must fire.
 	notice := detectChangedFilesFromCommand(snap)
 	if notice == "" {
 		t.Errorf("expected non-empty notice when file changed")
