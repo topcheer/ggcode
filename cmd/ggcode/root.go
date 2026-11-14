@@ -50,9 +50,7 @@ import (
 	"github.com/topcheer/ggcode/internal/version"
 	"github.com/topcheer/ggcode/internal/webui"
 
-	"net"
 	"net/http"
-	neturl "net/url"
 	"os/exec"
 )
 
@@ -1839,24 +1837,8 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	// the local mDNS roster and requires the same workspace as self;
 	// message/send keeps cross-workspace reach (a feature).
 	srv.SetWorkspaceGate(func(r *http.Request) bool {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			host = r.RemoteAddr
-		}
-		for _, inst := range a2aReg.CachedInstances() {
-			u, uerr := neturl.Parse(inst.Endpoint)
-			if uerr != nil {
-				continue
-			}
-			ih, _, ierr := net.SplitHostPort(u.Host)
-			if ierr != nil {
-				ih = u.Host
-			}
-			if ih == host {
-				return inst.Workspace == workingDir
-			}
-		}
-		return false
+		// #5605 A: loopback arm + roster match - decision pinned in a2a.
+		return a2a.WorkspaceGateDecision(r.RemoteAddr, a2aReg.CachedInstances(), workingDir)
 	})
 
 	if err := a2aReg.Register(instance); err != nil {
