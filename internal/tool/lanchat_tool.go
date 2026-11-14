@@ -831,6 +831,54 @@ func (t LanChatTool) doList(teamFilter string) Result {
 	return Result{Content: fmt.Sprintf("Participants (%d)%s:\n%s\n", len(peers), label, string(out))}
 }
 
+// dupNickHoldersNote builds the compact holder note for ambiguous-nick
+// failures: each cited nick's fresh holders with node_id and last_seen
+// ordering, newest first (#5557).
+func (t LanChatTool) dupNickHoldersNote(ambiguous []string) string {
+	participants := t.Hub.Participants()
+	byNick := make(map[string][]lanchat.Participant)
+	for _, p := range participants {
+		for _, nick := range []string{p.HumanNick, p.AgentNick} {
+			if nick == "" {
+				continue
+			}
+			byNick[strings.ToLower(nick)] = append(byNick[strings.ToLower(nick)], p)
+		}
+	}
+	// Holders can carry the same nick on BOTH nick surfaces (HumanNick +
+	// AgentNick): dedupe to node_id identity, keep fresh non-self only.
+	var out []string
+	for _, line := range ambiguous {
+		for nick, parts := range byNick {
+			if !strings.Contains(strings.ToLower(line), nick) {
+				continue
+			}
+			seenID := map[string]bool{}
+			seenLast := map[string]int64{}
+			for _, p := range parts {
+				if _, stale := t.Hub.StaleRecipient(p.NodeID); stale || p.NodeID == t.Hub.NodeID() {
+					continue
+				}
+				seenID[p.NodeID] = true
+				if p.LastSeen > seenLast[p.NodeID] {
+					seenLast[p.NodeID] = p.LastSeen
+				}
+			}
+			if len(seenID) < 2 {
+				continue
+			}
+			ids := make([]string, 0, len(seenID))
+			for id := range seenID {
+				ids = append(ids, id)
+			}
+			sort.Slice(ids, func(i, j int) bool { return seenLast[ids[i]] > seenLast[ids[j]] })
+			out = append(out, fmt.Sprintf("nick %q fresh holders (newest first): %s", nick, strings.Join(ids, ", ")))
+			break // one note per ambiguous line
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
 func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []string, asAgent bool, toRole string) (Result, error) {
 	if content == "" {
 		return Result{IsError: true, Content: "message content is required for send"}, nil
@@ -847,11 +895,12 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 
 	resolved, ambiguous, unresolvedInputs := t.resolveRecipientsFull(toNodeIDs)
 	if len(ambiguous) > 0 {
-
-		hint := t.doList("")
+		// #5557: same-nick ambiguity must fail loud but COMPACT - the old
+		// full roster dump (12.9KB on a busy LAN) buried the one actionable
+		// line. List only the holders cited above, newest last_seen first.
 		return Result{IsError: true, Content: fmt.Sprintf(
-			"ambiguous recipient(s):\n%s\nUse action='list' and address by node_id.\n%s",
-			strings.Join(ambiguous, "\n"), hint.Content)}, nil
+			"ambiguous recipient(s):\n%s\n%s\nAddress by node_id (newest last_seen first); action='list' browses the full roster.",
+			strings.Join(ambiguous, "\n"), t.dupNickHoldersNote(ambiguous))}, nil
 	}
 	if len(resolved) == 0 {
 		nearHint := ""
@@ -862,10 +911,11 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 		if len(nears) > 0 {
 			nearHint = fmt.Sprintf("\nDid you mean: %s? (one-character difference - a near miss here can silently DM a different peer)", strings.Join(nears, ", "))
 		}
-		hint := t.doList("")
+		// #5557: near-miss hint stays (it is one line); the full roster
+		// dump goes - compact pointer instead.
 		return Result{IsError: true, Content: fmt.Sprintf(
-			"no recipient found for: %s.%s Use action='list' to see valid node_ids and nicks.\n%s",
-			strings.Join(toNodeIDs, ", "), nearHint, hint.Content)}, nil
+			"no recipient found for: %s.%s Use action='list' to browse node_ids and nicks.",
+			strings.Join(toNodeIDs, ", "), nearHint)}, nil
 	}
 
 	// #5200: node_ids rotate on every peer restart. A resolved-but-stale

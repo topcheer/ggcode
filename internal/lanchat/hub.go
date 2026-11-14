@@ -740,7 +740,13 @@ func (h *Hub) resolveNickConflict() {
 	myNick := h.humanNick
 	conflict := false
 	for _, p := range h.peers {
-		if p.Online && p.HumanNick == myNick {
+		if !p.Online {
+			continue
+		}
+		// #5557: BOTH nick surfaces must conflict-check. HumanNick-only let
+		// two agents with identical AgentNicks coexist, making agent-to-agent
+		// DMs silently ambiguous until send time.
+		if p.HumanNick == myNick || p.AgentNick == h.agentNick {
 			conflict = true
 			break
 		}
