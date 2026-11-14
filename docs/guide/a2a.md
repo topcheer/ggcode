@@ -202,3 +202,26 @@ ggcode stays interoperable with both 0.2.x/0.3.x peers and A2A v1.0 (2026-03) ag
 **Well-known URI fallback (0.3.0 rename).** `Discover` probes `/.well-known/agent-card.json` first, falling back to `/.well-known/agent.json` only when the path returns 404/405 or the response is not a usable card. Errors on a real card (bad signature, tampering) surface as-is instead of being masked by a retry.
 
 **`application/a2a+json` (1.0.1 #1753).** Servers advertise `protocolVersion` in the agent card and prefer the v1.0 media type: requests that arrive with (or accept) `a2a+json` get `a2a+json` responses; legacy peers keep `application/json`. On the client side, a discovered card declaring a 1.x version switches request bodies to `a2a+json`; sync-error detection accepts both media types (a plain `application/json` substring check would misclassify an `a2a+json` error response as SSE).
+
+## Peer runtime introspection (request side, #5593)
+
+With the workspace domain key (#5575) shared across a worktree family, any
+instance can read a peer's five-face runtime snapshot (`runtime/snapshot`:
+busy / todos / crons / recent tool traces / conversation digest) in one hop:
+
+- **Agent tool** `a2a_introspect` — params `target` (instance name) and
+  `mode` (`full` default, `metadata` drops content faces). The tool signs
+  the stateless HMAC proof (`X-A2A-Introspection-Nonce` /
+  `X-A2A-Introspection-Signature` headers) with the local domain key; the
+  peer verifies with its own copy — a foreign key fails closed with
+  `Introspection denied`.
+- **CLI** `ggcode a2a introspect <peer> [--mode full|metadata]` — same
+  transport for humans/scripts; `<peer>` is an instance name from LAN
+  discovery or a raw endpoint URL.
+- **Library** `a2a.IntrospectPeer(ctx, endpoint, apiKey, domainKey, mode)`
+  plus `a2a.SignIntrospectionProof` / `a2a.NewIntrospectionNonce` for the
+  symmetric client-side signing helpers.
+
+Requires the peer's `a2a.introspection` mode to be non-empty (server side,
+see #5575); introspection-off peers answer method-not-found, identical to
+the pre-#5575 error surface.

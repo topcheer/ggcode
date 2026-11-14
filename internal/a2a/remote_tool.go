@@ -74,7 +74,7 @@ func (t *RemoteTool) Execute(ctx context.Context, input json.RawMessage) (tool.R
 		return t.listInstances(ctx)
 	}
 
-	inst, err := t.findInstance(params.Target)
+	inst, err := t.FindInstance(params.Target)
 	if err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}, nil
 	}
@@ -133,7 +133,7 @@ func (t *RemoteTool) listInstances(ctx context.Context) (tool.Result, error) {
 	return tool.Result{Content: sb.String()}, nil
 }
 
-func (t *RemoteTool) findInstance(target string) (*InstanceInfo, error) {
+func (t *RemoteTool) FindInstance(target string) (*InstanceInfo, error) {
 	instances, err := t.discover()
 	if err != nil {
 		return nil, fmt.Errorf("discover failed: %v", err)

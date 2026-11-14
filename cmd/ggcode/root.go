@@ -279,6 +279,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(completionCmd)
 	cmd.AddCommand(newMCPCmd(&cfgFile))
 	cmd.AddCommand(newAuditCmd())
+	cmd.AddCommand(newA2ACmd()) // #5593: a2a introspect <peer>
 	cmd.AddCommand(newSkillCmd())
 	cmd.AddCommand(newPluginCmd(&cfgFile))
 	cmd.AddCommand(newIMCmd(&cfgFile))
@@ -1858,6 +1859,10 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 
 	remoteTool := a2a.NewRemoteTool(a2aReg, a2aAPIKey(cfg))
 	_ = reg.Register(remoteTool)
+
+	// #5593: one-hop peer runtime snapshot for agents (same domain key).
+	introspectTool := a2a.NewIntrospectTool(a2aReg, a2aAPIKey(cfg), workingDir)
+	_ = reg.Register(introspectTool)
 
 	refreshCtx, refreshCancel := context.WithCancel(context.Background())
 	safego.Go("root.a2a.refreshCache", func() {
