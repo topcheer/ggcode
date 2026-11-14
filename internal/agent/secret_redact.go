@@ -140,3 +140,12 @@ func redactSecrets(toolName, content string) string {
 	}
 	return notice + redacted + unscanned
 }
+
+// RedactExternalContent runs the full secret-pattern pipeline over
+// arbitrary content (e.g. a2a runtime introspection tails). It borrows the
+// external-content tool gate name so every pattern family applies; the
+// caller-visible semantics are "treat this text as untrusted external
+// content" (#5575 phase 2c conversation/recent faces).
+func RedactExternalContent(content string) string {
+	return redactSecrets("web_fetch", content)
+}

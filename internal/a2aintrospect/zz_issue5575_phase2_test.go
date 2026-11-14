@@ -78,3 +78,20 @@ func TestPhase2_SecretRedactionPassesThrough(t *testing.T) {
 		t.Fatal("secret leaked through aggregation")
 	}
 }
+
+func TestPhase2c_RedactorPrePassLayers(t *testing.T) {
+	var seen string
+	src := &Sources{
+		Redactor: func(s string) string { seen = s; return "cleaned " + s },
+		Recent: func() []a2a.RuntimeToolTrace {
+			return []a2a.RuntimeToolTrace{{TS: "t", Tool: "run_command", Summary: "deploy api_key=sk-live-xyz"}}
+		},
+	}
+	snap, _ := src.RuntimeSnapshot(a2a.IntrospectionFull)
+	if !strings.HasPrefix(snap.Recent[0].Summary, "cleaned") {
+		t.Fatalf("redactor pre-pass missing: %q", snap.Recent[0].Summary)
+	}
+	if !strings.Contains(seen, "sk-live-xyz") {
+		t.Fatal("redactor must receive raw content before masking")
+	}
+}
