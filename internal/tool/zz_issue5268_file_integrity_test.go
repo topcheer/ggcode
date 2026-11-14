@@ -22,11 +22,14 @@ func TestChangedSinceDigests_NoAdvisoryOnIdenticalContentRewrite(t *testing.T) {
 	}
 	tracker.RecordRead(path)
 
+	// Snapshot keys are NORMALIZED paths (normalizePath resolves symlinks:
+	// darwin t.TempDir()'s /var/folders form vs /private/var/folders on disk).
+	norm := normalizePath(path)
 	snap := tracker.SnapshotTrackedWithDigests()
 	if len(snap) != 1 {
 		t.Fatalf("expected 1 tracked file, got %d", len(snap))
 	}
-	if snap[path].Digest == 0 {
+	if snap[norm].Digest == 0 {
 		t.Fatal("expected digest to be computed for small file")
 	}
 
@@ -64,7 +67,12 @@ func TestChangedSinceDigests_RealChangeStillDetected(t *testing.T) {
 	}
 
 	changed := tracker.ChangedSinceDigests(snap)
-	if len(changed) != 1 || changed[0] != path {
+	// The tracker keys and returns NORMALIZED paths (EvalSymlinks-resolved,
+	// see normalizePath). On darwin t.TempDir() hands back the /var/folders
+	// symlink form while the tracker stores /private/var/folders, so the
+	// assertion must compare against the normalized key, not the raw path
+	// (#5609 follow-up; deterministic red on darwin, invisible on linux).
+	if len(changed) != 1 || changed[0] != normalizePath(path) {
 		t.Errorf("expected real content change to be detected, got %v", changed)
 	}
 }
