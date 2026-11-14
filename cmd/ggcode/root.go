@@ -1176,6 +1176,23 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	if a2aServer != nil && !cfg.A2A.Disabled && cfg.A2A.Introspection != "" {
 		a2aServer.SetIntrospector(&a2aintrospect.Sources{
 			Redactor: agent.RedactExternalContent,
+			Todos: func() []a2a.RuntimeTodo {
+				m := repl.TaskManager()
+				if m == nil {
+					return nil
+				}
+				tasks := m.List()
+				out := make([]a2a.RuntimeTodo, 0, len(tasks))
+				for _, tk := range tasks {
+					out = append(out, a2a.RuntimeTodo{
+						ID:         tk.ID,
+						Subject:    tk.Subject,
+						Status:     string(tk.Status),
+						ActiveForm: tk.ActiveForm,
+					})
+				}
+				return out
+			},
 			Crons: func() []a2a.RuntimeCron {
 				out := make([]a2a.RuntimeCron, 0)
 				for _, j := range cronScheduler.List() {

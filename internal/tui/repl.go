@@ -1901,3 +1901,8 @@ func (r *REPL) execTmuxEnter() error {
 	}
 	return cmd.Run()
 }
+
+// TaskManager exposes the session task-board manager for read-only
+// consumers (a2a introspection todos face, #5575). Nil until
+// SetTaskManager runs.
+func (r *REPL) TaskManager() *task.Manager { return r.model.taskMgr }

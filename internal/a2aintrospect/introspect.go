@@ -64,6 +64,13 @@ func (s *Sources) RuntimeSnapshot(mode string) (*a2a.RuntimeSnapshotV2, error) {
 		for i := range snap.Recent {
 			snap.Recent[i].Summary = s.Redactor(snap.Recent[i].Summary)
 		}
+		for i := range snap.Todos {
+			snap.Todos[i].Subject = s.Redactor(snap.Todos[i].Subject)
+			snap.Todos[i].ActiveForm = s.Redactor(snap.Todos[i].ActiveForm)
+		}
+		for i := range snap.Crons {
+			snap.Crons[i].Prompt = s.Redactor(snap.Crons[i].Prompt)
+		}
 	}
 	a2a.RedactSnapshotStrings(snap)
 	return snap, nil

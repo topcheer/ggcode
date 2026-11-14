@@ -113,3 +113,19 @@ func TestPhase2c_CronsFaceMappingAndRedaction(t *testing.T) {
 	}
 
 }
+
+func TestPhase2d_TodosFaceMappingAndRedaction(t *testing.T) {
+	src := &Sources{
+		Redactor: agent.RedactExternalContent,
+		Todos: func() []a2a.RuntimeTodo {
+			return []a2a.RuntimeTodo{{ID: "7", Subject: "rotate AKIAIOSFODNN7EXAMPLE key", Status: "in_progress", ActiveForm: "rotating token=ghp_leak123"}}
+		},
+	}
+	snap, _ := src.RuntimeSnapshot(a2a.IntrospectionFull)
+	if snap.Todos[0].ID != "7" || snap.Todos[0].Status != "in_progress" {
+		t.Fatalf("todos mapping broke: %+v", snap.Todos[0])
+	}
+	if strings.Contains(snap.Todos[0].Subject, "AKIAIOSFODNN7EXAMPLE") || strings.Contains(snap.Todos[0].ActiveForm, "ghp_leak123") {
+		t.Fatalf("secrets leaked through todos face: %+v", snap.Todos[0])
+	}
+}
