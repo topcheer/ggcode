@@ -51,9 +51,10 @@ func rosterLines(instances []a2a.InstanceInfo) string {
 func newA2AIntrospectCmd() *cobra.Command {
 	var depth string
 	var faces []string
+	var category string
 	cmd := &cobra.Command{
 		Use:   "introspect <peer|list|url>",
-		Short: "Read a peer instance's current context (seven faces, verbatim)",
+		Short: "Read a peer instance's current context (eight faces, verbatim)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
@@ -101,7 +102,7 @@ func newA2AIntrospectCmd() *cobra.Command {
 				if !strings.Contains(endpoint, "://") {
 					endpoint = "http://" + endpoint
 				}
-				snap, err := a2a.IntrospectPeerV3(ctx, endpoint, apiKey, a2a.SnapshotRequest{Depth: depth, Faces: faces})
+				snap, err := a2a.IntrospectPeerV3(ctx, endpoint, apiKey, a2a.SnapshotRequest{Depth: depth, Faces: faces, Category: category})
 				if err != nil {
 					return err
 				}
@@ -115,7 +116,7 @@ func newA2AIntrospectCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("seat %q not found in the discovered roster:\n%s\n(discovery: %v)", target, rosterLines(instances), derr)
 			}
-			snap, err := a2a.IntrospectPeerV3(ctx, inst.Endpoint, apiKey, a2a.SnapshotRequest{Depth: depth, Faces: faces})
+			snap, err := a2a.IntrospectPeerV3(ctx, inst.Endpoint, apiKey, a2a.SnapshotRequest{Depth: depth, Faces: faces, Category: category})
 			if err != nil {
 				return err
 			}
@@ -125,6 +126,7 @@ func newA2AIntrospectCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&depth, "depth", a2a.DepthFull, "depth tier: brief or full")
 	cmd.Flags().StringSliceVar(&faces, "faces", nil, "subset of faces (comma-separated)")
+	cmd.Flags().StringVar(&category, "category", "", "category pull: mounts (env) / state (status+inflight+children+schedule+plan) / content (conversation+activity)")
 	return cmd
 }
 

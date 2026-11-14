@@ -72,7 +72,7 @@ func IntrospectPeerV3(ctx context.Context, endpoint, apiKey string, req Snapshot
 }
 
 // IntrospectTool is the agent-facing peer context client (#5597 v3):
-// one hop, seven faces, verbatim. target="list" enumerates peers.
+// one hop, eight faces, verbatim. target="list" enumerates peers.
 type IntrospectTool struct {
 	registry  *Registry
 	apiKey    string
@@ -93,8 +93,8 @@ func (t *IntrospectTool) SetIdentityLookup(fn IdentityLookup) {
 func (t *IntrospectTool) Name() string { return "a2a_introspect" }
 
 func (t *IntrospectTool) Description() string {
-	return "Read a peer ggcode instance's full current context (seven faces: status / inflight / conversation verbatim with cursor / activity / children / schedule / env) in ONE hop over the A2A runtime/snapshot method. " +
-		"Same-workspace trust domain: raw verbatim content, no redaction. Use target='list' to enumerate peers; depth='brief' for headers only; cursors paginate conversation/activity. " +
+	return "Read a peer ggcode instance's full current context (eight faces: status / inflight / conversation verbatim with cursor / activity / children / schedule / env / plan) in ONE hop over the A2A runtime/snapshot method. " +
+		"Same-workspace trust domain: raw verbatim content, no redaction. Use target='list' to enumerate peers; depth='brief' for headers only; cursors paginate conversation/activity; faces=['plan'] filters to the declared working set (todos / goal graph / task board). " +
 		"Use 'a2a_remote' to delegate work, 'lanchat' to talk."
 }
 
@@ -117,8 +117,13 @@ func (t *IntrospectTool) Parameters() json.RawMessage {
 			},
 			"faces": {
 				"type": "array",
-				"items": {"type": "string", "enum": ["status","inflight","conversation","activity","children","schedule","env"]},
+				"items": {"type": "string", "enum": ["status","inflight","conversation","activity","children","schedule","env","plan"]},
 				"description": "Optional subset filter."
+			},
+			"category": {
+				"type": "string",
+				"enum": ["","mounts","state","content"],
+				"description": "Optional category pull: mounts = env (MCP/IM/skills/mobile mounts); state = status+inflight+children+schedule+plan; content = conversation+activity (heavy faces, cursor-paginated). Empty = all faces (default)."
 			},
 			"cursor_conversation": {"type": "string", "description": "Opaque cursor from a previous conversation face."},
 			"cursor_activity": {"type": "string", "description": "Opaque cursor from a previous activity face."}
@@ -133,6 +138,7 @@ func (t *IntrospectTool) Execute(ctx context.Context, input json.RawMessage) (to
 		All        bool     `json:"all"`
 		Depth      string   `json:"depth"`
 		Faces      []string `json:"faces"`
+		Category   string   `json:"category"`
 		CursorConv string   `json:"cursor_conversation"`
 		CursorAct  string   `json:"cursor_activity"`
 	}
@@ -146,9 +152,15 @@ func (t *IntrospectTool) Execute(ctx context.Context, input json.RawMessage) (to
 	if err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}, nil
 	}
+	if params.Category != "" {
+		if _, ok := ExpandCategoryFaces(params.Category); !ok {
+			return tool.Result{Content: fmt.Sprintf("Invalid input: unknown category %q (want mounts|state|content)", params.Category), IsError: true}, nil
+		}
+	}
 	snap, err := IntrospectPeerV3(ctx, inst.Endpoint, t.apiKey, SnapshotRequest{
 		Depth:      params.Depth,
 		Faces:      params.Faces,
+		Category:   params.Category,
 		CursorConv: params.CursorConv,
 		CursorAct:  params.CursorAct,
 	})

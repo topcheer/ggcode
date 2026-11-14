@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -24,10 +25,41 @@ const (
 type SnapshotRequest struct {
 	Depth      string   `json:"depth"`               // brief|full (default full)
 	Faces      []string `json:"faces,omitempty"`     // optional subset filter
+	Category   string   `json:"category,omitempty"`  // optional category pull (#5635): mounts|state|content - expands to a faces subset
 	CursorConv string   `json:"cursor_conversation"` // opaque cursor, conversation face
 	CursorAct  string   `json:"cursor_activity"`     // opaque cursor, activity face
 	LimitConv  int      `json:"limit_conversation"`  // override default 20
 	LimitAct   int      `json:"limit_activity"`      // override default 50
+}
+
+// #5635 category pull: formalizes the light/heavy layering the eight
+// faces already expose. mounts = mounted integrations (env face);
+// state = live counters and working sets; content = the heavy verbatim
+// faces, which stay cursor-paginated. Category expands to a faces
+// subset server-side so clients and the faces filter compose (an
+// explicit faces list still narrows further; faces+category = the
+// intersection).
+const (
+	CategoryMounts = "mounts"
+	CategoryState  = "state"
+	CategoryFull   = "content"
+)
+
+// ExpandCategoryFaces maps a category name to its faces subset. The
+// second return is false for an unknown category name.
+func ExpandCategoryFaces(category string) ([]string, bool) {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "":
+		return nil, true
+	case CategoryMounts:
+		return []string{"env"}, true
+	case CategoryState:
+		return []string{"status", "inflight", "children", "schedule", "plan"}, true
+	case CategoryFull:
+		return []string{"conversation", "activity"}, true
+	default:
+		return nil, false
+	}
 }
 
 // RuntimeStatus is face 1: one-glance "what is this seat".
