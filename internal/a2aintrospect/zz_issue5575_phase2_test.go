@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/a2a"
+	"github.com/topcheer/ggcode/internal/agent"
 )
 
 func TestPhase2_AggregatesAllFaces(t *testing.T) {
@@ -94,4 +95,21 @@ func TestPhase2c_RedactorPrePassLayers(t *testing.T) {
 	if !strings.Contains(seen, "sk-live-xyz") {
 		t.Fatal("redactor must receive raw content before masking")
 	}
+}
+
+func TestPhase2c_CronsFaceMappingAndRedaction(t *testing.T) {
+	src := &Sources{
+		Redactor: agent.RedactExternalContent,
+		Crons: func() []a2a.RuntimeCron {
+			return []a2a.RuntimeCron{{ID: "c9", Cron: "*/5 * * * *", NextFire: "2026-11-13T12:00:00Z", Prompt: "deploy with api_key=AKIAIOSFODNN7EXAMPLE now"}}
+		},
+	}
+	snap, _ := src.RuntimeSnapshot(a2a.IntrospectionFull)
+	if snap.Crons[0].ID != "c9" || snap.Crons[0].NextFire == "" {
+		t.Fatalf("crons mapping broke: %+v", snap.Crons[0])
+	}
+	if strings.Contains(snap.Crons[0].Prompt, "AKIAIOSFODNN7EXAMPLE") {
+		t.Fatalf("aws key leaked through crons prompt: %q", snap.Crons[0].Prompt)
+	}
+
 }
