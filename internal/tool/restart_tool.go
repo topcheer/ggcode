@@ -1,10 +1,16 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand/v2"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -60,6 +66,12 @@ type RestartTool struct {
 	// resumed session continues the prior task. Optional: nil disables the
 	// nudge (restart proceeds regardless).
 	Nudger ResumeNudgeScheduler
+	// Smoke (#5553), when non-nil AND the resolved exec target is known,
+	// must pass on the NEW binary before the restart arms: code-signature
+	// verify (darwin) + a live agent-core round-trip (`selfcheck`). On
+	// failure the restart is REFUSED (IsError result; the process keeps
+	// serving). nil disables the gate (pre-#5553 behavior).
+	Smoke RestartSmokeRunner
 }
 
 func (t *RestartTool) Name() string { return "restart" }
@@ -106,6 +118,26 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}
 	debug.Log("restart", "restart tool invoked: reason=%q debug=%v", args.Reason, args.Debug)
 
+	// #5553: refuse to arm until the exec-target binary proves its
+	// agent-core plumbing live. The smoke runs on the NEW binary (the
+	// exec target), never on the currently running one — a --version
+	// check cannot catch the #5549 zero-toolDefs class (restarted seats
+	// silently paralyzed). Fresh context: the tool ctx may be near its
+	// deadline and this probe gates a process swap.
+	if t.Smoke != nil {
+		if execPath := t.Requester.ExecTargetPath(); execPath != "" {
+			smokeCtx, cancel := context.WithTimeout(context.Background(), RestartSmokeTimeout)
+			err := t.Smoke(smokeCtx, execPath)
+			cancel()
+			if err != nil {
+				debug.Log("restart", "pre-arm smoke FAILED on %s: %v", execPath, err)
+				return Result{IsError: true, Content: fmt.Sprintf(
+					"restart REFUSED (#5553): pre-arm smoke FAILED on exec target %s: %v. The restart was NOT armed; the current process keeps serving. Fix the build (zero-toolDefs / broken registry / exec plumbing), or on macOS re-sign (codesign --force --sign -) if the signature check failed, then retry.", execPath, err)}, nil
+			}
+			debug.Log("restart", "pre-arm smoke passed on %s", execPath)
+		}
+	}
+
 	nudgeNote := ""
 	if t.Nudger != nil {
 		delay := restartNudgeJitter()
@@ -127,4 +159,64 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 		okNote += fmt.Sprintf(" Exec target: %s (current revision %s). After restart the startup banner verifies the running image.", p, t.Requester.ExecTargetRevision())
 	}
 	return Result{Content: okNote + nudgeNote, HaltAgent: true}, nil
+}
+
+// RestartSmokeTimeout bounds the #5553 pre-arm smoke (registry boot +
+// one echo round-trip on a freshly built binary; typically seconds).
+const RestartSmokeTimeout = 90 * time.Second
+
+// RestartSmokeRunner runs the #5553 pre-arm smoke against the exec
+// target binary. Injected for tests; production wiring uses RestartSmoke.
+type RestartSmokeRunner func(ctx context.Context, execPath string) error
+
+// RestartSmoke is the production RestartSmokeRunner: (1) on macOS it
+// verifies the exec target's code signature first — an unsigned/invalid
+// Mach-O gets SIGKILLed by taskgated ("Killed: 9"), which a naive probe
+// would misdiagnose as a build crash; (2) it runs `<execTarget>
+// selfcheck` (real registry boot + run_command echo round-trip) and
+// fails on any non-zero exit.
+func RestartSmoke(ctx context.Context, execPath string) error {
+	abs, err := filepath.Abs(execPath)
+	if err != nil {
+		return fmt.Errorf("resolve exec target: %w", err)
+	}
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return fmt.Errorf("stat exec target: %w", err)
+	}
+	if fi.IsDir() {
+		return fmt.Errorf("exec target is a directory, not a binary")
+	}
+	if runtime.GOOS == "darwin" && looksLikeMachO(abs) {
+		if out, cerr := exec.CommandContext(ctx, "codesign", "--verify", abs).CombinedOutput(); cerr != nil {
+			return fmt.Errorf("codesign verification failed (unsigned/invalid binary — taskgated may SIGKILL it as 'Killed: 9'; re-sign with codesign --force --sign -): %v: %s", cerr, bytes.TrimSpace(out))
+		}
+	}
+	out, err := exec.CommandContext(ctx, abs, "selfcheck").CombinedOutput()
+	if err != nil {
+		tail := string(bytes.TrimSpace(out))
+		if len(tail) > 500 {
+			tail = tail[len(tail)-500:]
+		}
+		return fmt.Errorf("selfcheck on new binary failed (%v): %s", err, tail)
+	}
+	return nil
+}
+
+// looksLikeMachO reports whether path starts with a Mach-O magic, so
+// non-Mach-O exec targets (shell scripts, ELF on darwin CI runners)
+// skip the darwin codesign step.
+func looksLikeMachO(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		return false
+	}
+	return (magic[0] == 0xFE && magic[1] == 0xED) || // MH_MAGIC / MH_MAGIC_64
+		(magic[0] == 0xCE && magic[1] == 0xFA && magic[2] == 0xED && magic[3] == 0xFE) || // byte-swapped
+		(magic[0] == 0xCA && magic[1] == 0xFE && magic[2] == 0xBA && magic[3] == 0xBE) // fat binary
 }
