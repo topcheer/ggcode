@@ -142,16 +142,32 @@ type RuntimeTodo struct {
 	ActiveForm string `json:"active_form,omitempty"`
 }
 
-// RuntimeSnapshotV2 is the runtime/snapshot result. Faces not yet populated
-// stay nil so the JSON shape is forward-compatible (conversation/crons land
-// in later phases per the staged plan).
+// RuntimeConversationTurn is one recent conversation trace entry (head of
+// the user instruction / one-line assistant+tool summary, 200-char caps).
+type RuntimeConversationTurn struct {
+	Role    string `json:"role"`
+	Summary string `json:"summary"`
+}
+
+// RuntimeCron is one cron-registry row.
+type RuntimeCron struct {
+	ID       string `json:"id"`
+	Cron     string `json:"cron,omitempty"`
+	NextFire string `json:"next_fire,omitempty"`
+	Prompt   string `json:"prompt_head,omitempty"`
+}
+
+// RuntimeSnapshotV2 is the runtime/snapshot result. Faces not populated
+// stay nil so the JSON shape is forward-compatible across phases.
 type RuntimeSnapshotV2 struct {
-	Schema  string             `json:"schema"` // "v2"
-	Mode    string             `json:"mode"`   // metadata|full
-	TakenAt string             `json:"taken_at"`
-	Busy    *RuntimeBusy       `json:"busy,omitempty"`
-	Todos   []RuntimeTodo      `json:"todos,omitempty"`
-	Recent  []RuntimeToolTrace `json:"recent,omitempty"`
+	Schema       string                    `json:"schema"` // "v2"
+	Mode         string                    `json:"mode"`   // metadata|full
+	TakenAt      string                    `json:"taken_at"`
+	Busy         *RuntimeBusy              `json:"busy,omitempty"`
+	Todos        []RuntimeTodo             `json:"todos,omitempty"`
+	Recent       []RuntimeToolTrace        `json:"recent,omitempty"`
+	Conversation []RuntimeConversationTurn `json:"conversation,omitempty"`
+	Crons        []RuntimeCron             `json:"crons,omitempty"`
 }
 
 // RuntimeIntrospector is injected by the assembly layer (cmd/ggcode root);
@@ -201,6 +217,12 @@ func RedactSnapshotStrings(s *RuntimeSnapshotV2) {
 	}
 	for i := range s.Recent {
 		s.Recent[i].Summary = trunc(s.Recent[i].Summary)
+	}
+	for i := range s.Conversation {
+		s.Conversation[i].Summary = trunc(s.Conversation[i].Summary)
+	}
+	for i := range s.Crons {
+		s.Crons[i].Prompt = trunc(s.Crons[i].Prompt)
 	}
 }
 
