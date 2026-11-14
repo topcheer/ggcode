@@ -73,6 +73,30 @@ Delegate work to another ggcode instance by project name:
 a2a_send_task --target order-service --skill full-task --message "Add pagination to the orders API"
 ```
 
+## Target Addressing (#5616)
+
+`--target` (and the agent tools `a2a_remote` / `a2a_introspect`) resolves
+through four tiers, first match wins:
+
+1. **Seat nick** - the lanchat nickname of a seat in a shared-workspace
+   fleet (`dev_ggcode`, `reviewer_1`), including the composite `nick_role`
+   form. Nicks are published into the roster automatically once the seat's
+   lanchat hub is up.
+2. **Pinned endpoint** - `name:port` or `host:port` (scheme prefixes are
+   normalized away) selects one exact instance; use this when several
+   seats share a project name.
+3. **Name tier, healthy-first** - a bare project name resolves to the one
+   live instance: identity heartbeat freshness short-circuits the probe,
+   otherwise a TCP liveness check runs. Dead endpoints never answer a
+   lookup; if every same-name candidate is unreachable the call fails with
+   an explicit `unreachable (offline)` verdict instead of silently picking
+   a dead seat.
+4. **Substring** - legacy partial-name fallback over workspace names.
+
+`a2a_introspect --target list` renders each instance with its
+`Seat: nick (role=...)` line when identity is known, so agents can pick
+nick targets straight from the roster.
+
 ## Remote Execution
 
 Call a specific skill on a remote instance:
