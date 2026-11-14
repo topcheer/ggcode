@@ -1166,3 +1166,7 @@ func normalizeResponseID(id json.RawMessage) json.RawMessage {
 // SetDomainKey installs the workspace domain key post-construction (the
 // assembly layer resolves it from the working dir after server creation).
 func (s *Server) SetDomainKey(key []byte) { s.domainKey = key }
+
+// SetIntrospector replaces the phase-1 stub once the runtime chains
+// (lanchat hub, cron scheduler, task board) are up (#5575 phase 2).
+func (s *Server) SetIntrospector(inst RuntimeIntrospector) { s.introspector = inst }
