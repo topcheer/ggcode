@@ -23,11 +23,23 @@ type InstanceInfo struct {
 	Endpoint     string `json:"endpoint"`
 	AgentCardURL string `json:"agent_card_url"`
 	Status       string `json:"status"`
+	// #seat-addressing: LAN identity for nick-based addressing and
+	// same-workspace disambiguation. Empty when the daemon runs without
+	// the lanchat hub (one-shot CLIs read but never write these).
+	Nick string `json:"nick,omitempty"`
+	Role string `json:"role,omitempty"`
 }
 
 func (i InstanceInfo) DisplayName() string {
 	name := filepath.Base(i.Workspace)
-	_, port, err := net.SplitHostPort(i.Endpoint)
+	// Strip the scheme first: an "http://h:p" endpoint carries TWO colons
+	// and net.SplitHostPort rejects it, which silently degraded DisplayName
+	// to the bare project name - making name:port disambiguation dead and
+	// same-fleet lookups hit the FIRST seat (often a stale endpoint).
+	ep := i.Endpoint
+	ep = strings.TrimPrefix(ep, "http://")
+	ep = strings.TrimPrefix(ep, "https://")
+	_, port, err := net.SplitHostPort(ep)
 	if err != nil {
 		return name
 	}
@@ -88,6 +100,17 @@ func (r *Registry) SelfInfo() *InstanceInfo {
 	}
 	c := *r.selfInfo
 	return &c
+}
+
+// SetIdentity records the lanchat identity on the registered self so
+// roster entries and discovery results carry nick/role for addressing.
+func (r *Registry) SetIdentity(nick, role string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.selfInfo != nil {
+		r.selfInfo.Nick = nick
+		r.selfInfo.Role = role
+	}
 }
 
 func (r *Registry) SelfID() string {

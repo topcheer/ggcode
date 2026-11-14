@@ -111,15 +111,29 @@ func newA2AIntrospectCmd() *cobra.Command {
 
 			// Name path: roster must resolve it; a miss is an ERROR with
 			// the roster listed, never a silent bogus-URL fallback (#5602).
-			inst, err := rt.FindInstance(target)
+			// #seat-addressing gap 3: a same-name fleet often carries dead
+			// endpoints (restarted seats leave stale roster entries inside
+			// the TTL). Try candidates newest-first; connection failures
+			// fall through to the next instead of failing the command.
+			cands, err := rt.FindInstances(target)
 			if err != nil {
 				return fmt.Errorf("seat %q not found in the discovered roster:\n%s\n(discovery: %v)", target, rosterLines(instances), derr)
 			}
-			snap, err := a2a.IntrospectPeerV3(ctx, inst.Endpoint, apiKey, a2a.SnapshotRequest{Depth: depth, Faces: faces})
-			if err != nil {
-				return err
+			var snap *a2a.RuntimeSnapshotV3
+			var live *a2a.InstanceInfo
+			var lastErr error
+			for i := range cands {
+				s, err := a2a.IntrospectPeerV3(ctx, cands[i].Endpoint, apiKey, a2a.SnapshotRequest{Depth: depth, Faces: faces})
+				if err == nil {
+					snap, live = s, &cands[i]
+					break
+				}
+				lastErr = err
 			}
-			fmt.Print(a2a.FormatSnapshotV3(target, inst.Workspace, snap))
+			if snap == nil {
+				return fmt.Errorf("all %d candidate seat(s) for %q unreachable (newest first); last error: %w", len(cands), target, lastErr)
+			}
+			fmt.Print(a2a.FormatSnapshotV3(target, live.Workspace, snap))
 			return nil
 		},
 	}

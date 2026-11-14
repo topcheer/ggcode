@@ -1025,6 +1025,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		)
 		lanchatHub.SetRequireAgentApproval(cfg.LanChat.RequireApprovalForAgents)
 		lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
+		// #seat-addressing: publish the lanchat identity on the a2a roster
+		// so peers can target this seat by nick (12 same-name seats make
+		// project-name addressing useless in this fleet).
+		if a2aRegistry != nil {
+			a2aRegistry.SetIdentity(lanchatHub.HumanNick(), lanchatHub.Role())
+		}
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
 
 		syncCtx, syncCancel := context.WithCancel(context.Background())

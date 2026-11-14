@@ -133,6 +133,44 @@ func (t *RemoteTool) listInstances(ctx context.Context) (tool.Result, error) {
 	return tool.Result{Content: sb.String()}, nil
 }
 
+// FindInstances returns the ordered candidate list for a target: callers
+// with dead-endpoint resilience try each in order until one answers
+// (#seat-addressing gap 3). Order: nick-exact singleton first, then
+// DisplayName exact, then workspace-name matches, newest StartedAt first.
+func (t *RemoteTool) FindInstances(target string) ([]InstanceInfo, error) {
+	instances, err := t.discover()
+	if err != nil {
+		return nil, fmt.Errorf("discover failed: %v", err)
+	}
+	lower := strings.ToLower(target)
+	var nicked, exact, sub []InstanceInfo
+	for i := range instances {
+		inst := instances[i]
+		if inst.Nick != "" && strings.EqualFold(inst.Nick, target) {
+			nicked = append(nicked, inst)
+		}
+		if strings.ToLower(inst.DisplayName()) == lower || strings.ToLower(filepath.Base(inst.Workspace)) == lower {
+			exact = append(exact, inst)
+		} else if strings.Contains(strings.ToLower(filepath.Base(inst.Workspace)), lower) {
+			sub = append(sub, inst)
+		}
+	}
+	newestFirst := func(list []InstanceInfo) []InstanceInfo {
+		sort.SliceStable(list, func(a, b int) bool { return list[a].StartedAt > list[b].StartedAt })
+		return list
+	}
+	if len(nicked) > 0 {
+		return newestFirst(nicked), nil
+	}
+	if len(exact) > 0 {
+		return newestFirst(exact), nil
+	}
+	if len(sub) > 0 {
+		return newestFirst(sub), nil
+	}
+	return nil, fmt.Errorf("no instance matching %q found", target)
+}
+
 func (t *RemoteTool) FindInstance(target string) (*InstanceInfo, error) {
 	instances, err := t.discover()
 	if err != nil {
@@ -143,6 +181,14 @@ func (t *RemoteTool) FindInstance(target string) (*InstanceInfo, error) {
 	}
 
 	target = strings.ToLower(target)
+
+	// #seat-addressing: nick is the strongest key - unique across the
+	// fleet by construction (lanchat domain), unlike project names.
+	for i := range instances {
+		if instances[i].Nick != "" && strings.EqualFold(instances[i].Nick, target) {
+			return &instances[i], nil
+		}
+	}
 
 	for i := range instances {
 		if strings.ToLower(instances[i].DisplayName()) == target {
@@ -162,9 +208,13 @@ func (t *RemoteTool) FindInstance(target string) (*InstanceInfo, error) {
 	if len(exactMatches) > 1 {
 		var names []string
 		for _, inst := range exactMatches {
-			names = append(names, inst.DisplayName())
+			label := inst.DisplayName()
+			if inst.Nick != "" {
+				label = inst.Nick + " (" + label + ")"
+			}
+			names = append(names, label)
 		}
-		return nil, fmt.Errorf("ambiguous match %q: multiple instances (%s). Use name:port to disambiguate.", target, strings.Join(names, ", "))
+		return nil, fmt.Errorf("ambiguous match %q: multiple instances (%s). Use nick, or name:port to disambiguate.", target, strings.Join(names, ", "))
 	}
 
 	var matches []InstanceInfo
