@@ -1271,7 +1271,8 @@ func (b *Broker) PushUserMessage(text string) {
 
 func (b *Broker) PushUserMessageData(data MessageData) {
 	b.waitProjectionSync()
-	b.enqueue(EventUserMessage, data)
+	// #5633: strip LLM-facing mid-run guidance preamble before wire + record
+	b.enqueue(EventUserMessage, StripUserMessageData(data))
 }
 
 func (b *Broker) PushSystemMessage(text string) {
@@ -1709,9 +1710,16 @@ func (b *Broker) seedHistoryDirect(messages []HistoryEntry) {
 		switch entry.Role {
 		case "user":
 			if entry.Content != "" {
+				// #5633: snapshot history carries the session-stored LLM-facing
+				// preamble; strip it before seeding the wire + recorded events.
+				content := StripUserPreamble(entry.Content)
+				if content == "" {
+					// preamble-only (e.g. retraction notice): do not render
+					continue
+				}
 				b.enqueue(EventUserMessage, MessageData{
-					Text:        entry.Content,
-					DisplayText: entry.DisplayText,
+					Text:        content,
+					DisplayText: StripUserPreamble(entry.DisplayText),
 					Kind:        entry.Kind,
 				})
 			}
