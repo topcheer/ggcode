@@ -24,10 +24,11 @@ The `a2a_introspect` snapshot's eight faces now include the three P2
 wires:
 
 - **inflight** — what is executing right now on the peer seat: the
-  active sub-agent task summarized (current tool, task head, start
-  time). Idle/done seats are invisible here and show up under
-  `children` instead. Main-agent tool-call loop instrumentation remains
-  a later refinement.
+  seat's own current tool call first (tool, params head, start time,
+  instrumented in the main agent's tool loop, #5635 P2), falling back
+  to the active sub-agent task summary (current tool, task head,
+  start time). Idle/done seats are invisible here and show up under
+  `children` instead.
 - **children** — the full child census: every sub-agent seat (id, name,
   task head, state, model, worktree, current tool, tool-call count)
   plus background command jobs (id, command head, state).
@@ -265,10 +266,13 @@ server's existing auth, plus a roster reverse-lookup workspace gate:
 the caller's endpoint must resolve in the local mDNS roster to an
 instance of the SAME workspace, otherwise -32003).
 
-- Faces: status (busy/goal/model/iteration/tokens) / inflight (current
-  tool call; full loop instrumentation lands in P2) / conversation
+- Faces: status (busy/goal/model/iteration/tokens_in/tokens_out/
+  context_pct, live from the agent's run snapshot, #5635 P2) /
+  inflight (main-agent current tool call, sub-agent fallback) /
+  conversation
   (verbatim, default 20 turns, cursor pagination) / activity (recent
-  tool events + touched files, cursor pagination) / children (running
+  tool events + touched files, cursor pagination; sourced from the
+  in-memory debug ring with real tool names/OK flags) / children (running
   subagents with live event tails + background jobs) / schedule (crons
   + todos) / env (workspace/branch/HEAD/dirty/provider + mounted MCP
   servers, IM adapters, active skills, mobile/tunnel state) / plan
