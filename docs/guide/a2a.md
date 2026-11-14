@@ -18,6 +18,23 @@ List all connected ggcode instances:
 a2a_discover
 ```
 
+### Faces: inflight & children (P2 wiring)
+
+The `a2a_introspect` snapshot's seven faces now include the two P2
+wires:
+
+- **inflight** — what is executing right now on the peer seat: the
+  active sub-agent task summarized (current tool, task head, start
+  time). Idle/done seats are invisible here and show up under
+  `children` instead. Main-agent tool-call loop instrumentation remains
+  a later refinement.
+- **children** — the full child census: every sub-agent seat (id, name,
+  task head, state, model, worktree, current tool, tool-call count)
+  plus background command jobs (id, command head, state).
+
+Request them selectively with `faces: ["inflight","children"]`, or use
+`depth: "brief"` for headers only.
+
 ### Warm Roster File (zero-wait discovery)
 
 Each running ggcode daemon keeps a seat record in
