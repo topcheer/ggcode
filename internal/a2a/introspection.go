@@ -43,8 +43,9 @@ type RuntimeStatus struct {
 	ContextPct float64 `json:"context_pct,omitempty"`
 }
 
-// RuntimeInflight is face 2: the tool call executing RIGHT NOW.
-// P1 ships the shape; loop instrumentation lands in P2 (spec §6).
+// RuntimeInflight is face 2: what is executing RIGHT NOW. P2 scope:
+// the active sub-agent task of this seat (main-agent tool-call loop
+// instrumentation remains a later refinement, spec §6).
 type RuntimeInflight struct {
 	Tool             string `json:"tool,omitempty"`
 	ParamsHead       string `json:"params_head,omitempty"`
@@ -94,6 +95,12 @@ type RuntimeSubagent struct {
 	ID       string `json:"id"`
 	TaskHead string `json:"task_head,omitempty"`
 	State    string `json:"state,omitempty"`
+	// #5605 P2 additive fields (children face detail).
+	Name        string `json:"name,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Worktree    string `json:"worktree,omitempty"`
+	CurrentTool string `json:"current_tool,omitempty"`
+	ToolCalls   int    `json:"tool_calls,omitempty"`
 }
 
 // RuntimeJob is a background command job (children face; P2 wiring).

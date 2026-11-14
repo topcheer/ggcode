@@ -1250,8 +1250,24 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			}
 			return ev
 		}
+		inflightFace := func() *a2a.RuntimeInflight {
+			return a2aintrospect.InflightFromSubagents(subMgr.List())
+		}
+		childrenFace := func() *a2a.RuntimeChildren {
+			ch := &a2a.RuntimeChildren{
+				Subagents: a2aintrospect.FromSubagents(subMgr.List()),
+			}
+			if registry != nil {
+				if jm := registry.JobManager(); jm != nil {
+					ch.Jobs = a2aintrospect.FromCommandJobs(jm.List())
+				}
+			}
+			return ch
+		}
 		a2aServer.SetIntrospectorV3(&a2aintrospect.Sources{
 			Status:   statusFace,
+			Inflight: inflightFace,
+			Children: childrenFace,
 			Schedule: scheduleFace,
 			Activity: activityFace,
 			Conversation: func(cursor string, limit int) ([]a2a.RuntimeConversationTurn, string, bool) {
