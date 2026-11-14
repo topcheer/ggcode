@@ -617,7 +617,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		}
 		meta := make(map[string]a2a.RemoteAgentMeta, len(participants))
 		for _, p := range participants {
-			meta[p.NodeID] = a2a.RemoteAgentMeta{
+			nick := p.AgentNick
+			if nick == "" {
+				nick = p.HumanNick
+			}
+			meta[a2a.NormalizeEndpoint(p.Endpoint)] = a2a.RemoteAgentMeta{
+				Nick:        nick,
 				Team:        p.Team,
 				Role:        p.Role,
 				Languages:   p.Languages,

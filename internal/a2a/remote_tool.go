@@ -136,6 +136,9 @@ func (t *RemoteTool) listInstances(ctx context.Context) (tool.Result, error) {
 	sb.WriteString(fmt.Sprintf("Found %d ggcode instance(s):\n\n", len(instances)))
 	for _, inst := range instances {
 		sb.WriteString(fmt.Sprintf("• %s\n", inst.DisplayName()))
+		if inst.Nick != "" {
+			sb.WriteString(fmt.Sprintf("  Seat: %s (role=%s)\n", inst.Nick, inst.Role))
+		}
 		sb.WriteString(fmt.Sprintf("  Workspace: %s\n", inst.Workspace))
 		sb.WriteString(fmt.Sprintf("  Endpoint: %s\n", inst.Endpoint))
 		sb.WriteString(fmt.Sprintf("  Status: %s\n", inst.Status))
@@ -251,6 +254,7 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 }
 
 type RemoteAgentMeta struct {
+	Nick        string
 	Team        string
 	Role        string
 	Languages   []string
@@ -278,8 +282,11 @@ func FormatRemoteAgents(instances []InstanceInfo, meta map[string]RemoteAgentMet
 	for _, inst := range ordered {
 		name := filepath.Base(inst.Workspace)
 		line := fmt.Sprintf("- %s (%s) - %s", name, inst.Workspace, inst.Status)
-		if m, ok := meta[inst.ID]; ok {
+		if m, ok := meta[normEndpoint(inst.Endpoint)]; ok {
 			var extras []string
+			if m.Nick != "" {
+				extras = append(extras, "seat="+m.Nick)
+			}
 			if m.Team != "" && m.Team != "dev-team" {
 				extras = append(extras, "team="+m.Team)
 			}

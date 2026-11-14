@@ -27,6 +27,12 @@ type Identity struct {
 // identity domain.
 type IdentityLookup func(endpoint string) (Identity, bool)
 
+// NormalizeEndpoint is the exported form of normEndpoint for cmd-layer
+// identity bridges (#5616).
+func NormalizeEndpoint(endpoint string) string {
+	return normEndpoint(endpoint)
+}
+
 // normEndpoint strips scheme and trailing slash so lanchat endpoints
 // (http://host:port) and InstanceInfo endpoints compare equal.
 func normEndpoint(endpoint string) string {
