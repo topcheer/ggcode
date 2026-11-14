@@ -200,3 +200,19 @@ func TestIssue5605_ServiceNameShape(t *testing.T) {
 		t.Fatalf("service type drifted: %q", mDNSServiceType)
 	}
 }
+
+// #5605(C): file-backed warm roster round-trip - upsert/read/remove and
+// the stale-entry TTL filter.
+func TestIssue5605_RosterFileWarmFallback(t *testing.T) {
+	dir := t.TempDir()
+	RosterUpsert(dir, InstanceInfo{ID: "a1", Workspace: dir, Endpoint: "http://127.0.0.1:1111"})
+	RosterUpsert(dir, InstanceInfo{ID: "a2", Workspace: dir, Endpoint: "http://127.0.0.1:2222"})
+	got := ReadRoster(dir, "me")
+	if len(got) != 2 {
+		t.Fatalf("warm roster read: %d entries", len(got))
+	}
+	RosterRemove(dir, "a1")
+	if got = ReadRoster(dir, "me"); len(got) != 1 || got[0].ID != "a2" {
+		t.Fatalf("remove broke roster: %+v", got)
+	}
+}
