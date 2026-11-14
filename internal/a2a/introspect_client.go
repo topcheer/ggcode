@@ -46,6 +46,13 @@ func IntrospectPeerV3(ctx context.Context, endpoint, apiKey string, req Snapshot
 		return nil, fmt.Errorf("a2a introspect: transport: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		// #125/G4: actionable 401 diagnosis instead of a JSON decode error.
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("a2a introspect: HTTP 401 unauthorized from %s (reason=%s); remediation: present the peer's configured credential (X-API-Key from config a2a.auth.api_key, or Authorization: Bearer); server accepts: %s", endpoint, resp.Header.Get("X-Auth-Reason"), resp.Header.Get("WWW-Authenticate"))
+		}
+		return nil, fmt.Errorf("a2a introspect: HTTP %d from %s", resp.StatusCode, endpoint)
+	}
 	var rpcResp JSONRPCResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
 		return nil, fmt.Errorf("a2a introspect: decode: %w", err)

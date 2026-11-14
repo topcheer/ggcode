@@ -1857,6 +1857,11 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		return a2a.WorkspaceGateDecision(r.RemoteAddr, a2aReg.CachedInstances(), workingDir)
 	})
 
+	// #125/G3: explicit switch to refuse the unauthenticated loopback arm.
+	if cfg.A2A.RequireAuth {
+		srv.SetRequireAuth(true)
+	}
+
 	if err := a2aReg.Register(instance); err != nil {
 		srv.Stop()
 		return nil, nil, nil, func() {}, fmt.Errorf("a2a register: %w", err)
