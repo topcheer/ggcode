@@ -215,3 +215,44 @@ func TestSeatNickTXTAndRoster(t *testing.T) {
 		t.Fatalf("roster identity round-trip: %+v", got2)
 	}
 }
+
+// #5617 one-shot CLI seam: a hub-less process has no registered self
+// (SelfWorkspace() == ""), which used to leave discover()'s roster-identity
+// overlay dead exactly where it was needed. SetRosterDir must restore the
+// overlay so nick targets resolve cross-process from the warm roster file.
+func TestSeatNickRosterOverlayWithoutSelf(t *testing.T) {
+	// A live instance discovered via (simulated) mDNS with NO nick — as a
+	// hub-less one-shot CLI sees them.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	reg := &Registry{} // never Register()ed: SelfWorkspace() == ""
+	reg.SetCachedInstances([]InstanceInfo{{
+		ID: "peer-1", Workspace: "/w/ggcode", Endpoint: "http://" + l.Addr().String(),
+		Status: "ready", StartedAt: "2026-11-14T10:00:00Z",
+	}})
+
+	// The warm roster file carries the seat identity (heartbeat-stamped by
+	// the peer's own daemon via SetSelfIdentity → RosterUpsert).
+	rosterDir := t.TempDir()
+	writeRosterEntry(rosterDir, InstanceInfo{
+		ID: "peer-1", Workspace: "/w/ggcode", Endpoint: "http://" + l.Addr().String(),
+		Nick: "dev_ggcode_agent", Role: "dev", Team: "ggcode",
+	})
+
+	rt := NewRemoteTool(reg, "key")
+	rt.SetRosterDir(rosterDir)
+
+	// Bare human nick must now resolve via roster overlay + suffix-aware
+	// matchNick — the exact one-shot CLI chain that failed live.
+	inst, err := rt.FindInstance("dev_ggcode")
+	if err != nil {
+		t.Fatalf("one-shot nick resolve: %v", err)
+	}
+	if inst.Nick != "dev_ggcode_agent" {
+		t.Fatalf("resolved nick = %q, want dev_ggcode_agent", inst.Nick)
+	}
+}

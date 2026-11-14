@@ -72,6 +72,10 @@ func newA2AIntrospectCmd() *cobra.Command {
 			}
 			apiKey := a2aAPIKey(cfg)
 			rt := a2a.NewRemoteTool(reg, apiKey)
+			// #5617: hub-less one-shot has no registered self, so discovery's
+			// roster-identity overlay needs the working dir explicitly.
+			wd, _ := os.Getwd()
+			rt.SetRosterDir(wd)
 
 			target := args[0]
 
