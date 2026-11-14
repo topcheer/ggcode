@@ -347,20 +347,216 @@ func isRefusalFlagBodyByte(b byte) bool {
 	return b == '-' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
 }
 
+// --- #4795 (S-26): flag anchors carry the command domain they were refused
+// in. A `git push --force` refusal must not block `git worktree remove
+// --force`: the anchors share the flag but not the action domain. Path
+// anchors stay wildcard (they name protected objects, not verbs), and any
+// flag anchor whose excerpt carries no command context stays wildcard too -
+// the conservative side that keeps #3460 poisoning protection intact.
+
+var refusalDomainHeadPattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]*`)
+
+// refusalDirectiveWords are the negation/filler words that usually precede
+// the command context in a natural-language refusal ("never run git push
+// --force"). They are skipped when deriving an anchor's domain so the head
+// lands on the command verb, not on "never".
+var refusalDirectiveWords = map[string]bool{
+	"a": true, "again": true, "anymore": true, "any": true,
+	"avoid": true, "can't": true, "cannot": true, "cant": true,
+	"do": true, "don't": true, "dont": true, "edit": true,
+	"editing": true, "more": true, "must": true, "new": true,
+	"no": true, "not": true, "never": true, "on": true,
+	"please": true, "run": true, "running": true, "should": true,
+	"stop": true, "the": true, "to": true, "touch": true,
+	"touching": true, "use": true, "using": true, "with": true,
+	"write": true, "writing": true, "you're": true, "your": true,
+}
+
+// refusalDomainCarriers returns the excerpt text preceding its first flag
+// anchor - the words that, minus directive filler, name the command the flag
+// belongs to. Empty when the excerpt names no flag (path-only anchors) or
+// the flag leads the excerpt (no context at all).
+func refusalDomainCarriers(excerpt string) string {
+	for _, tok := range strings.Fields(excerpt) {
+		tok = strings.Trim(tok, "\"'`(),;:[]{}<>.")
+		if len(tok) >= 4 && tok[0] == '-' {
+			if i := strings.Index(excerpt, tok); i >= 0 {
+				return excerpt[:i]
+			}
+		}
+	}
+	return ""
+}
+
+func refusalTrimDomainToken(tok string) string {
+	return strings.ToLower(strings.Trim(tok, "\"'`(),;:[]{}<>."))
+}
+
+// refusalAnchorDomain derives the command domain a flag anchor belongs to
+// from its carriers. "" means wildcard: not a flag anchor, or the excerpt
+// carried no usable command context ("never use --force"), which keeps the
+// pre-#4795 conservative scope. `git <sub>` contexts resolve to the
+// specific `git-<sub>` domain so they cannot cross-block other subcommands.
+func refusalAnchorDomain(anchor, carriers string) string {
+	if anchor == "" || anchor[0] != '-' {
+		return ""
+	}
+	words := strings.Fields(carriers)
+	i := 0
+	for i < len(words) {
+		w := refusalTrimDomainToken(words[i])
+		if refusalDirectiveWords[w] {
+			i++
+			continue
+		}
+		head := refusalDomainHeadPattern.FindString(w)
+		if head == "" {
+			return ""
+		}
+		if head == "git" && i+1 < len(words) {
+			sub := refusalDomainHeadPattern.FindString(refusalTrimDomainToken(words[i+1]))
+			if sub != "" && !strings.HasPrefix(refusalTrimDomainToken(words[i+1]), "-") {
+				return "git-" + sub
+			}
+		}
+		return head
+	}
+	return ""
+}
+
+// isRefusalDomainWrapper mirrors the wrapper prefixes honored by the gate
+// matcher in internal/config (#5418 lineage): sudo/nohup/env/xargs/timeout/
+// command plus leading env assignments, so `sudo git push --force` still
+// lands in the git-push domain.
+func isRefusalDomainWrapper(tok string) bool {
+	if tok != "" && tok[0] != '-' && strings.Contains(tok, "=") {
+		return true
+	}
+	switch tok {
+	case "sudo", "nohup", "env", "xargs", "timeout", "command":
+		return true
+	}
+	return false
+}
+
+// refusalCommandDomains derives the hierarchical command domains of a shell
+// command: each unit contributes its head word, and `git <sub>` units also
+// contribute `git-<sub>` plus the bare subcommand (so both "git push" and
+// plain "push" refusals match a force push, while a `git worktree remove
+// --force` cleanup does not).
+func refusalCommandDomains(command string) map[string]bool {
+	out := map[string]bool{}
+	for _, unit := range refusalSplitCommandUnits(command) {
+		fields := strings.Fields(unit)
+		i := 0
+		for i < len(fields) {
+			tok := refusalTrimDomainToken(fields[i])
+			if isRefusalDomainWrapper(tok) {
+				i++
+				continue
+			}
+			head := refusalDomainHeadPattern.FindString(tok)
+			if head == "" {
+				break // unparsable unit head (flags, subshells): no domain
+			}
+			out[head] = true
+			if head == "git" && i+1 < len(fields) {
+				sub := refusalDomainHeadPattern.FindString(refusalTrimDomainToken(fields[i+1]))
+				if sub != "" && !strings.HasPrefix(refusalTrimDomainToken(fields[i+1]), "-") {
+					out["git-"+sub] = true
+					out[sub] = true
+				}
+			}
+			break
+		}
+	}
+	return out
+}
+
+// refusalSplitCommandUnits splits a shell command on unquoted &&, ||, ;, |
+// and newline separators, honoring quotes and backslash escapes so
+// separators inside string arguments do not split. Simplified local variant
+// of the unit splitter in internal/config (unexported there); anything it
+// cannot parse simply yields no domain, which is the wildcard (conservative)
+// side for #4795 purposes.
+func refusalSplitCommandUnits(command string) []string {
+	var (
+		units []string
+		cur   []byte
+	)
+	flush := func() {
+		if u := strings.TrimSpace(string(cur)); u != "" {
+			units = append(units, u)
+		}
+		cur = cur[:0]
+	}
+	for i := 0; i < len(command); i++ {
+		c := command[i]
+		switch {
+		case c == '\\' && i+1 < len(command):
+			cur = append(cur, c, command[i+1])
+			i++
+		case c == '\'' || c == '"':
+			cur = append(cur, c)
+			i++
+			for i < len(command) && command[i] != c {
+				if c == '"' && command[i] == '\\' && i+1 < len(command) {
+					cur = append(cur, command[i], command[i+1])
+					i++
+				} else {
+					cur = append(cur, command[i])
+				}
+				i++
+			}
+			if i < len(command) {
+				cur = append(cur, c)
+			}
+		case c == '&' && i+1 < len(command) && command[i+1] == '&',
+			c == '|' && i+1 < len(command) && command[i+1] == '|',
+			c == ';', c == '|', c == '\n':
+			flush()
+			if c == '&' || c == '|' {
+				i++
+			}
+		default:
+			cur = append(cur, c)
+		}
+	}
+	flush()
+	return units
+}
+
+// refusalDomainAllows reports whether a call whose command domains are
+// callDomains may still be blocked by an anchor with the given carriers.
+// A wildcard anchor domain ("" - no command context) or an unparsable call
+// (nil domains) keeps the pre-#4795 behavior: anchor hit alone blocks.
+func refusalDomainAllows(anchor, carriers string, callDomains map[string]bool) bool {
+	domain := refusalAnchorDomain(anchor, carriers)
+	if domain == "" || callDomains == nil {
+		return true
+	}
+	return callDomains[domain]
+}
+
 func (l *refusalLedger) checkBlocked(tool string, args string) string {
 	if l == nil || !refusalWriteTools[tool] {
 		return ""
 	}
 	lower := strings.ToLower(refusalMatchDomain(tool, args))
 
+	// #4795: remember which command domains this call actually exercises so
+	// flag anchors from unrelated domains cannot block it.
+	var callDomains map[string]bool
 	if tool == "run_command" || tool == "start_command" {
 		var rc struct {
 			Command string `json:"command"`
 		}
-		if json.Unmarshal([]byte(args), &rc) == nil &&
-			refusalReadOnlyCmdPattern.MatchString(rc.Command) &&
-			!refusalCmdWriteEvidence.MatchString(rc.Command) {
-			return ""
+		if json.Unmarshal([]byte(args), &rc) == nil && rc.Command != "" {
+			if refusalReadOnlyCmdPattern.MatchString(rc.Command) &&
+				!refusalCmdWriteEvidence.MatchString(rc.Command) {
+				return ""
+			}
+			callDomains = refusalCommandDomains(rc.Command)
 		}
 	}
 	l.mu.Lock()
@@ -373,8 +569,9 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 		if now-e.Ts > int64(refusalRecency.Seconds()) {
 			continue
 		}
+		carriers := refusalDomainCarriers(e.Excerpt)
 		for _, t := range refusalTargets(e.Excerpt) {
-			if refusalAnchorHit(lower, t) {
+			if refusalAnchorHit(lower, t) && refusalDomainAllows(t, carriers, callDomains) {
 				age := refusalAgeWords(now - e.Ts)
 				return fmt.Sprintf(
 					"blocked by persisted user refusal (%s): \"%s\". "+
