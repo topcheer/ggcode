@@ -61,6 +61,17 @@ func (m *mdnsService) start(info InstanceInfo, interfaces []string) error {
 		"pid=" + strconv.Itoa(info.PID),
 		"started=" + info.StartedAt,
 	}
+	// #5616: seat identity fields when known - lets same-workspace fleets
+	// address seats by nick without a lanchat round-trip.
+	if info.Nick != "" {
+		txt = append(txt, "nick="+info.Nick)
+	}
+	if info.Role != "" {
+		txt = append(txt, "role="+info.Role)
+	}
+	if info.Team != "" {
+		txt = append(txt, "team="+info.Team)
+	}
 
 	srv, err := mdnslib.NewServer(mdnslib.Config{
 		Domain:     mDNSDomain,
@@ -196,6 +207,9 @@ func serviceInfoToInstance(inst *mdnslib.ServiceInstanceInfo) *InstanceInfo {
 		Endpoint:     endpoint,
 		AgentCardURL: endpoint + "/.well-known/agent.json",
 		Status:       txt["status"],
+		Nick:         txt["nick"],
+		Role:         txt["role"],
+		Team:         txt["team"],
 	}
 }
 

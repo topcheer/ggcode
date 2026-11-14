@@ -964,7 +964,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	var a2aStopRefresh func()
 	if !cfg.A2A.Disabled {
 
-		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err = startA2AServer(cfg, ag, registry, workingDir)
+		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err = startA2AServer(cfg, ag, registry, workingDir, seatIdentityLookup(lanchatHub))
 		if err != nil {
 			debug.Log("daemon", "A2A server start failed: %v", err)
 			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)

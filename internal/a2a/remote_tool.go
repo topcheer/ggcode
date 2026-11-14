@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -20,6 +21,8 @@ type RemoteTool struct {
 	apiKey   string
 	cache    []InstanceInfo
 	cacheAt  time.Time
+	// #5616 seat addressing: lanchat→a2a identity bridge (nil in tests/CLI).
+	identity IdentityLookup
 }
 
 func NewRemoteTool(reg *Registry, apiKey string) *RemoteTool {
@@ -29,13 +32,21 @@ func NewRemoteTool(reg *Registry, apiKey string) *RemoteTool {
 	return &RemoteTool{registry: reg, apiKey: apiKey}
 }
 
+// SetIdentityLookup wires the lanchat seat-identity bridge so targets can
+// be addressed by seat nick and same-name candidates resolve healthy-first.
+func (t *RemoteTool) SetIdentityLookup(fn IdentityLookup) {
+	t.mu.Lock()
+	t.identity = fn
+	t.mu.Unlock()
+}
+
 func (t *RemoteTool) Name() string { return "a2a_remote" }
 
 func (t *RemoteTool) Description() string {
 	return "Delegate a code-editing task to a remote ggcode instance via A2A protocol. " +
 		"Use this for headless code tasks (e.g. \"edit file X in project Y\", \"review code in user-service\") — NOT for asking questions or chatting. " +
 		"For real-time questions, status checks, or collaboration with other agents/users on the LAN, use the 'lanchat' tool instead. " +
-		"The target is identified by project name (e.g. 'order-service', 'user-service')."
+		"The target is identified by project name (e.g. 'order-service', 'user-service'), by seat nick within a shared-workspace fleet (e.g. 'dev_ggcode'), or by 'name:port' to pin an exact instance."
 }
 
 func (t *RemoteTool) Parameters() json.RawMessage {
@@ -44,7 +55,7 @@ func (t *RemoteTool) Parameters() json.RawMessage {
 		"properties": {
 			"target": {
 				"type": "string",
-				"description": "Target instance name (project name, e.g. 'order-service', 'user-service', 'gateway'). Use 'list' to see all available instances."
+				"description": "Target instance: project name (e.g. 'order-service', 'user-service', 'gateway'), seat nick in a shared-workspace fleet (e.g. 'dev_ggcode'), or 'name:port' to pin an exact instance. Use 'list' to see all available instances."
 			},
 			"skill": {
 				"type": "string",
@@ -142,31 +153,56 @@ func (t *RemoteTool) FindInstance(target string) (*InstanceInfo, error) {
 		return nil, fmt.Errorf("no ggcode instances found")
 	}
 
-	target = strings.ToLower(target)
+	// #5616: enrich with seat identity (lanchat nick/role) so nick targets
+	// and healthy-first disambiguation work in same-workspace fleets.
+	instances = enrichInstances(instances, t.identity)
+	now := time.Now()
 
+	target = strings.ToLower(strings.TrimSpace(target))
+
+	// T1: seat nick (dev_ggcode, reviewer_1, or composite nick_role).
+	if nickMatches := matchNick(instances, target); len(nickMatches) > 0 {
+		return pickHealthy(target, nickMatches, t.identity, now)
+	}
+
+	// T2: pinned endpoint (host:port or workspace-name:port) - unambiguous
+	// by construction. #5616: display-name port derivation fails on
+	// scheme-prefixed endpoints (SplitHostPort rejects "http://host:port"),
+	// so ports are derived from the normalized endpoint instead.
 	for i := range instances {
-		if strings.ToLower(instances[i].DisplayName()) == target {
+		ep := normEndpoint(instances[i].Endpoint)
+		base := strings.ToLower(filepath.Base(instances[i].Workspace))
+		epPort := ""
+		if _, p, err := net.SplitHostPort(ep); err == nil {
+			epPort = p
+		}
+		if ep == target || (epPort != "" && (base+":"+strings.ToLower(epPort)) == target) {
 			return &instances[i], nil
 		}
 	}
 
-	var exactMatches []InstanceInfo
+	// T3: name tier (display name or workspace-base). Same-workspace fleets
+	// collide here: healthy-first picks the live instance, dead-only yields
+	// the explicit offline verdict, multiple live yields ambiguity. Bare
+	// names must never short-circuit to discovery-order first hit — that is
+	// how dead seats used to answer live lookups.
+	var nameMatches []InstanceInfo
+	seenName := make(map[string]bool, len(instances))
 	for _, inst := range instances {
-		if strings.ToLower(filepath.Base(inst.Workspace)) == target {
-			exactMatches = append(exactMatches, inst)
+		dn := strings.ToLower(inst.DisplayName())
+		base := strings.ToLower(filepath.Base(inst.Workspace))
+		if dn == target || base == target {
+			if !seenName[inst.ID] {
+				seenName[inst.ID] = true
+				nameMatches = append(nameMatches, inst)
+			}
 		}
 	}
-	if len(exactMatches) == 1 {
-		return &exactMatches[0], nil
-	}
-	if len(exactMatches) > 1 {
-		var names []string
-		for _, inst := range exactMatches {
-			names = append(names, inst.DisplayName())
-		}
-		return nil, fmt.Errorf("ambiguous match %q: multiple instances (%s). Use name:port to disambiguate.", target, strings.Join(names, ", "))
+	if len(nameMatches) > 0 {
+		return pickHealthy(target, nameMatches, t.identity, now)
 	}
 
+	// T4: substring fallback (legacy behavior).
 	var matches []InstanceInfo
 	for _, inst := range instances {
 		name := strings.ToLower(filepath.Base(inst.Workspace))
@@ -183,11 +219,11 @@ func (t *RemoteTool) FindInstance(target string) (*InstanceInfo, error) {
 		return nil, fmt.Errorf("no instance matching %q found. Available: %s", target, strings.Join(names, ", "))
 	}
 	if len(matches) > 1 {
-		var names []string
-		for _, inst := range matches {
-			names = append(names, inst.DisplayName())
-		}
-		return nil, fmt.Errorf("ambiguous match %q: multiple instances (%s). Use name:port to disambiguate.", target, strings.Join(names, ", "))
+		return pickHealthy(target, matches, t.identity, now)
+	}
+	alive, _ := partitionAlive(matches, t.identity, now)
+	if len(alive) == 0 {
+		return nil, offlineErr(target, matches)
 	}
 	return &matches[0], nil
 }

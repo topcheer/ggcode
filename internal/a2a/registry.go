@@ -23,6 +23,14 @@ type InstanceInfo struct {
 	Endpoint     string `json:"endpoint"`
 	AgentCardURL string `json:"agent_card_url"`
 	Status       string `json:"status"`
+	// Seat identity (#5616): lanchat-derived nick/role/team so a2a target
+	// resolution can address a concrete seat inside a same-workspace fleet
+	// where every instance registers under the same project name. Empty for
+	// peers that never joined lanchat or for pre-#5616 roster/mDNS entries.
+	Nick     string `json:"nick,omitempty"`
+	Role     string `json:"role,omitempty"`
+	Team     string `json:"team,omitempty"`
+	LastSeen int64  `json:"last_seen,omitempty"` // unix seconds; 0 = unknown
 }
 
 func (i InstanceInfo) DisplayName() string {
