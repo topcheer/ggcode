@@ -34,6 +34,14 @@ export function DeleteSession(arg1:string):Promise<void>;
 
 export function DrainLogStream():Promise<string>;
 
+export function EtunnelSetup(arg1:string,arg2:string):Promise<main.EtunnelState>;
+
+export function EtunnelStart():Promise<main.EtunnelState>;
+
+export function EtunnelStatus():Promise<main.EtunnelState>;
+
+export function EtunnelStop():Promise<main.EtunnelState>;
+
 export function ExportSessionAsJSON(arg1:string):Promise<string>;
 
 export function ExportSessionAsMarkdown(arg1:string):Promise<string>;

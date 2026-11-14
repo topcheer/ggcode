@@ -261,3 +261,37 @@ func TestDesktopConfig_GlobalHotkeyRoundTrip(t *testing.T) {
 		t.Fatal("expected global hotkey disabled after round-trip")
 	}
 }
+
+// #5574: SetETunnel must merge into the existing desktop-config file
+// (sibling fields survive) and mark only the etunnel keys dirty.
+func TestDesktopConfig_ETunnelMergeRoundTrip(t *testing.T) {
+	withTestHome(t)
+
+	dc := LoadDesktopConfig()
+	dc.SetWorkDir("/home/user/proj")
+	if err := dc.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	dc2 := LoadDesktopConfig()
+	dc2.SetETunnel("team-desk", "et_tok_5574")
+	if err := dc2.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	dc3 := LoadDesktopConfig()
+	if dc3.WorkDir != "/home/user/proj" {
+		t.Fatalf("sibling field lost in etunnel merge: WorkDir=%q", dc3.WorkDir)
+	}
+	sub, tok, _ := dc3.GetETunnel()
+	if sub != "team-desk" || tok != "et_tok_5574" {
+		t.Fatalf("etunnel round-trip mismatch: sub=%q tok=%q", sub, tok)
+	}
+
+	// Default when never configured.
+	withTestHome(t)
+	dc4 := LoadDesktopConfig()
+	if s, k, _ := dc4.GetETunnel(); s != "" || k != "" {
+		t.Fatalf("expected empty defaults, got %q/%q", s, k)
+	}
+}

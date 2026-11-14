@@ -239,6 +239,22 @@ export namespace lanchat {
 
 export namespace main {
 	
+	export class EtunnelState {
+	    message?: string;
+	    active?: boolean;
+	    url?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EtunnelState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.message = source["message"];
+	        this.active = source["active"];
+	        this.url = source["url"];
+	    }
+	}
 	export class ClipboardAttachment {
 	    path?: string;
 	    name: string;

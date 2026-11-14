@@ -58,6 +58,22 @@ export function DrainLogStream() {
   return window['go']['main']['App']['DrainLogStream']();
 }
 
+export function EtunnelSetup(arg1, arg2) {
+  return window['go']['main']['App']['EtunnelSetup'](arg1, arg2);
+}
+
+export function EtunnelStart() {
+  return window['go']['main']['App']['EtunnelStart']();
+}
+
+export function EtunnelStatus() {
+  return window['go']['main']['App']['EtunnelStatus']();
+}
+
+export function EtunnelStop() {
+  return window['go']['main']['App']['EtunnelStop']();
+}
+
 export function ExportSessionAsJSON(arg1) {
   return window['go']['main']['App']['ExportSessionAsJSON'](arg1);
 }
