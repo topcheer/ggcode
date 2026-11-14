@@ -208,6 +208,14 @@ func (r *Registry) mergeRosterIdentities(instances []InstanceInfo) {
 	}
 	r.mu.Unlock()
 	if ws == "" {
+		// One-shot clients (introspect CLI) never Register, so selfInfo is
+		// nil; fall back to the working directory, the same workspace
+		// convention the CLI itself uses for its roster warm fallback.
+		if wd, err := os.Getwd(); err == nil {
+			ws = wd
+		}
+	}
+	if ws == "" {
 		return
 	}
 	// Pass empty selfID so the self entry is included: the own advertisement
