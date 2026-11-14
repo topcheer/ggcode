@@ -128,6 +128,10 @@ func (t *RemoteTool) listInstances(ctx context.Context) (tool.Result, error) {
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("Discover failed: %v", err), IsError: true}, nil
 	}
+	// #5620 gap: list is an identity surface - enrich with the live lanchat
+	// lookup so published nicks render without a process rebuild
+	// (FindInstance already enriches; list was missed).
+	instances = enrichInstances(instances, t.identity)
 	if len(instances) == 0 {
 		return tool.Result{Content: "No other ggcode instances found. Start ggcode in other workspaces to enable A2A."}, nil
 	}
