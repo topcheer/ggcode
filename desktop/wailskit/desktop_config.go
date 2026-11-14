@@ -33,7 +33,15 @@ type DesktopConfig struct {
 	NotificationsEnabled bool `json:"notifications_enabled,omitempty"`
 	NotificationsSet     bool `json:"notifications_configured,omitempty"`
 
+	// #5574: /et (etunnel) paid-plan settings. Desktop settings storage is
+	// the single source of truth for the tunnel card — deliberately NOT the
+	// webui config file (two storage planes stay separate).
+	ETunnelSubdomain string `json:"etunnel_subdomain,omitempty"`
+	ETunnelToken     string `json:"etunnel_token,omitempty"`
+	ETunnelPlan      string `json:"etunnel_plan,omitempty"`
+
 	dirtyWindowState   bool
+	dirtyETunnel       bool
 	dirtyFontZoom      bool
 	dirtyAlwaysOnTop   bool
 	dirtyGlobalHotkey  bool
@@ -124,6 +132,7 @@ func (dc *DesktopConfig) Save() error {
 	}
 
 	dc.dirtyWorkDir = false
+	dc.dirtyETunnel = false
 	return nil
 }
 
@@ -164,6 +173,27 @@ func (merged *DesktopConfig) mergeFromDirty(dc *DesktopConfig) {
 		merged.NotificationsEnabled = dc.NotificationsEnabled
 		merged.NotificationsSet = dc.NotificationsSet
 	}
+	if dc.dirtyETunnel {
+		merged.ETunnelSubdomain = dc.ETunnelSubdomain
+		merged.ETunnelToken = dc.ETunnelToken
+		merged.ETunnelPlan = dc.ETunnelPlan
+	}
+}
+
+// GetETunnel returns the persisted /et settings (subdomain, token, plan).
+func (dc *DesktopConfig) GetETunnel() (subdomain, token, plan string) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	return dc.ETunnelSubdomain, dc.ETunnelToken, dc.ETunnelPlan
+}
+
+// SetETunnel persists paid-plan credentials (marks dirty for Save merge).
+func (dc *DesktopConfig) SetETunnel(subdomain, token string) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	dc.ETunnelSubdomain = subdomain
+	dc.ETunnelToken = token
+	dc.dirtyETunnel = true
 }
 
 func (dc *DesktopConfig) SetWorkDir(dir string) {

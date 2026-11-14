@@ -52,6 +52,7 @@ Download from GitHub Releases:
 - **MCP browser** — explore connected MCP servers, their tools, prompts, and resources
 - **Language Servers (LSP)** — view detection status and install missing servers with one click (scope: user > global > project)
 - **IM management** — configure, enable, disable, mute, and monitor IM adapters (QQ, Telegram, Discord, Slack, DingTalk, Feishu, etc.)
+- **Etunnel public mapping** (#5574) — Settings > Integrations card that exposes this desktop instance on a public https domain via the built-in etunnel tunnel. Start/Stop/Status mirror the WebUI `/et` commands; **Setup** persists a paid subdomain + API token (`etunnel_subdomain` / `etunnel_token` in `~/.ggcode/desktop-config.json`). The tunnel targets a loopback-only embedded WebUI (127.0.0.1 + `#token` fragment — the auth fragment never enters the tunnel target), state flips push to the UI via the `etunnel:state` event, and shutdown tears the tunnel down cleanly. Browser login (paid accounts) is guided by the reply text.
 
 ### Collaboration
 - **LAN Chat** — real-time messaging with other ggcode instances on your local network. Multi-room view with broadcast + DM rooms, unread badges, file attachments, and @agent message approvals. See [LAN Chat](./lan-chat.md).

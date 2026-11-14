@@ -34,6 +34,7 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/update"
 	"github.com/topcheer/ggcode/internal/version"
+	"github.com/topcheer/ggcode/internal/webui"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -53,6 +54,16 @@ type App struct {
 	tunnelStopSeq     int
 	tunnelStartStopEq int
 	tunnelBroker      *tunnel.Broker
+
+	// #5574: /et (etunnel) public mapping. Naming kept strictly distinct
+	// from the P2P share tunnel above (tunnelMu/tunnelSession/tunnelBroker):
+	// etSrv lazy-hosts the webui Server on 127.0.0.1:0, etCtl is the tunnel
+	// controller (interface so tests can inject a fake).
+	etMu         sync.Mutex
+	etSrv        *webui.Server
+	etCtl        webui.EtunnelController
+	etLocalURL   string
+	etPollCancel context.CancelFunc
 
 	askUserMu     sync.Mutex
 	askUserReq    tool.AskUserRequest
@@ -448,6 +459,7 @@ func (a *App) shutdown(_ context.Context) {
 				debug.Log("desktop", "persist window-state on shutdown failed: %v", err)
 			}
 		}
+		a.stopEtunnel()
 		a.stopShare()
 		a.stopIMAdapters()
 		a.removeGlobalHotkey()

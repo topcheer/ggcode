@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check, Server, Radio, PanelRight, Terminal, Share2, Info, Shield, FolderOpen, Code2, SunMoon } from 'lucide-react'
+import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check, Server, Radio, PanelRight, Terminal, Share2, Info, Shield, FolderOpen, Code2, SunMoon, Globe } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { EventsEmit } from '../../wailsjs/runtime/runtime'
 import { useTranslation, type Locale, LOCALE_LABELS } from '../i18n'
@@ -7,6 +7,7 @@ import { useTheme, type ThemeMode } from '../hooks/useTheme'
 import { ViewMode } from '../types'
 import { parseTokenValue, formatTokenValue, isValidTokenValue } from '../utils/tokenFormat'
 import { HooksSettings } from './HooksSettings'
+import { EtunnelCard } from './EtunnelCard'
 
 interface Props {
   onBack: () => void
@@ -17,7 +18,7 @@ interface Props {
   showToast?: (type: 'success' | 'error' | 'info', message: string) => void
 }
 
-type SettingsTab = 'provider' | 'agent' | 'appearance' | 'impersonation' | 'addEndpoint' | 'integrations' | 'diagnostics' | 'lsp' | 'hooks'
+type SettingsTab = 'provider' | 'agent' | 'appearance' | 'impersonation' | 'addEndpoint' | 'integrations' | 'diagnostics' | 'etunnel' | 'lsp' | 'hooks'
 
 interface ImpersonationPreset {
   id: string
@@ -742,6 +743,13 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                 onClick={onOpenContext}
               />
               <FeatureCard
+                icon={<Globe size={18} />}
+                title={t('settings.etunnel')}
+                description={t('settings.etunnelDesc')}
+                action={t('settings.manageEtunnel')}
+                onClick={() => setTab('etunnel')}
+              />
+              <FeatureCard
                 icon={<Code2 size={18} />}
                 title={t('settings.lspServersShort')}
                 description={t('settings.lspDesc')}
@@ -754,6 +762,13 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                 }}
               />
             </FeatureGrid>
+          </>
+        )}
+
+        {tab === 'etunnel' && (
+          <>
+            <h3 style={sectionTitle}>{t('settings.etunnelTitle')}</h3>
+            <EtunnelCard />
           </>
         )}
 
