@@ -101,6 +101,17 @@ type RuntimeSubagent struct {
 	Worktree    string `json:"worktree,omitempty"`
 	CurrentTool string `json:"current_tool,omitempty"`
 	ToolCalls   int    `json:"tool_calls,omitempty"`
+	// #5637: recent live events so a PEER can watch a running sub-agent
+	// in-flight via agent RPC (children face), same as the local
+	// subagent_context tool. Bounded tail, oldest-first.
+	Events []RuntimeSubagentEvent `json:"events,omitempty"`
+}
+
+// RuntimeSubagentEvent is one tail event of a running sub-agent, flattened
+// from the in-memory ring: text output, tool call, or tool result.
+type RuntimeSubagentEvent struct {
+	Type string `json:"type"` // "text" | "tool" | "result" | "system"
+	Head string `json:"head,omitempty"`
 }
 
 // RuntimeJob is a background command job (children face; P2 wiring).

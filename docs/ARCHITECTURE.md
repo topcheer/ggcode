@@ -180,6 +180,7 @@ internal/
     todo_write.go          # Write todo lists
     spawn_agent.go         # Spawn sub-agents
     list_agents.go / wait_agent.go  # Sub-agent polling and wait tools
+    subagent_context.go    # In-flight sub-agent context: live event tail while a run is executing (#5637)
     notebook_edit.go       # Jupyter notebook editing
     sleep.go               # Sleep/delay tool
     worktree.go            # Enter/exit git worktree tools

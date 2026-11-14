@@ -188,6 +188,7 @@ func NewSubAgentManager(
 		ParentModel:  parentModel,
 		CascadeHints: cascadeHints,
 	})
+	_ = registry.Register(tool.SubagentContextTool{Manager: mgr})
 	_ = registry.Register(tool.ListAgentsTool{
 		Manager:      mgr,
 		ParentModel:  parentModel,
