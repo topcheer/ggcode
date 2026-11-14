@@ -173,13 +173,19 @@ func FormatSnapshot(target, workspace string, s *RuntimeSnapshotV2) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Runtime snapshot: %s (%s) at %s\n", target, workspace, s.TakenAt))
 	b.WriteString(fmt.Sprintf("Mode: %s | Schema: %s\n", s.Mode, s.Schema))
-	b.WriteString(fmt.Sprintf("Busy: %v", s.Busy.Busy))
-	if s.Busy.Busy {
-		if s.Busy.InFlightTool != "" {
+	// #5599: Busy is *RuntimeBusy with omitempty - a peer may legitimately
+	// omit the face (pre-phase-2b stub, unwired source, nil-snap handler
+	// branch). Degrade instead of dereferencing nil (RedactSnapshotStrings
+	// guards the same pointer in this package).
+	if s.Busy == nil {
+		b.WriteString("Busy: (face not available)\n")
+	} else {
+		b.WriteString(fmt.Sprintf("Busy: %v", s.Busy.Busy))
+		if s.Busy.Busy && s.Busy.InFlightTool != "" {
 			b.WriteString(fmt.Sprintf(" since %s in-flight=%s", s.Busy.BusySince, s.Busy.InFlightTool))
 		}
+		b.WriteString("\n")
 	}
-	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("Todos: %d", len(s.Todos)))
 	if len(s.Todos) > 0 {
 		top := s.Todos
