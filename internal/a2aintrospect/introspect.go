@@ -58,9 +58,12 @@ func (s *Sources) RuntimeSnapshot(mode string) (*a2a.RuntimeSnapshotV2, error) {
 		}
 	}
 	if s.Redactor != nil {
-		for i := range snap.Conversation {
-			snap.Conversation[i].Summary = s.Redactor(snap.Conversation[i].Summary)
-		}
+		// #5575 phase 3 ruling (user decision 2026-11-14): the conversation
+		// face ships WITHOUT content redaction — the .git/a2a.key domain
+		// gate IS the trust boundary, so same-key peers are trusted with raw
+		// context. Redaction stays on the other content faces (recent/todos/
+		// crons keep their shipped behavior); truncation remains as size
+		// discipline, not redaction. The domain gate is the trust boundary.
 		for i := range snap.Recent {
 			snap.Recent[i].Summary = s.Redactor(snap.Recent[i].Summary)
 		}
