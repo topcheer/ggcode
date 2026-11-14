@@ -21,10 +21,23 @@ import (
 // now+N days) so the distances are deterministic regardless of run date.
 
 // oneShotExprFor builds a 5-field cron expression whose next fire from now is
-// the target date (within the day), i.e. ~daysOut days away.
+// within ~daysOut days: minute/hour minted from now+daysOut, month explicit,
+// day-of-month WILDCARD. The wildcard day keeps the expression free of a
+// single "specified date" - the scope of the #5594 past-date rejection - so
+// these fixtures exercise the horizon guard (the #5353 subject) without
+// colliding with the newer past-date gate. Fire lands on the 1st of the
+// target month, keeping the >90d / <90d distances deterministic.
 func oneShotExprFor(daysOut int) string {
 	target := time.Now().Add(time.Duration(daysOut) * 24 * time.Hour)
-	return fmt.Sprintf("%d %d %d %d *", target.Minute(), target.Hour(), target.Day(), int(target.Month()))
+	return fmt.Sprintf("%d %d * %d *", target.Minute(), target.Hour(), int(target.Month()))
+}
+
+// farMonthExpr mints a wildcard-day one-shot whose next fire (the 1st of the
+// month ~5 months out) is deterministically beyond the 90-day horizon
+// regardless of run date (minimum ≈ 4 months + 1 day ≈ 121 days).
+func farMonthExpr() string {
+	target := time.Now().AddDate(0, 5, 0)
+	return fmt.Sprintf("%d %d * %d *", target.Minute(), target.Hour(), int(target.Month()))
 }
 
 func TestCronCreateOneShotRejectsFarFutureNextFire(t *testing.T) {
@@ -154,7 +167,7 @@ func TestCronCreateOneShotHorizonBoundary(t *testing.T) {
 	}
 
 	result, err = tool.Execute(context.Background(), json.RawMessage(fmt.Sprintf(
-		`{"cron": %q, "prompt": "just outside", "one_shot": true}`, oneShotExprFor(95))))
+		`{"cron": %q, "prompt": "just outside", "one_shot": true}`, farMonthExpr())))
 	if err != nil {
 		t.Fatal(err)
 	}
