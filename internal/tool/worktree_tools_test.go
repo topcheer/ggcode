@@ -84,7 +84,16 @@ func TestEnterWorktree_Execute(t *testing.T) {
 	}
 
 	gitRoot := dir
-	worktreePath := gitRoot + "/.ggcode/worktrees/test-branch"
+	// git canonicalizes symlinked paths: `git worktree list` reports the
+	// on-disk resolved form, while t.TempDir() under a symlinked TMPDIR
+	// (stock darwin /var/folders) returns the raw symlink form - a
+	// deterministic red on darwin, invisible on linux where /tmp is real
+	// (#5616). Compare against the resolved root.
+	rootResolved, rerr := filepath.EvalSymlinks(gitRoot)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	worktreePath := rootResolved + "/.ggcode/worktrees/test-branch"
 	cmd := exec.Command("git", "worktree", "list")
 	cmd.Dir = gitRoot
 	out, _ := cmd.CombinedOutput()
