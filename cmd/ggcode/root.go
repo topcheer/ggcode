@@ -1033,13 +1033,35 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
 
 		// #5616: publish our seat nick into the roster so cross-process
-		// resolvers (one-shot CLI) can address this seat by nick.
+		// resolvers (one-shot CLI) can address this seat by nick. The
+		// persisted nick is restored later, when the hub's SetSessionID
+		// runs during session load (tui/model.go) - so if it is not
+		// available yet, retry in the background until it is instead of
+		// stamping an empty identity once and never again.
 		if a2aRegistry != nil {
-			nick := lanchatHub.AgentNick()
-			if nick == "" {
-				nick = lanchatHub.HumanNick()
+			stampSeatNick := func() bool {
+				nick := lanchatHub.AgentNick()
+				if nick == "" {
+					nick = lanchatHub.HumanNick()
+				}
+				if nick == "" {
+					return false
+				}
+				a2aRegistry.SetSelfIdentity(nick, "", "")
+				return true
 			}
-			a2aRegistry.SetSelfIdentity(nick, "", "")
+			if !stampSeatNick() {
+				safego.Go("a2a.seatNickStampRetry", func() {
+					deadline := time.Now().Add(60 * time.Second)
+					for time.Now().Before(deadline) {
+						time.Sleep(2 * time.Second)
+						if stampSeatNick() {
+							return
+						}
+					}
+					debug.Log("a2a", "seat nick stamp retry gave up after 60s: nick never restored")
+				})
+			}
 		}
 
 		syncCtx, syncCancel := context.WithCancel(context.Background())
