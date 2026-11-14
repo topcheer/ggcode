@@ -79,6 +79,7 @@ func (t *RestartTool) Name() string { return "restart" }
 func (t *RestartTool) Description() string {
 	return "Restart the ggcode process itself, preserving the current session (conversation history is resumed automatically after restart). " +
 		"Use ONLY when a change requires a fresh process to take effect — e.g. the ggcode binary was updated/rebuilt, or a fix to startup-time behavior (config loading, early initialization) was made. " +
+		"When the exec target binary is known, a pre-arm smoke gate runs first (#5553): code-signature verify (darwin) plus a live `selfcheck` round-trip on the NEW binary; if it fails the restart is REFUSED with an IsError result and the current process keeps serving - fix the build and retry. " +
 		"Regular code changes in the workspace do NOT need a restart. This should typically be the last tool call in your turn."
 }
 
