@@ -168,6 +168,7 @@ type RuntimeEnv struct {
 	Provider   string              `json:"provider,omitempty"`
 	MCPServers []RuntimeEnvService `json:"mcp_servers,omitempty"`
 	IMAdapters []RuntimeEnvService `json:"im_adapters,omitempty"`
+	Skills     []RuntimeEnvService `json:"skills,omitempty"`
 	// #5635 P2: live mobile-share/tunnel connection state, same truth the
 	// local `runtime` tool reports (RuntimeMobileInfo provider).
 	Mobile *RuntimeMobileState `json:"mobile,omitempty"`

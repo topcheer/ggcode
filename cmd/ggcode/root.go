@@ -1276,6 +1276,21 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			if st := gitOut("status", "--porcelain"); st != "" {
 				ev.DirtyFiles = len(strings.Fields(st))
 			}
+			// #5635 P2: mounted skills are peer-visible runtime state too
+			// (knight index, same truth the webui status panel reports).
+			if knightAgent != nil {
+				if idx := knightAgent.Index(); idx != nil {
+					if active, err := idx.ActiveSkills(); err == nil {
+						for _, s := range active {
+							state := s.Scope
+							if s.Staging {
+								state = "staging"
+							}
+							ev.Skills = append(ev.Skills, a2a.RuntimeEnvService{Name: s.Name, State: state})
+						}
+					}
+				}
+			}
 			// #5635: mounted integrations are runtime memory state the peer
 			// must see - MCP server mounts (name/status/tool count) and IM
 			// adapters (name/status), verbatim from the live managers.
