@@ -104,7 +104,11 @@ func (t *IntrospectTool) Parameters() json.RawMessage {
 		"properties": {
 			"target": {
 				"type": "string",
-				"description": "Target seat: project name, seat nick in a shared-workspace fleet (e.g. 'dev_ggcode'), or 'name:port' to pin an exact instance; or 'list' to enumerate peers."
+				"description": "Target seat: project name, seat nick in a shared-workspace fleet (e.g. 'dev_ggcode'), or 'name:port' to pin an exact instance; or 'list' to enumerate peers (default: this workspace only; set all=true to include other workspaces)."
+			},
+			"all": {
+				"type": "boolean",
+				"description": "With target='list': include instances from OTHER workspaces too (default lists only this workspace's fleet; foreign seats collapse to one summary line)."
 			},
 			"depth": {
 				"type": "string",
@@ -126,6 +130,7 @@ func (t *IntrospectTool) Parameters() json.RawMessage {
 func (t *IntrospectTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
 	var params struct {
 		Target     string   `json:"target"`
+		All        bool     `json:"all"`
 		Depth      string   `json:"depth"`
 		Faces      []string `json:"faces"`
 		CursorConv string   `json:"cursor_conversation"`
@@ -135,7 +140,7 @@ func (t *IntrospectTool) Execute(ctx context.Context, input json.RawMessage) (to
 		return tool.Result{Content: fmt.Sprintf("Invalid input: %v", err), IsError: true}, nil
 	}
 	if params.Target == "" || params.Target == "list" {
-		return t.localTool.listInstances(ctx)
+		return t.localTool.listInstances(ctx, params.All)
 	}
 	inst, err := t.localTool.FindInstance(params.Target)
 	if err != nil {
