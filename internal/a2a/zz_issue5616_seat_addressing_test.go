@@ -256,3 +256,27 @@ func TestSeatNickRosterOverlayWithoutSelf(t *testing.T) {
 		t.Fatalf("resolved nick = %q, want dev_ggcode_agent", inst.Nick)
 	}
 }
+
+// TestIssue5617DisplayNameSchemeFullEndpoints pins the DisplayName half of
+// the #5617 bonus root cause in the CI suite (server_test.go's table is
+// integration_local-tagged and never runs in CI): scheme-full endpoints —
+// the form Server.Endpoint() and mDNS discovery both produce — must derive
+// name:port, not degrade to the bare project name that collapsed every
+// seat in a same-name fleet into one undifferentiated label.
+func TestIssue5617DisplayNameSchemeFullEndpoints(t *testing.T) {
+	cases := []struct {
+		endpoint  string
+		workspace string
+		want      string
+	}{
+		{"http://10.0.0.1:8080", "/home/user/ggcode", "ggcode:8080"},
+		{"https://10.0.0.1:8443/", "/home/user/ggcode", "ggcode:8443"},
+		{"127.0.0.1:54321", "/home/user/ggcode", "ggcode:54321"},
+		{"http://127.0.0.1:54321", "/home/user/ggcode", "ggcode:54321"},
+	}
+	for _, c := range cases {
+		if got := (InstanceInfo{Workspace: c.workspace, Endpoint: c.endpoint}).DisplayName(); got != c.want {
+			t.Errorf("DisplayName(%q) = %q, want %q", c.endpoint, got, c.want)
+		}
+	}
+}
