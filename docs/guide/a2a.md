@@ -20,7 +20,7 @@ a2a_discover
 
 ### Faces: inflight & children (P2 wiring)
 
-The `a2a_introspect` snapshot's seven faces now include the two P2
+The `a2a_introspect` snapshot's eight faces now include the three P2
 wires:
 
 - **inflight** — what is executing right now on the peer seat: the
@@ -258,7 +258,7 @@ ggcode stays interoperable with both 0.2.x/0.3.x peers and A2A v1.0 (2026-03) ag
 
 ## Peer runtime introspection (v3, #5597)
 
-Seven faces, one hop, verbatim (same-workspace = trust domain, no
+Eight faces, one hop, verbatim (same-workspace = trust domain, no
 redaction; the v1/v2 HMAC/domain-key machinery was REMOVED by the final
 design ruling - runtime/snapshot is a plain JSON-RPC method behind the
 server's existing auth, plus a roster reverse-lookup workspace gate:
@@ -268,9 +268,12 @@ instance of the SAME workspace, otherwise -32003).
 - Faces: status (busy/goal/model/iteration/tokens) / inflight (current
   tool call; full loop instrumentation lands in P2) / conversation
   (verbatim, default 20 turns, cursor pagination) / activity (recent
-  tool events + touched files, cursor pagination) / children (subagents
-  + background jobs; P2 wiring) / schedule (crons + todos) / env
-  (workspace/branch/HEAD/dirty/provider).
+  tool events + touched files, cursor pagination) / children (running
+  subagents with live event tails + background jobs) / schedule (crons
+  + todos) / env (workspace/branch/HEAD/dirty/provider + mounted MCP
+  servers, IM adapters, active skills, mobile/tunnel state) / plan
+  (the declared working set: session todos, durable goal graph, task
+  board - intent and standing, not just activity).
 - Depth tiers: `brief` (headers/clipped) and `full` (default, verbatim).
 - Agent tool `a2a_introspect`: `target` (or `list`), `depth`, `faces`,
   `cursor_conversation`, `cursor_activity`.
