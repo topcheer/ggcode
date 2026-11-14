@@ -603,6 +603,8 @@ func (h *Hub) WorkspaceDefaultTeam() string {
 func (h *Hub) SetNickRoleTeam(nick, role, team string) error {
 	composite := nick + "_" + role
 	h.mu.Lock()
+	oldComposite := h.humanNick
+	oldRole, oldTeam := h.role, h.team
 	h.humanNick = composite
 	h.agentNick = AgentNick(composite)
 	h.role = role
@@ -623,6 +625,12 @@ func (h *Hub) SetNickRoleTeam(nick, role, team string) error {
 		debug.Log("lanchat", "failed to persist explicit-team marker: %v", err)
 	}
 
+	// #5625: an identity re-set with unchanged values must NOT rebroadcast -
+	// restart-heavy fleets re-assert identity on every boot and each same-
+	// value broadcast rendered as "X is now known as X" on every seat.
+	if composite == oldComposite && role == oldRole && team == oldTeam {
+		return nil
+	}
 	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(composite, role, team) })
 	return nil
 }
@@ -763,6 +771,13 @@ func (h *Hub) resolveNickConflict() {
 		}
 	}
 	newNick := ResolveNickConflict(myNick, taken)
+	// #5625: same-name resolution is a no-op - broadcasting "X is now known
+	// as X" on every conflict-check cycle (duplicate-process fleets) flooded
+	// every seat's chat panel.
+	if newNick == myNick {
+		h.mu.Unlock()
+		return
+	}
 	h.humanNick = newNick
 	h.agentNick = AgentNick(newNick)
 	sessionDir := h.store.dir

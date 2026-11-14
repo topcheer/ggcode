@@ -131,6 +131,16 @@ func (r *Registry) SelfID() string {
 	return r.selfID
 }
 
+// SelfWorkspace returns the registered self's workspace ("" before Register).
+func (r *Registry) SelfWorkspace() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.selfInfo == nil {
+		return ""
+	}
+	return r.selfInfo.Workspace
+}
+
 func (r *Registry) Unregister() error {
 	if r.mdnsSvc != nil {
 		r.mdnsSvc.stop()

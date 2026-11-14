@@ -30,6 +30,12 @@ func newMDNSService() *mdnsService {
 }
 
 func (m *mdnsService) start(info InstanceInfo, interfaces []string) error {
+	// #5629: re-registration (restart/session-resume re-Register path) must
+	// retire the previous server first - a leaked old server kept announcing
+	// the stale endpoint forever while the roster moved to the new port,
+	// tearing endpoint-keyed roster/mdns identity merges apart (fleet-
+	// verified: same-pid double roster entries, nick lookups no-match).
+	m.stop()
 	m.info = &info
 
 	effectiveIfaces := ResolveInterfaces(interfaces)

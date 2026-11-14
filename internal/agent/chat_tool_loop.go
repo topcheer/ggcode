@@ -23,6 +23,9 @@ import (
 // back out.
 func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEvent), msgs []provider.Message, toolCalls []provider.ToolCallDelta, iter int, textBuf string, reasoningChars int, userPromptForStats string, preExecuted map[int]preExecutedResult, waitPreExecuted map[int]preExecutedResult, runStats *RunStats, st *loopState) (chatTurnAction, error, []provider.Message) {
 	var toolResults []provider.ContentBlock
+	// #5635 P2: inflight face - clear the main-agent current-tool marker
+	// when the batch ends (any exit path, hence the defer).
+	defer a.currentTool.clear()
 	batchConflictWarnings := detectBatchEditConflicts(toolCalls)
 	seenReadOnly := make(map[dedupKey]int)
 
@@ -98,6 +101,9 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			a.fillCancelledToolResults(toolCalls[idx:], &toolResults)
 			return chatTurnFatal, err, msgs
 		}
+		// #5635 P2: inflight face - mark this call as the main agent's
+		// current tool while it executes.
+		a.currentTool.begin(tc.Name, string(tc.Arguments))
 		var undoBlindHint string
 		if ub := a.undoBlind.recordToolCall(tc.Name, tc.Arguments); ub != "" {
 			debug.Log("agent", "Iteration %d: undo-blind mutation detected (pre-execution)", iter+1)

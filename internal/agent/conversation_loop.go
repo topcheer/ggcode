@@ -15,6 +15,9 @@ import (
 // no-tool handling, tool batches, and the post-loop terminators. All
 // defers stay in the caller so their LIFO order is untouched.
 func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.StreamEvent), sid string, userPromptForStats string, toolDefs []provider.ToolDefinition, runStats *RunStats, st *loopState, turnCounters *chatTurnCounters) (err error) {
+	// #5635 P2: reset the status-face counters so they always describe
+	// the live (or most recently finished) run.
+	a.runtimeStats.beginRun()
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 
 		if st.sessionBudgetStop {
@@ -30,6 +33,7 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 			return ErrSessionBudgetExhausted
 		}
 		runStats.Iterations = i + 1
+		a.runtimeStats.setIteration(i + 1)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -320,6 +324,7 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 		a.maybeSetAutopilotGoalFromLLMOutput(textBuf)
 
 		runStats.recordTokens(resp.Usage.InputTokens, resp.Usage.OutputTokens)
+		a.runtimeStats.addTokens(int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens))
 		a.syncContextManagerUsage(resp.Usage)
 		a.emitUsage(resp.Usage)
 

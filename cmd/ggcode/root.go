@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -986,7 +988,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	var a2aTaskHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
 
-		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir, seatIdentityLookup(lanchatHub))
+		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir, seatIdentityLookup(func() *lanchat.Hub { return lanchatHub }))
 		if err != nil {
 
 			debug.Log("root", "A2A server startup warning: %v", err)
@@ -1033,14 +1035,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
 
 		// #5616: publish our seat nick into the roster so cross-process
-		// resolvers (one-shot CLI) can address this seat by nick.
-		if a2aRegistry != nil {
-			nick := lanchatHub.AgentNick()
-			if nick == "" {
-				nick = lanchatHub.HumanNick()
-			}
-			a2aRegistry.SetSelfIdentity(nick, "", "")
-		}
+		// resolvers (one-shot CLI) can address this seat by nick. Lazy
+		// republish on every sync tick - hub identity restores async.
+		republishSeatNick := seatNickRepublisher(lanchatHub, a2aRegistry)
+		republishSeatNick()
 
 		syncCtx, syncCancel := context.WithCancel(context.Background())
 		defer syncCancel()
@@ -1058,6 +1056,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 					})
 				}
 				lanchatHub.UpdatePeers(peers)
+				republishSeatNick()
 			}
 
 			time.Sleep(3 * time.Second)
@@ -1204,6 +1203,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 				st.BusySince = time.Unix(p.AgentStatusSince, 0).UTC().Format(time.RFC3339)
 				st.Spinner = p.AgentStatus
 			}
+			// #5635 P2: live run counters from the agent's thread-safe
+			// snapshot - these fields existed on RuntimeStatus but were
+			// never filled (issue #5635 status-face gap).
+			rs := ag.RuntimeStats()
+			st.Goal = rs.Goal
+			st.Iteration = rs.Iterations
+			st.TokensIn = rs.TokensIn
+			st.TokensOut = rs.TokensOut
+			st.ContextPct = rs.ContextPct
 			return st
 		}
 		scheduleFace := func() *a2a.RuntimeSchedule {
@@ -1225,17 +1233,25 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			return sch
 		}
 		activityFace := func(cursor string, limit int) ([]a2a.RuntimeActivityEvent, []a2a.RuntimeFileTouch, string, bool) {
-			lines := a2aintrospect.TailJSONL(debug.MainLogPath(), limit)
-			events := make([]a2a.RuntimeActivityEvent, 0, len(lines))
-			for i, l := range lines {
-				events = append(events, a2a.RuntimeActivityEvent{
-					TS: fmt.Sprintf("-%d", len(lines)-i), Tool: "log", OK: true, Size: len(l),
-				})
-			}
-			return events, nil, "", false
+			// #5635 P2: read the in-memory debug ring (debug.Log dual-writes
+			// disk + ring) instead of tailing the on-disk JSONL - no disk
+			// I/O on the introspection path, and tool name / OK come from the
+			// log line shape where available.
+			return a2aintrospect.ActivityFromRingEntries(debug.RingHistory(limit, "")), nil, "", false
 		}
 		convStore := func() []a2a.RuntimeConversationTurn {
-			if cronSessionID == "" || cronSessionID == "__new__" {
+			// #5635: interactive seats (REPL) have no cron session ID - the
+			// old gate returned nil for them, so introspect showed 0 turns
+			// even right after a resume of a long-lived session. Fall back
+			// to the REPL's current session, which IS the live memory-state
+			// pointer (recent turns are read from the session ledger).
+			sid := cronSessionID
+			if sid == "" || sid == "__new__" {
+				if repl != nil {
+					sid = repl.CurrentSessionID()
+				}
+			}
+			if sid == "" || sid == "__new__" {
 				return nil
 			}
 			dir, err := session.DefaultDir()
@@ -1246,7 +1262,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			if err != nil {
 				return nil
 			}
-			msgs := st.RecentMessages(cronSessionID, 200)
+			msgs := st.RecentMessages(sid, 200)
 			turns := make([]a2a.RuntimeConversationTurn, 0, len(msgs))
 			for _, m := range msgs {
 				turns = append(turns, a2a.RuntimeConversationTurn{Role: m.Role, Text: m.Content})
@@ -1268,21 +1284,134 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			if st := gitOut("status", "--porcelain"); st != "" {
 				ev.DirtyFiles = len(strings.Fields(st))
 			}
+			// #5635 P2: mounted skills are peer-visible runtime state too
+			// (knight index, same truth the webui status panel reports).
+			if knightAgent != nil {
+				if idx := knightAgent.Index(); idx != nil {
+					if active, err := idx.ActiveSkills(); err == nil {
+						for _, s := range active {
+							state := s.Scope
+							if s.Staging {
+								state = "staging"
+							}
+							ev.Skills = append(ev.Skills, a2a.RuntimeEnvService{Name: s.Name, State: state})
+						}
+					}
+				}
+			}
+			// #5635: mounted integrations are runtime memory state the peer
+			// must see - MCP server mounts (name/status/tool count) and IM
+			// adapters (name/status), verbatim from the live managers.
+			if mcpMgr != nil {
+				for _, info := range mcpMgr.Snapshot() {
+					svc := a2a.RuntimeEnvService{Name: info.Name, State: string(info.Status)}
+					if info.Disabled {
+						svc.State = "disabled"
+					}
+					svc.Error = info.Error
+					svc.Tools = len(info.ToolNames)
+					ev.MCPServers = append(ev.MCPServers, svc)
+				}
+			}
+			if imMgr != nil {
+				for _, a := range imMgr.Snapshot().Adapters {
+					state := a.Status
+					if a.Healthy {
+						state = "connected"
+					}
+					ev.IMAdapters = append(ev.IMAdapters, a2a.RuntimeEnvService{Name: a.Name, State: state, Error: a.LastError})
+				}
+			}
+			// #5635 P2: mobile share/tunnel connection state, reusing the
+			// same provider truth the local `runtime` tool reports.
+			if registry != nil {
+				if t, ok := registry.Get("runtime"); ok {
+					if rt, ok := t.(tool.RuntimeTool); ok && rt.Provider != nil {
+						mi := rt.Provider.RuntimeMobile()
+						ev.Mobile = &a2a.RuntimeMobileState{
+							Connected: mi.Connected,
+							RelayURL:  mi.RelayURL,
+							SessionID: mi.SessionID,
+						}
+					}
+				}
+			}
 			return ev
 		}
 		inflightFace := func() *a2a.RuntimeInflight {
-			return a2aintrospect.InflightFromSubagents(subMgr.List())
+			// #5635 P2: the MAIN agent's in-flight tool call (loop
+			// instrumentation) takes precedence - it is the seat's own
+			// current action; sub-agent inflight remains the fallback.
+			inflight := a2aintrospect.InflightFromSubagents(subMgr.List())
+			if ct := ag.CurrentTool(); ct.Tool != "" {
+				if inflight == nil {
+					inflight = &a2a.RuntimeInflight{}
+				}
+				inflight.Tool = ct.Tool
+				inflight.ParamsHead = ct.ParamsHead
+				inflight.StartedAt = ct.StartedAt.UTC().Format(time.RFC3339)
+			}
+			return inflight
 		}
 		childrenFace := func() *a2a.RuntimeChildren {
 			ch := &a2a.RuntimeChildren{
 				Subagents: a2aintrospect.FromSubagents(subMgr.List()),
 			}
+			// #5637: peer-side in-flight visibility of running sub-agents.
+			a2aintrospect.AttachSubagentEvents(ch.Subagents, subMgr, 10)
 			if registry != nil {
 				if jm := registry.JobManager(); jm != nil {
 					ch.Jobs = a2aintrospect.FromCommandJobs(jm.List())
 				}
 			}
 			return ch
+		}
+		// #5635 P2: plan face - the declared working set (todos / goal
+		// graph / task board), same truth the tools persist. Files are read
+		// live so a peer sees the current state without tool round-trips.
+		planFace := func() *a2a.RuntimePlan {
+			pl := &a2a.RuntimePlan{}
+			sid := ""
+			if repl != nil {
+				sid = repl.CurrentSessionID()
+			}
+			if b, err := os.ReadFile(tool.TodoFilePath(sid)); err == nil {
+				var todos []tool.Todo
+				if json.Unmarshal(b, &todos) == nil {
+					for _, t := range todos {
+						pl.Todos = append(pl.Todos, a2a.RuntimePlanTodo{ID: t.ID, Content: t.Content, Status: t.Status})
+					}
+				}
+			}
+			if b, err := os.ReadFile(filepath.Join(workingDir, ".ggcode", "goal-graph.json")); err == nil {
+				var gg struct {
+					Nodes map[string]struct {
+						ID       string `json:"id"`
+						Level    string `json:"level"`
+						Title    string `json:"title"`
+						Parent   string `json:"parent"`
+						Status   string `json:"status"`
+						NextStep string `json:"next_step"`
+					} `json:"nodes"`
+				}
+				if json.Unmarshal(b, &gg) == nil {
+					ids := make([]string, 0, len(gg.Nodes))
+					for id := range gg.Nodes {
+						ids = append(ids, id)
+					}
+					sort.Strings(ids)
+					for _, id := range ids {
+						n := gg.Nodes[id]
+						pl.GoalNodes = append(pl.GoalNodes, a2a.RuntimeGoalNode{ID: n.ID, Level: n.Level, Title: n.Title, Parent: n.Parent, Status: n.Status, NextStep: n.NextStep})
+					}
+				}
+			}
+			if taskMgr != nil {
+				for _, t := range taskMgr.List() {
+					pl.Tasks = append(pl.Tasks, a2a.RuntimePlanTask{ID: t.ID, Subject: t.Subject, Status: string(t.Status), Owner: t.Owner, ActiveForm: t.ActiveForm, Blocks: t.Blocks, BlockedBy: t.BlockedBy})
+				}
+			}
+			return pl
 		}
 		a2aServer.SetIntrospectorV3(&a2aintrospect.Sources{
 			Status:   statusFace,
@@ -1293,7 +1422,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			Conversation: func(cursor string, limit int) ([]a2a.RuntimeConversationTurn, string, bool) {
 				return a2aintrospect.ConversationFromTurns(convStore())(cursor, limit)
 			},
-			Env: envFace,
+			Env:  envFace,
+			Plan: planFace,
 		})
 	}
 
@@ -1712,11 +1842,42 @@ var a2aTimeoutWarnf = func(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format, args...)
 }
 
+// seatNickRepublisher returns a closure that re-stamps the registry self
+// identity whenever the hub nick becomes known or changes. Hub identity
+// restores asynchronously after construction, so the immediate post-hub
+// publish races an empty nick; the sync tick re-publishes lazily (#5616).
+// seatNickRepublisher returns a closure that re-stamps the registry self
+// entry on EVERY sync tick. RosterUpsert is the roster heartbeat (entries
+// age out after ~10m TTL): a change-detection guard here starved unchanged
+// seats to death (fleet-verified - entries registered once, probed
+// unreachable, TTL-purged). SetSelfIdentity writes the registry/roster file
+// only; it never LAN-broadcasts, so per-tick re-stamping is silent (#5626
+// guards hub-side identity broadcasts separately).
+func seatNickRepublisher(hub *lanchat.Hub, reg *a2a.Registry) func() {
+	return func() {
+		if hub == nil || reg == nil {
+			return
+		}
+		nick := hub.AgentNick()
+		if nick == "" {
+			nick = hub.HumanNick()
+		}
+		if nick == "" {
+			return
+		}
+		reg.SetSelfIdentity(nick, hub.Role(), hub.Team())
+	}
+}
+
 // seatIdentityLookup bridges a lanchat hub's seat registry into the a2a
 // identity domain (#5616): endpoint-keyed nick/role/team plus heartbeat
-// freshness. Nil-safe: a nil hub yields a lookup that never matches.
-func seatIdentityLookup(hub *lanchat.Hub) a2a.IdentityLookup {
+// freshness. Takes a hub GETTER, not a pointer: call sites fire before the
+// hub is constructed, and a pointer parameter would freeze the nil copy
+// forever - the getter closure captures the variable by reference so the
+// later assignment is visible. Nil-safe: a nil hub never matches.
+func seatIdentityLookup(hubOf func() *lanchat.Hub) a2a.IdentityLookup {
 	return func(endpoint string) (a2a.Identity, bool) {
+		hub := hubOf()
 		if hub == nil {
 			return a2a.Identity{}, false
 		}

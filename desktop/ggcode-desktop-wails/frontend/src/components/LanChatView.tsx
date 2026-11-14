@@ -226,17 +226,21 @@ export function LanChatView({ onUnreadChange }: Props) {
     const offNickChange = EventsOn('lanchat:nick_change', (d: any) => {
       const oldNick = d.old_nick || '(unknown)'
       const newNick = d.new_nick || '(unknown)'
-      const sysMsg: LanChatMessage = {
-        id: `nick-${d.node_id}-${Date.now()}`,
-        from_node_id: 'system',
-        from_role: 'system',
-        from_nick: '',
-        to_node_id: '',
-        to_role: '',
-        content: `${oldNick} is now known as ${newNick}`,
-        timestamp: Date.now(),
+      // #5625: no-change renames (A -> A) are broadcast noise from old-bin
+      // peers re-asserting identity - never render them.
+      if (oldNick !== newNick) {
+        const sysMsg: LanChatMessage = {
+          id: `nick-${d.node_id}-${Date.now()}`,
+          from_node_id: 'system',
+          from_role: 'system',
+          from_nick: '',
+          to_node_id: '',
+          to_role: '',
+          content: `${oldNick} is now known as ${newNick}`,
+          timestamp: Date.now(),
+        }
+        addMessageToRoom('broadcast', sysMsg, activeRoomRef.current === 'broadcast')
       }
-      addMessageToRoom('broadcast', sysMsg, activeRoomRef.current === 'broadcast')
       refreshParticipants()
     })
 

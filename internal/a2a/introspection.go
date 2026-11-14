@@ -101,6 +101,17 @@ type RuntimeSubagent struct {
 	Worktree    string `json:"worktree,omitempty"`
 	CurrentTool string `json:"current_tool,omitempty"`
 	ToolCalls   int    `json:"tool_calls,omitempty"`
+	// #5637: recent live events so a PEER can watch a running sub-agent
+	// in-flight via agent RPC (children face), same as the local
+	// subagent_context tool. Bounded tail, oldest-first.
+	Events []RuntimeSubagentEvent `json:"events,omitempty"`
+}
+
+// RuntimeSubagentEvent is one tail event of a running sub-agent, flattened
+// from the in-memory ring: text output, tool call, or tool result.
+type RuntimeSubagentEvent struct {
+	Type string `json:"type"` // "text" | "tool" | "result" | "system"
+	Head string `json:"head,omitempty"`
 }
 
 // RuntimeJob is a background command job (children face; P2 wiring).
@@ -139,15 +150,73 @@ type RuntimeTodo struct {
 }
 
 // RuntimeEnv is face 7: workspace environment.
-type RuntimeEnv struct {
-	Workspace  string `json:"workspace,omitempty"`
-	Branch     string `json:"branch,omitempty"`
-	Head       string `json:"head,omitempty"`
-	DirtyFiles int    `json:"dirty_files,omitempty"`
-	Provider   string `json:"provider,omitempty"`
+// RuntimeEnvService is one mounted integration surfaced in the env face
+// (#5635): MCP servers, IM adapters, skill mounts. State is the runtime
+// truth ("connected", "muted", ...) - verbatim, no interpretation.
+type RuntimeEnvService struct {
+	Name  string `json:"name"`
+	State string `json:"state,omitempty"`
+	Error string `json:"error,omitempty"`
+	Tools int    `json:"tools,omitempty"`
 }
 
-// RuntimeSnapshotV3 is the runtime/snapshot result: seven faces, zero LLM,
+type RuntimeEnv struct {
+	Workspace  string              `json:"workspace,omitempty"`
+	Branch     string              `json:"branch,omitempty"`
+	Head       string              `json:"head,omitempty"`
+	DirtyFiles int                 `json:"dirty_files,omitempty"`
+	Provider   string              `json:"provider,omitempty"`
+	MCPServers []RuntimeEnvService `json:"mcp_servers,omitempty"`
+	IMAdapters []RuntimeEnvService `json:"im_adapters,omitempty"`
+	Skills     []RuntimeEnvService `json:"skills,omitempty"`
+	// #5635 P2: live mobile-share/tunnel connection state, same truth the
+	// local `runtime` tool reports (RuntimeMobileInfo provider).
+	Mobile *RuntimeMobileState `json:"mobile,omitempty"`
+}
+
+// RuntimeMobileState is the mobile share tunnel state in the env face.
+type RuntimeMobileState struct {
+	Connected bool   `json:"connected"`
+	RelayURL  string `json:"relay_url,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// RuntimePlan is the "plan" face: the agent's declared working set -
+// session todos, the durable goal graph, and the task board. Peers see
+// not just what the agent is doing (inflight) but what it intends and
+// where each item stands.
+type RuntimePlan struct {
+	Todos     []RuntimePlanTodo `json:"todos,omitempty"`
+	GoalNodes []RuntimeGoalNode `json:"goal_nodes,omitempty"`
+	Tasks     []RuntimePlanTask `json:"tasks,omitempty"`
+}
+
+type RuntimePlanTodo struct {
+	ID      string `json:"id"`
+	Content string `json:"content"`
+	Status  string `json:"status"`
+}
+
+type RuntimeGoalNode struct {
+	ID       string `json:"id"`
+	Level    string `json:"level"`
+	Title    string `json:"title"`
+	Parent   string `json:"parent,omitempty"`
+	Status   string `json:"status"`
+	NextStep string `json:"next_step,omitempty"`
+}
+
+type RuntimePlanTask struct {
+	ID         string   `json:"id"`
+	Subject    string   `json:"subject"`
+	Status     string   `json:"status"`
+	Owner      string   `json:"owner,omitempty"`
+	ActiveForm string   `json:"active_form,omitempty"`
+	Blocks     []string `json:"blocks,omitempty"`
+	BlockedBy  []string `json:"blocked_by,omitempty"`
+}
+
+// RuntimeSnapshotV3 is the runtime/snapshot result: eight faces, zero LLM,
 // raw verbatim content (user ruling: same workspace = trust domain).
 type RuntimeSnapshotV3 struct {
 	Schema       string               `json:"schema"` // "v3"
@@ -160,6 +229,7 @@ type RuntimeSnapshotV3 struct {
 	Children     *RuntimeChildren     `json:"children,omitempty"`
 	Schedule     *RuntimeSchedule     `json:"schedule,omitempty"`
 	Env          *RuntimeEnv          `json:"env,omitempty"`
+	Plan         *RuntimePlan         `json:"plan,omitempty"`
 }
 
 // RuntimeIntrospectorV3 is injected by the assembly layer (cmd/ggcode

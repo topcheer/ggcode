@@ -151,6 +151,47 @@ func TestMDNSServiceStartInvalidEndpoint(t *testing.T) {
 	}
 }
 
+// TestMDNSServiceRestartRetiresOldServer pins #5629: a second start() (the
+// restart/session-resume re-Register path) must retire the previous server
+// so the stale endpoint TXT stops being announced alongside the new one.
+func TestMDNSServiceRestartRetiresOldServer(t *testing.T) {
+	m := newMDNSService()
+	defer m.stop()
+
+	base := InstanceInfo{
+		ID:        "test-id",
+		PID:       os.Getpid(),
+		Workspace: "/tmp/test-workspace",
+		Status:    "ready",
+		StartedAt: "2026-04-26T10:00:00Z",
+	}
+	first := base
+	first.Endpoint = "127.0.0.1:12345"
+	if err := m.start(first, nil); err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	oldServer := m.server
+	oldBrowser := m.browser
+	if oldServer == nil || oldBrowser == nil {
+		t.Fatal("first start left nil server/browser")
+	}
+
+	second := base
+	second.Endpoint = "127.0.0.1:54321"
+	if err := m.start(second, nil); err != nil {
+		t.Fatalf("second start: %v", err)
+	}
+	if m.server == oldServer {
+		t.Fatal("second start kept the OLD server - stale endpoint keeps announcing (#5629)")
+	}
+	if m.browser == oldBrowser {
+		t.Fatal("second start kept the OLD browser")
+	}
+	if m.info == nil || m.info.Endpoint != second.Endpoint {
+		t.Fatalf("second start did not adopt new endpoint: %+v", m.info)
+	}
+}
+
 func TestMDNSServiceLookupWithoutStart(t *testing.T) {
 	m := newMDNSService()
 	instances := m.lookup()

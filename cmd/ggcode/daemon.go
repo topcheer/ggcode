@@ -964,7 +964,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	var a2aStopRefresh func()
 	if !cfg.A2A.Disabled {
 
-		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err = startA2AServer(cfg, ag, registry, workingDir, seatIdentityLookup(lanchatHub))
+		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err = startA2AServer(cfg, ag, registry, workingDir, seatIdentityLookup(func() *lanchat.Hub { return lanchatHub }))
 		if err != nil {
 			debug.Log("daemon", "A2A server start failed: %v", err)
 			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)
@@ -993,15 +993,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				lanchat.DetectWorkspaceMeta(workingDir),
 			)
 			lanchatHub.SetRequireAgentApproval(cfg.LanChat.RequireApprovalForAgents)
-			// #5616: publish our seat nick into the roster (cross-process nick
-			// addressing) now that the hub exists.
-			if a2aReg != nil {
-				nick := lanchatHub.AgentNick()
-				if nick == "" {
-					nick = lanchatHub.HumanNick()
-				}
-				a2aReg.SetSelfIdentity(nick, "", "")
-			}
+			// #5616: lazy seat-nick republish (hub identity restores async);
+			// fires on every sync tick below once the nick is known.
+			republishSeatNick := seatNickRepublisher(lanchatHub, a2aReg)
+			republishSeatNick()
 
 			ag.SetSystemPromptInjector(func() string {
 				return lanchat.SharedWorkspaceAlert(
@@ -1051,6 +1046,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 						})
 					}
 					lanchatHub.UpdatePeers(peers)
+					republishSeatNick()
 				}
 				select {
 				case <-time.After(3 * time.Second):

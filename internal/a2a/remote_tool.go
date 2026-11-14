@@ -82,7 +82,7 @@ func (t *RemoteTool) Execute(ctx context.Context, input json.RawMessage) (tool.R
 	}
 
 	if params.Target == "list" || params.Target == "" {
-		return t.listInstances(ctx)
+		return t.listInstances(ctx, false)
 	}
 
 	inst, err := t.FindInstance(params.Target)
@@ -123,7 +123,7 @@ func (t *RemoteTool) Execute(ctx context.Context, input json.RawMessage) (tool.R
 	return tool.Result{Content: result}, nil
 }
 
-func (t *RemoteTool) listInstances(ctx context.Context) (tool.Result, error) {
+func (t *RemoteTool) listInstances(ctx context.Context, all bool) (tool.Result, error) {
 	instances, err := t.discover()
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("Discover failed: %v", err), IsError: true}, nil
@@ -131,10 +131,36 @@ func (t *RemoteTool) listInstances(ctx context.Context) (tool.Result, error) {
 	if len(instances) == 0 {
 		return tool.Result{Content: "No other ggcode instances found. Start ggcode in other workspaces to enable A2A."}, nil
 	}
+	// #5616: list must render seat identity too - the same enrichment the
+	// resolution path gets, so agents can pick nick targets from the roster.
+	instances = enrichInstances(instances, t.identity)
+
+	// #5632: default view is THIS workspace only - same-workspace fleets are
+	// the coordination domain; foreign-workspace seats collapse into one
+	// summary line. all=true expands everyone.
+	selfWs := ""
+	if si := t.registry.SelfInfo(); si != nil {
+		selfWs = si.Workspace
+	}
+	shown, external := instances, map[string]int{}
+	if !all && selfWs != "" {
+		shown = shown[:0]
+		for _, inst := range instances {
+			if inst.Workspace == selfWs {
+				shown = append(shown, inst)
+			} else {
+				ws := inst.Workspace
+				if ws == "" {
+					ws = "(unknown)"
+				}
+				external[ws]++
+			}
+		}
+	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d ggcode instance(s):\n\n", len(instances)))
-	for _, inst := range instances {
+	sb.WriteString(fmt.Sprintf("Found %d ggcode instance(s) in this workspace%s:\n\n", len(shown), map[bool]string{true: "", false: " (pass all=true to include other workspaces)"}[all]))
+	for _, inst := range shown {
 		sb.WriteString(fmt.Sprintf("• %s\n", inst.DisplayName()))
 		if inst.Nick != "" {
 			sb.WriteString(fmt.Sprintf("  Seat: %s (role=%s)\n", inst.Nick, inst.Role))
@@ -143,6 +169,14 @@ func (t *RemoteTool) listInstances(ctx context.Context) (tool.Result, error) {
 		sb.WriteString(fmt.Sprintf("  Endpoint: %s\n", inst.Endpoint))
 		sb.WriteString(fmt.Sprintf("  Status: %s\n", inst.Status))
 		sb.WriteString(fmt.Sprintf("  Started: %s\n\n", inst.StartedAt))
+	}
+	if len(external) > 0 {
+		parts := make([]string, 0, len(external))
+		for ws, n := range external {
+			parts = append(parts, fmt.Sprintf("%s×%d", ws, n))
+		}
+		sort.Strings(parts)
+		sb.WriteString(fmt.Sprintf("External workspaces (address via name:port): %s\n", strings.Join(parts, " | ")))
 	}
 	return tool.Result{Content: sb.String()}, nil
 }
@@ -243,6 +277,26 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	instances, err := t.registry.Discover()
 	if err != nil {
 		return nil, err
+	}
+
+	// #5616: mDNS TXT carries no seat nick; the local workspace roster file
+	// does (SetSelfIdentity republishes it). Overlay roster identity onto
+	// mDNS entries by normalized endpoint so cross-process resolvers and the
+	// list view see seat nicks even without a live lanchat bridge.
+	if ws := t.registry.SelfWorkspace(); ws != "" {
+		for _, r := range ReadRoster(ws, t.registry.SelfID()) {
+			if r.Nick == "" {
+				continue
+			}
+			ep := normEndpoint(r.Endpoint)
+			for i := range instances {
+				if instances[i].Nick == "" && normEndpoint(instances[i].Endpoint) == ep {
+					instances[i].Nick = r.Nick
+					instances[i].Role = r.Role
+					instances[i].Team = r.Team
+				}
+			}
+		}
 	}
 
 	t.mu.Lock()

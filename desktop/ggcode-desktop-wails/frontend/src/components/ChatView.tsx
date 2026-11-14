@@ -261,6 +261,27 @@ interface RunSummaryData {
   filesEdited?: number
 }
 
+// #5633: mid-run injected guidance is stored verbatim in the session
+// (first text block = LLM-facing preamble), but it must never render as
+// user-visible content when a session is reloaded. Strip the known
+// preamble families; keep the real payload that follows.
+function stripGuidancePreamble(raw: string): string {
+  const markers = [
+    'New user guidance arrived while you were working',
+    'The user RETRACTED the request',
+  ]
+  for (const marker of markers) {
+    if (raw.startsWith(marker)) {
+      const sep = raw.indexOf('\n\n')
+      const stripped = sep >= 0 ? raw.slice(sep + 2) : ''
+      // Preamble-only message (e.g. retraction notice): hide entirely
+      // rather than rendering the raw LLM-facing instruction.
+      return stripped.trim()
+    }
+  }
+  return raw
+}
+
 function parseLanChatContent(raw: string): { from: string; content: string } | null {
   const match = raw.match(/\[LAN Chat from (.+?)\]:\s*/m)
   if (!match) return null
@@ -355,6 +376,7 @@ function materializeHistory(history: any[], previous: ChatMessage[]): ChatMessag
       timestamp: previous[index]?.timestamp || Date.now(),
     }
     if (candidate.role === 'user' && typeof candidate.content === 'string') {
+      candidate.content = stripGuidancePreamble(candidate.content)
       const parsed = parseLanChatContent(candidate.content)
       if (parsed) {
         candidate.content = parsed.content

@@ -37,6 +37,52 @@ func FromSubagents(list []*subagent.SubAgent) []a2a.RuntimeSubagent {
 	return out
 }
 
+// EventSourcer is the sub-agent manager surface AttachSubagentEvents needs
+// (implemented by *subagent.Manager). Interface keeps the adapter testable
+// without a live daemon.
+type EventSourcer interface {
+	RecentEvents(id string, n int) ([]subagent.AgentEvent, bool)
+}
+
+// AttachSubagentEvents fills each child's Events tail from the live event
+// ring (#5637): a peer reading the children face sees what a running
+// sub-agent is doing in-flight, not just its status header. n is the per-
+// child tail size (<=0 => 10).
+func AttachSubagentEvents(subs []a2a.RuntimeSubagent, src EventSourcer, n int) {
+	if src == nil {
+		return
+	}
+	if n <= 0 {
+		n = 10
+	}
+	for i := range subs {
+		evs, ok := src.RecentEvents(subs[i].ID, n)
+		if !ok || len(evs) == 0 {
+			continue
+		}
+		out := make([]a2a.RuntimeSubagentEvent, 0, len(evs))
+		for _, ev := range evs {
+			rse := a2a.RuntimeSubagentEvent{}
+			switch {
+			case ev.Text != "":
+				rse.Type, rse.Head = "text", head(ev.Text, 160)
+			case ev.ToolName != "" && ev.Result != "":
+				tag := "result"
+				if ev.IsError {
+					tag = "error"
+				}
+				rse.Type, rse.Head = tag, head(ev.ToolName+": "+ev.Result, 160)
+			case ev.ToolName != "":
+				rse.Type, rse.Head = "tool", head(ev.ToolName+" "+ev.ToolArgs, 120)
+			default:
+				rse.Type, rse.Head = "system", head(ev.ToolDetail, 120)
+			}
+			out = append(out, rse)
+		}
+		subs[i].Events = out
+	}
+}
+
 // FromCommandJobs maps background command jobs to the children-face shape.
 func FromCommandJobs(jobs []tool.CommandJobSnapshot) []a2a.RuntimeJob {
 	out := make([]a2a.RuntimeJob, 0, len(jobs))

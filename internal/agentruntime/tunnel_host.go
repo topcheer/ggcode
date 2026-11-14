@@ -485,6 +485,13 @@ func (h *TunnelHost) TunnelEvents() []tunnel.GatewayMessage {
 		h.mu.Unlock()
 		return nil
 	}
+	// #5633: old persisted user_message events may embed the LLM-facing
+	// guidance preamble. Strip on read so the replay wire and the canonical
+	// replay hash stay consistent, without mutating the on-disk projection
+	// store or the LLM session context.
+	for i := range events {
+		events[i] = tunnel.StripUserMessageEvent(events[i])
+	}
 	return events
 }
 

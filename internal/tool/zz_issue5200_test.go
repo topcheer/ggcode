@@ -161,11 +161,15 @@ func TestIssue5200NickSurvivesPeerRestartTwin(t *testing.T) {
 	}
 }
 
-// Two LIVE peers sharing a nick keep the pre-existing ambiguity behavior:
-// explicit error listing both node_ids, no coin-flip delivery. The fresh-only
-// filter must not weaken genuine collision reporting.
+// #5622 user-adjudicated semantics (supersedes the #5200 ambiguity
+// contract for the nick path): nick is the network-unique seat identity -
+// same-nick fresh holders are restart twins of ONE identity, and DM by nick
+// must best-effort deliver (bestHolder: online first, then newest
+// last_seen) instead of erroring. #5627 completed the migration this test
+// missed: two fresh holders now deliver exactly once to the better twin,
+// with no ambiguity interception.
 func TestIssue5200GenuineNickCollisionStillAmbiguous(t *testing.T) {
-	tool, hub, _, srv := hub5200(t)
+	tool, hub, delivered, srv := hub5200(t)
 	hub.HandlePresence(lanchat.Participant{
 		NodeID:    "node-twin-live",
 		HumanNick: "techwriter_techwriter222",
@@ -178,11 +182,11 @@ func TestIssue5200GenuineNickCollisionStillAmbiguous(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doSend: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("two fresh holders of one nick must stay ambiguous, got: %s", res.Content)
+	if res.IsError {
+		t.Fatalf("#5622 semantics: same-nick fresh twins must best-effort deliver, got error: %s", res.Content)
 	}
-	if !strings.Contains(res.Content, "ambiguous") || !strings.Contains(res.Content, "node_id") {
-		t.Fatalf("ambiguity error must point at node_id tie-break, got: %s", res.Content)
+	if n := atomic.LoadInt32(delivered); n != 1 {
+		t.Fatalf("bestHolder must pick exactly one twin, got %d deliveries", n)
 	}
 }
 

@@ -20,14 +20,15 @@ a2a_discover
 
 ### Faces: inflight & children (P2 wiring)
 
-The `a2a_introspect` snapshot's seven faces now include the two P2
+The `a2a_introspect` snapshot's eight faces now include the three P2
 wires:
 
 - **inflight** — what is executing right now on the peer seat: the
-  active sub-agent task summarized (current tool, task head, start
-  time). Idle/done seats are invisible here and show up under
-  `children` instead. Main-agent tool-call loop instrumentation remains
-  a later refinement.
+  seat's own current tool call first (tool, params head, start time,
+  instrumented in the main agent's tool loop, #5635 P2), falling back
+  to the active sub-agent task summary (current tool, task head,
+  start time). Idle/done seats are invisible here and show up under
+  `children` instead.
 - **children** — the full child census: every sub-agent seat (id, name,
   task head, state, model, worktree, current tool, tool-call count)
   plus background command jobs (id, command head, state).
@@ -72,6 +73,30 @@ Delegate work to another ggcode instance by project name:
 ```
 a2a_send_task --target order-service --skill full-task --message "Add pagination to the orders API"
 ```
+
+## Target Addressing (#5616)
+
+`--target` (and the agent tools `a2a_remote` / `a2a_introspect`) resolves
+through four tiers, first match wins:
+
+1. **Seat nick** - the lanchat nickname of a seat in a shared-workspace
+   fleet (`dev_ggcode`, `reviewer_1`), including the composite `nick_role`
+   form. Nicks are published into the roster automatically once the seat's
+   lanchat hub is up.
+2. **Pinned endpoint** - `name:port` or `host:port` (scheme prefixes are
+   normalized away) selects one exact instance; use this when several
+   seats share a project name.
+3. **Name tier, healthy-first** - a bare project name resolves to the one
+   live instance: identity heartbeat freshness short-circuits the probe,
+   otherwise a TCP liveness check runs. Dead endpoints never answer a
+   lookup; if every same-name candidate is unreachable the call fails with
+   an explicit `unreachable (offline)` verdict instead of silently picking
+   a dead seat.
+4. **Substring** - legacy partial-name fallback over workspace names.
+
+`a2a_introspect --target list` renders each instance with its
+`Seat: nick (role=...)` line when identity is known, so agents can pick
+nick targets straight from the roster.
 
 ## Remote Execution
 
@@ -234,19 +259,25 @@ ggcode stays interoperable with both 0.2.x/0.3.x peers and A2A v1.0 (2026-03) ag
 
 ## Peer runtime introspection (v3, #5597)
 
-Seven faces, one hop, verbatim (same-workspace = trust domain, no
+Eight faces, one hop, verbatim (same-workspace = trust domain, no
 redaction; the v1/v2 HMAC/domain-key machinery was REMOVED by the final
 design ruling - runtime/snapshot is a plain JSON-RPC method behind the
 server's existing auth, plus a roster reverse-lookup workspace gate:
 the caller's endpoint must resolve in the local mDNS roster to an
 instance of the SAME workspace, otherwise -32003).
 
-- Faces: status (busy/goal/model/iteration/tokens) / inflight (current
-  tool call; full loop instrumentation lands in P2) / conversation
+- Faces: status (busy/goal/model/iteration/tokens_in/tokens_out/
+  context_pct, live from the agent's run snapshot, #5635 P2) /
+  inflight (main-agent current tool call, sub-agent fallback) /
+  conversation
   (verbatim, default 20 turns, cursor pagination) / activity (recent
-  tool events + touched files, cursor pagination) / children (subagents
-  + background jobs; P2 wiring) / schedule (crons + todos) / env
-  (workspace/branch/HEAD/dirty/provider).
+  tool events + touched files, cursor pagination; sourced from the
+  in-memory debug ring with real tool names/OK flags) / children (running
+  subagents with live event tails + background jobs) / schedule (crons
+  + todos) / env (workspace/branch/HEAD/dirty/provider + mounted MCP
+  servers, IM adapters, active skills, mobile/tunnel state) / plan
+  (the declared working set: session todos, durable goal graph, task
+  board - intent and standing, not just activity).
 - Depth tiers: `brief` (headers/clipped) and `full` (default, verbatim).
 - Agent tool `a2a_introspect`: `target` (or `list`), `depth`, `faces`,
   `cursor_conversation`, `cursor_activity`.
