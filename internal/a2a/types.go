@@ -161,6 +161,10 @@ type AgentCapabilities struct {
 	PushNotifications bool             `json:"pushNotifications"`
 	ExtendedAgentCard bool             `json:"extendedAgentCard,omitempty"`
 	Extensions        []AgentExtension `json:"extensions,omitempty"`
+	// RuntimeIntrospection advertises the runtime/* namespace (#5575).
+	// Optional: absent (false) by default, so off-state cards are unchanged;
+	// the card signature scheme is untouched.
+	RuntimeIntrospection bool `json:"runtimeIntrospection,omitempty"`
 }
 
 type AgentLifecycleInfo struct {

@@ -1621,6 +1621,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 			RequireOnBehalfOf: cfg.A2A.Delegation.RequireOnBehalfOf,
 			MaxDepth:          cfg.A2A.Delegation.MaxDepth,
 		},
+		IntrospectionMode: cfg.A2A.Introspection, // #5575: "" | metadata | full
 	}, handler)
 
 	if cfg.A2A.Auth.OAuth2 != nil {

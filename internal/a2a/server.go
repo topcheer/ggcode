@@ -46,6 +46,9 @@ type Server struct {
 	extensions []AgentExtension
 
 	delegation DelegationPolicy
+
+	// introspection is nil unless a2a.introspection is enabled (#5575).
+	introspection *introspectionGate
 }
 
 type ServerConfig struct {
@@ -64,6 +67,14 @@ type ServerConfig struct {
 	Extensions []AgentExtension
 
 	Delegation DelegationPolicy
+
+	// IntrospectionMode enables the additive runtime/* namespace when
+	// "metadata" or "full" (#5575). Empty (default) registers no handler.
+	IntrospectionMode string
+
+	// IntrospectionSource optionally supplies richer runtime/snapshot faces;
+	// nil falls back to the TaskHandler-derived minimal snapshot.
+	IntrospectionSource RuntimeSnapshotSource
 }
 
 func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
@@ -84,6 +95,18 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 	}
 	s.pushClient = s.pushHTTPClient()
 
+	// #5575: domain gate - load/create <git-common-dir>/a2a.key only when
+	// the feature flag is on. Any failure is fail-closed (feature stays off);
+	// with the flag off this block is inert and behavior is unchanged.
+	if ValidIntrospectionMode(cfg.IntrospectionMode) && handler != nil {
+		if key, keyPath, err := LoadOrCreateDomainKey(handler.workspace); err != nil {
+			debug.Log("a2a", "introspection disabled (domain key unavailable): %v", err)
+		} else {
+			debug.Log("a2a", "introspection enabled (mode=%s key=%s)", cfg.IntrospectionMode, keyPath)
+			s.introspection = &introspectionGate{key: key, mode: cfg.IntrospectionMode, source: cfg.IntrospectionSource}
+		}
+	}
+
 	if handler != nil {
 		handler.SetPushNotifier(s.firePushNotifications)
 	}
@@ -99,9 +122,10 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 			Organization: "topcheer",
 		},
 		Capabilities: AgentCapabilities{
-			Streaming:         true,
-			PushNotifications: cfg.PushNotifications == nil || *cfg.PushNotifications,
-			Extensions:        cfg.Extensions,
+			Streaming:            true,
+			PushNotifications:    cfg.PushNotifications == nil || *cfg.PushNotifications,
+			Extensions:           cfg.Extensions,
+			RuntimeIntrospection: s.introspection != nil,
 		},
 		Extensions:         cfg.Extensions,
 		DefaultInputModes:  []string{"text/plain"},
@@ -384,6 +408,13 @@ func (s *Server) routeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRe
 	case "agent/getExtendedCard":
 		s.handleGetExtendedCard(w, req)
 	default:
+		// #5575: additive runtime/* namespace - only when the introspection
+		// gate is armed (flag on + domain key loaded). Gate nil → the error
+		// below is byte-identical to the pre-introspection behavior.
+		if s.introspection != nil && strings.HasPrefix(req.Method, IntrospectionMethodPrefix) {
+			s.handleIntrospection(w, r, req)
+			return
+		}
 		writeRPCError(w, req.ID, ErrMethodNotFound)
 	}
 }
