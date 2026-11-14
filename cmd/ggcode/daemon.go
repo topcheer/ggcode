@@ -993,15 +993,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				lanchat.DetectWorkspaceMeta(workingDir),
 			)
 			lanchatHub.SetRequireAgentApproval(cfg.LanChat.RequireApprovalForAgents)
-			// #5616: publish our seat nick into the roster (cross-process nick
-			// addressing) now that the hub exists.
-			if a2aReg != nil {
-				nick := lanchatHub.AgentNick()
-				if nick == "" {
-					nick = lanchatHub.HumanNick()
-				}
-				a2aReg.SetSelfIdentity(nick, "", "")
-			}
+			// #5616: lazy seat-nick republish (hub identity restores async);
+			// fires on every sync tick below once the nick is known.
+			republishSeatNick := seatNickRepublisher(lanchatHub, a2aReg)
+			republishSeatNick()
 
 			ag.SetSystemPromptInjector(func() string {
 				return lanchat.SharedWorkspaceAlert(
@@ -1051,6 +1046,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 						})
 					}
 					lanchatHub.UpdatePeers(peers)
+					republishSeatNick()
 				}
 				select {
 				case <-time.After(3 * time.Second):

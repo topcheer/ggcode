@@ -18,20 +18,24 @@ func addPeer(t *testing.T, hub *lanchat.Hub, nodeID, nick string) {
 	})
 }
 
-func TestResolveRecipientsNickCollisionAmbiguous(t *testing.T) {
+func TestResolveRecipientsNickCollisionBestEffort(t *testing.T) {
 	tool, hub := newTestLanChatTool(t)
 	addPeer(t, hub, "node-a", "ggcode")
 	addPeer(t, hub, "node-b", "ggcode")
 
+	// #5622: a nick is the network-unique seat identity - same-nick holders
+	// are restart twins of ONE identity, so a nick DM must always attempt
+	// delivery (best holder: online first, newest last_seen) instead of
+	// bouncing at resolve time. Only delivery failure is an error.
 	resolved, ambiguous := tool.resolveRecipients([]string{"ggcode"})
-	if len(resolved) != 0 {
-		t.Fatalf("#1272: colliding nick must not resolve to an arbitrary peer, got %v", resolved)
+	if len(ambiguous) != 0 {
+		t.Fatalf("colliding nick must not bounce at resolve time, got %v", ambiguous)
 	}
-	if len(ambiguous) != 1 {
-		t.Fatalf("expected exactly one ambiguity report, got %v", ambiguous)
+	if len(resolved) != 1 {
+		t.Fatalf("colliding nick must resolve best-effort to exactly one holder, got %v", resolved)
 	}
-	if !strings.Contains(ambiguous[0], "node-a") || !strings.Contains(ambiguous[0], "node-b") {
-		t.Fatalf("ambiguity error must list both candidate node_ids, got: %s", ambiguous[0])
+	if resolved[0] != "node-a" && resolved[0] != "node-b" {
+		t.Fatalf("must resolve to a fresh same-nick holder, got %v", resolved)
 	}
 }
 

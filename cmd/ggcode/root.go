@@ -1033,14 +1033,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
 
 		// #5616: publish our seat nick into the roster so cross-process
-		// resolvers (one-shot CLI) can address this seat by nick.
-		if a2aRegistry != nil {
-			nick := lanchatHub.AgentNick()
-			if nick == "" {
-				nick = lanchatHub.HumanNick()
-			}
-			a2aRegistry.SetSelfIdentity(nick, "", "")
-		}
+		// resolvers (one-shot CLI) can address this seat by nick. Lazy
+		// republish on every sync tick - hub identity restores async.
+		republishSeatNick := seatNickRepublisher(lanchatHub, a2aRegistry)
+		republishSeatNick()
 
 		syncCtx, syncCancel := context.WithCancel(context.Background())
 		defer syncCancel()
@@ -1058,6 +1054,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 					})
 				}
 				lanchatHub.UpdatePeers(peers)
+				republishSeatNick()
 			}
 
 			time.Sleep(3 * time.Second)
@@ -1710,6 +1707,28 @@ func knightScoreFromParams(params map[string]any) (int, error) {
 
 var a2aTimeoutWarnf = func(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format, args...)
+}
+
+// seatNickRepublisher returns a closure that re-stamps the registry self
+// identity whenever the hub nick becomes known or changes. Hub identity
+// restores asynchronously after construction, so the immediate post-hub
+// publish races an empty nick; the sync tick re-publishes lazily (#5616).
+func seatNickRepublisher(hub *lanchat.Hub, reg *a2a.Registry) func() {
+	var last string
+	return func() {
+		if hub == nil || reg == nil {
+			return
+		}
+		nick := hub.AgentNick()
+		if nick == "" {
+			nick = hub.HumanNick()
+		}
+		if nick == "" || nick == last {
+			return
+		}
+		reg.SetSelfIdentity(nick, "", "")
+		last = nick
+	}
 }
 
 // seatIdentityLookup bridges a lanchat hub's seat registry into the a2a
