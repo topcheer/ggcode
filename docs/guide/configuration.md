@@ -382,6 +382,14 @@ a2a:
     #   cert_file: ".ggcode/certs/server.pem"
     #   key_file: ".ggcode/certs/server.key"
   lan_discovery: false
+  # Runtime introspection (#5575): exposes read-only runtime/* snapshot
+  # methods (busy, todos, crons, recent tool trace, conversation tail).
+  # "" (default) = off, byte-identical to not having the feature.
+  # "metadata" = identity/counters only; "full" = adds content faces.
+  # HMAC domain key (.git/a2a.key, 0600) is the trust boundary: conversation
+  # content in "full" mode is served raw to same-key peers (no content
+  # redaction; size truncation only).
+  introspection: ""
 ```
 
 See [A2A Authentication](../a2a-auth.md) for the full guide.
