@@ -139,6 +139,8 @@ Per-workspace A2A config via `.ggcode/a2a.yaml` in the workspace root.
 - A built-in default key (`ggcode-lan-a2a-v1`) is always active when no custom auth is configured — it ensures only ggcode instances can connect. Once any custom auth is configured (`api_keys` / OAuth2 / OIDC / mTLS), the built-in key is fully disabled so the public default cannot bypass your credentials
 - Multiple auth schemes can be enabled simultaneously (any matching scheme authenticates)
 - Without custom auth or lan_discovery, only localhost connections are accepted
+- 401 responses carry a machine-readable `X-Auth-Reason` header (`api_key_missing` / `api_key_invalid` / `bearer_validator_absent` / `bearer_invalid` / `mtls_client_cert_missing` / `unauthenticated_denied`) plus an RFC 7235 `WWW-Authenticate` challenge listing the accepted schemes — the CLI `a2a introspect` surfaces these as an actionable remediation hint
+- `a2a.require_auth: true` refuses even unauthenticated same-machine (loopback) callers; default `false` preserves the legacy open arm
 - API keys support `${ENV_VAR}` expansion and are stored in `keys.env`
 - OAuth2 supports PKCE and Device Flow
 - OIDC adds identity layer on top of OAuth2 with JWKS key rotation
