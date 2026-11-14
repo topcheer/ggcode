@@ -1000,8 +1000,16 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				if nick == "" {
 					nick = lanchatHub.HumanNick()
 				}
-				a2aReg.SetSelfIdentity(nick, "", "")
+				a2aReg.SetSelfIdentity(nick, lanchatHub.Role(), lanchatHub.Team())
 			}
+			// #5616 follow-up: re-stamp seat identity whenever this hub's own
+			// nick settles (set_identity or session restore), so the roster
+			// file picks up the nick regardless of startup ordering.
+			lanchatHub.SetSelfNickHook(func(oldNick, newNick string) {
+				if a2aReg != nil {
+					a2aReg.SetSelfIdentity(lanchatHub.AgentNick(), lanchatHub.Role(), lanchatHub.Team())
+				}
+			})
 
 			ag.SetSystemPromptInjector(func() string {
 				return lanchat.SharedWorkspaceAlert(

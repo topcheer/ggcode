@@ -86,6 +86,7 @@ type Hub struct {
 	onParticipantRm  func(nodeID, humanNick string)
 	onApprovalReq    func(PendingAgentMsg)
 	onNickChange     func(nodeID, oldNick, newNick string)
+	selfNickHook     func(oldNick, newNick string)
 
 	approvalPolicies   map[string]string
 	trustedPeers       map[string]bool
@@ -229,12 +230,19 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 	h.sessionID = sessionID
 	h.store = NewStore(sessionDir)
 
+	var restoredOld, restoredNew string
 	if persisted, err := LoadNick(h.store.dir); err == nil && persisted != "" {
+		restoredOld = h.humanNick
+		restoredNew = persisted
 		h.humanNick = persisted
 		h.agentNick = AgentNick(persisted)
 	} else {
 
 		_ = SaveNick(h.store.dir, h.humanNick)
+	}
+	if hook := h.selfNickHook; hook != nil && restoredNew != "" && restoredOld != restoredNew {
+		oldN, newN := restoredOld, restoredNew
+		safego.Go("lanchat.selfNickHook", func() { hook(oldN, newN) })
 	}
 
 	if persisted, err := LoadRole(h.store.dir); err == nil && persisted != "" {
@@ -296,6 +304,16 @@ func (h *Hub) SetCallbacks(
 	h.onParticipantRm = onParticipantRm
 	h.onApprovalReq = onApprovalReq
 	h.onNickChange = onNickChange
+}
+
+// SetSelfNickHook registers a callback fired whenever THIS hub's own nick
+// changes (set_identity, nick-conflict resolution, or session restore).
+// #5616 follow-up: lets the a2a registry re-stamp seat identity so the
+// roster file carries the nick regardless of startup ordering.
+func (h *Hub) SetSelfNickHook(fn func(oldNick, newNick string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.selfNickHook = fn
 }
 
 func (h *Hub) HumanNick() string {
@@ -602,6 +620,7 @@ func (h *Hub) WorkspaceDefaultTeam() string {
 
 func (h *Hub) SetNickRoleTeam(nick, role, team string) error {
 	composite := nick + "_" + role
+	oldNick := h.HumanNick()
 	h.mu.Lock()
 	h.humanNick = composite
 	h.agentNick = AgentNick(composite)
@@ -623,8 +642,24 @@ func (h *Hub) SetNickRoleTeam(nick, role, team string) error {
 		debug.Log("lanchat", "failed to persist explicit-team marker: %v", err)
 	}
 
+	h.fireSelfNickHook(oldNick, composite)
 	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(composite, role, team) })
 	return nil
+}
+
+// fireSelfNickHook invokes the self-nick hook (if registered) asynchronously
+// whenever this hub's own nick actually changes. Never called while h.mu is
+// held by the caller beyond the RLock taken here.
+func (h *Hub) fireSelfNickHook(oldNick, newNick string) {
+	if oldNick == newNick {
+		return
+	}
+	h.mu.RLock()
+	hook := h.selfNickHook
+	h.mu.RUnlock()
+	if hook != nil {
+		safego.Go("lanchat.selfNickHook", func() { hook(oldNick, newNick) })
+	}
 }
 
 func (h *Hub) SetNickRole(nick, role string) error {
