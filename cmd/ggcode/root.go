@@ -1869,6 +1869,11 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 				return
 			case <-ticker.C:
 				remoteTool.RefreshCache()
+				// #5605(C): keep the workspace roster-file entry fresh so
+				// one-shot CLI fallbacks never see a stale TTL'd self.
+				if inst := a2aReg.SelfInfo(); inst != nil && inst.Workspace != "" {
+					a2a.RosterUpsert(inst.Workspace, *inst)
+				}
 			}
 		}
 	})

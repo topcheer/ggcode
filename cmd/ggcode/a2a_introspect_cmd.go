@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -78,6 +79,12 @@ func newA2AIntrospectCmd() *cobra.Command {
 			// background refresh never gets a chance). Browse mDNS
 			// synchronously before any name resolution.
 			instances, derr := reg.Discover()
+			// #5605(C): one-shot mDNS window can still come up empty;
+			// the workspace roster file is the zero-wait warm fallback.
+			if len(instances) == 0 {
+				wd, _ := os.Getwd()
+				instances = a2a.ReadRoster(wd, "")
+			}
 
 			// list semantics (#5602): mirror the agent tool's target='list'.
 			if target == "list" {

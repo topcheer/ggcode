@@ -73,7 +73,21 @@ func (r *Registry) Register(info InstanceInfo) error {
 			debug.Log("a2a.registry", "mDNS registration warning: %v", startErr)
 		}
 	}
+	if info.Workspace != "" {
+		RosterUpsert(info.Workspace, info)
+	}
 	return nil
+}
+
+// SelfInfo returns a copy of the registered self instance (nil before Register).
+func (r *Registry) SelfInfo() *InstanceInfo {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.selfInfo == nil {
+		return nil
+	}
+	c := *r.selfInfo
+	return &c
 }
 
 func (r *Registry) SelfID() string {
@@ -85,6 +99,16 @@ func (r *Registry) SelfID() string {
 func (r *Registry) Unregister() error {
 	if r.mdnsSvc != nil {
 		r.mdnsSvc.stop()
+	}
+	r.mu.Lock()
+	id := r.selfID
+	ws := ""
+	if r.selfInfo != nil {
+		ws = r.selfInfo.Workspace
+	}
+	r.mu.Unlock()
+	if ws != "" {
+		RosterRemove(ws, id)
 	}
 	return nil
 }
