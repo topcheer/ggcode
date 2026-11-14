@@ -986,7 +986,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	var a2aTaskHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
 
-		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir, seatIdentityLookup(lanchatHub))
+		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir, seatIdentityLookup(func() *lanchat.Hub { return lanchatHub }))
 		if err != nil {
 
 			debug.Log("root", "A2A server startup warning: %v", err)
@@ -1733,9 +1733,13 @@ func seatNickRepublisher(hub *lanchat.Hub, reg *a2a.Registry) func() {
 
 // seatIdentityLookup bridges a lanchat hub's seat registry into the a2a
 // identity domain (#5616): endpoint-keyed nick/role/team plus heartbeat
-// freshness. Nil-safe: a nil hub yields a lookup that never matches.
-func seatIdentityLookup(hub *lanchat.Hub) a2a.IdentityLookup {
+// freshness. Takes a hub GETTER, not a pointer: call sites fire before the
+// hub is constructed, and a pointer parameter would freeze the nil copy
+// forever - the getter closure captures the variable by reference so the
+// later assignment is visible. Nil-safe: a nil hub never matches.
+func seatIdentityLookup(hubOf func() *lanchat.Hub) a2a.IdentityLookup {
 	return func(endpoint string) (a2a.Identity, bool) {
+		hub := hubOf()
 		if hub == nil {
 			return a2a.Identity{}, false
 		}
