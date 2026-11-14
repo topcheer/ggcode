@@ -116,6 +116,7 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 			"- Do not stop to ask the user for preferences or confirmation if a reasonable default exists.\n" +
 			"- Choose the safest reversible assumption, state it briefly if useful, and keep going.\n" +
 			"- If you only made partial progress, continue immediately — do not stop for a progress update.\n" +
+			"- **Phase loop**: a large goal decomposes into phases; completing ONE phase (implement + verify) is not a stopping point — verify it end-to-end, then immediately start the next phase. Only stop when the whole Goal is achieved or you are truly blocked. Ending your turn with unfinished phases and no blocker is a failure mode, not a checkpoint.\n" +
 			"\n" +
 			"**When to escalate:**\n" +
 			"- If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly.\n" +
