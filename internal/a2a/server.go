@@ -43,6 +43,12 @@ type Server struct {
 	allowWildcardPushConfigs bool
 	pushClient               *http.Client
 
+	// #5575 runtime introspection (additive; empty mode = handler absent,
+	// legacy behavior byte-identical).
+	introspectionMode string
+	introspector      RuntimeIntrospector
+	domainKey         []byte
+
 	extensions []AgentExtension
 
 	delegation DelegationPolicy
@@ -64,6 +70,11 @@ type ServerConfig struct {
 	Extensions []AgentExtension
 
 	Delegation DelegationPolicy
+
+	// #5575: empty mode = introspection off (handler not registered).
+	IntrospectionMode string
+	Introspector      RuntimeIntrospector
+	DomainKey         []byte
 }
 
 func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
@@ -75,6 +86,9 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 	s := &Server{
 		handler:                  handler,
 		apiKeys:                  apiKeys,
+		introspectionMode:        cfg.IntrospectionMode,
+		introspector:             cfg.Introspector,
+		domainKey:                cfg.DomainKey,
 		extensions:               cfg.Extensions,
 		delegation:               cfg.Delegation,
 		done:                     make(chan struct{}),
@@ -360,6 +374,13 @@ func (s *Server) authenticate(r *http.Request) bool {
 }
 
 func (s *Server) routeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRequest) {
+	// #5575: runtime/* is a gated additive namespace. With introspection
+	// off (or no injected source) the request falls through to the default
+	// arm below, so the method-not-found error is byte-identical to today.
+	if strings.HasPrefix(req.Method, "runtime/") && s.introspectionMode != IntrospectionOff && s.introspector != nil {
+		s.handleRuntimeRPC(w, r, req)
+		return
+	}
 	switch req.Method {
 	case "message/send":
 		s.handleMessageSend(w, r, req)
@@ -386,6 +407,25 @@ func (s *Server) routeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRe
 	default:
 		writeRPCError(w, req.ID, ErrMethodNotFound)
 	}
+}
+
+// handleRuntimeRPC serves the runtime/* namespace. The legacy auth
+// middleware has already run (first gate, unchanged); the workspace domain
+// HMAC proof is the second factor stacked only here (#5575).
+func (s *Server) handleRuntimeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRequest) {
+	nonce := r.Header.Get("X-A2A-Introspection-Nonce")
+	sig := r.Header.Get("X-A2A-Introspection-Signature")
+	if !VerifyIntrospectionProof(s.domainKey, req.Method, nonce, sig) {
+		writeRPCError(w, req.ID, ErrIntrospectionDenied)
+		return
+	}
+	handle := NewRuntimeSnapshotHandler(s.introspector, s.introspectionMode, time.Now)
+	result, rpcErr := handle(req.Method, nonce, sig)
+	if rpcErr != nil {
+		writeRPCError(w, req.ID, rpcErr)
+		return
+	}
+	writeRPCResult(w, req.ID, result)
 }
 
 func (s *Server) handleMessageSend(w http.ResponseWriter, r *http.Request, req *JSONRPCRequest) {
@@ -1122,3 +1162,7 @@ func normalizeResponseID(id json.RawMessage) json.RawMessage {
 	}
 	return id
 }
+
+// SetDomainKey installs the workspace domain key post-construction (the
+// assembly layer resolves it from the working dir after server creation).
+func (s *Server) SetDomainKey(key []byte) { s.domainKey = key }

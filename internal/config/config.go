@@ -548,6 +548,10 @@ type A2AConfig struct {
 
 	ActivateExtensions []string `yaml:"activate_extensions,omitempty"`
 
+	// Introspection enables the #5575 runtime/* namespace: "" (default) =
+	// off, "metadata" | "full" = on with descending detail.
+	Introspection string `yaml:"introspection,omitempty"`
+
 	disabledExplicit bool
 }
 

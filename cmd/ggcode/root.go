@@ -1621,7 +1621,28 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 			RequireOnBehalfOf: cfg.A2A.Delegation.RequireOnBehalfOf,
 			MaxDepth:          cfg.A2A.Delegation.MaxDepth,
 		},
+		IntrospectionMode: cfg.A2A.Introspection,
+		// #5575 phase 1: domain key + HMAC gate + snapshot pipeline are live;
+		// face data (busy/todos/recent from agent/lanchat sources) lands in
+		// phase 2 — the adapter serves an honest empty v2 snapshot until then.
+		Introspector: a2a.RuntimeIntrospectorFunc(func(mode string) (*a2a.RuntimeSnapshotV2, error) {
+			return &a2a.RuntimeSnapshotV2{}, nil
+		}),
 	}, handler)
+
+	if cfg.A2A.Introspection != "" && cfg.A2A.Introspection != "metadata" && cfg.A2A.Introspection != "full" {
+		srv.Stop()
+		return nil, nil, nil, func() {}, fmt.Errorf("a2a.introspection must be one of: metadata, full (empty = off)")
+	}
+
+	if cfg.A2A.Introspection != "" {
+		key, kerr := a2a.LoadOrCreateDomainKey(workingDir)
+		if kerr != nil {
+			srv.Stop()
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a introspection domain key: %w", kerr)
+		}
+		srv.SetDomainKey(key)
+	}
 
 	if cfg.A2A.Auth.OAuth2 != nil {
 		oc := cfg.A2A.Auth.OAuth2
