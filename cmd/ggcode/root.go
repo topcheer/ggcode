@@ -1027,6 +1027,16 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
 
+		// #5616: publish our seat nick into the roster so cross-process
+		// resolvers (one-shot CLI) can address this seat by nick.
+		if a2aRegistry != nil {
+			nick := lanchatHub.AgentNick()
+			if nick == "" {
+				nick = lanchatHub.HumanNick()
+			}
+			a2aRegistry.SetSelfIdentity(nick, "", "")
+		}
+
 		syncCtx, syncCancel := context.WithCancel(context.Background())
 		defer syncCancel()
 		safego.Go("lanchat.syncPeers", func() {

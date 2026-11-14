@@ -993,6 +993,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				lanchat.DetectWorkspaceMeta(workingDir),
 			)
 			lanchatHub.SetRequireAgentApproval(cfg.LanChat.RequireApprovalForAgents)
+			// #5616: publish our seat nick into the roster (cross-process nick
+			// addressing) now that the hub exists.
+			if a2aReg != nil {
+				nick := lanchatHub.AgentNick()
+				if nick == "" {
+					nick = lanchatHub.HumanNick()
+				}
+				a2aReg.SetSelfIdentity(nick, "", "")
+			}
 
 			ag.SetSystemPromptInjector(func() string {
 				return lanchat.SharedWorkspaceAlert(

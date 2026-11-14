@@ -98,6 +98,33 @@ func (r *Registry) SelfInfo() *InstanceInfo {
 	return &c
 }
 
+// SetSelfIdentity stamps the lanchat seat identity (nick/role/team) onto
+// the registered self and republishes the roster entry so cross-process
+// resolvers (one-shot CLI with no lanchat hub) can address this seat by
+// nick (#5616). Call after Register, once the hub exists.
+func (r *Registry) SetSelfIdentity(nick, role, team string) {
+	r.mu.Lock()
+	if r.selfInfo == nil {
+		r.mu.Unlock()
+		return
+	}
+	if nick != "" {
+		r.selfInfo.Nick = nick
+	}
+	if role != "" {
+		r.selfInfo.Role = role
+	}
+	if team != "" {
+		r.selfInfo.Team = team
+	}
+	info := *r.selfInfo
+	ws := info.Workspace
+	r.mu.Unlock()
+	if ws != "" {
+		RosterUpsert(ws, info)
+	}
+}
+
 func (r *Registry) SelfID() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
