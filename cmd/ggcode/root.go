@@ -986,7 +986,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	var a2aTaskHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
 
-		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir, seatIdentityLookup(lanchatHub))
+		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir, seatIdentityLookup(func() *lanchat.Hub { return lanchatHub }))
 		if err != nil {
 
 			debug.Log("root", "A2A server startup warning: %v", err)
@@ -1715,8 +1715,14 @@ var a2aTimeoutWarnf = func(format string, args ...any) {
 // seatIdentityLookup bridges a lanchat hub's seat registry into the a2a
 // identity domain (#5616): endpoint-keyed nick/role/team plus heartbeat
 // freshness. Nil-safe: a nil hub yields a lookup that never matches.
-func seatIdentityLookup(hub *lanchat.Hub) a2a.IdentityLookup {
+// seatIdentityLookup takes a HUB GETTER, not a hub value: at the call
+// site (before the lanchat hub is constructed) the variable is still
+// nil, and a value capture freezes that nil forever - every lookup
+// misses and nick addressing silently degrades to project names
+// (live evidence: 12-seat fleet, zero nick targets resolvable).
+func seatIdentityLookup(hubGetter func() *lanchat.Hub) a2a.IdentityLookup {
 	return func(endpoint string) (a2a.Identity, bool) {
+		hub := hubGetter()
 		if hub == nil {
 			return a2a.Identity{}, false
 		}
