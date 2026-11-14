@@ -1,133 +1,176 @@
-// Package a2aintrospect aggregates runtime sources into the a2a
-// RuntimeSnapshotV2 (#5575 phase 2). Sources are injected as functions so
-// this package stays free of lanchat/cron/agent imports; the assembly layer
-// wires real readers once the runtime chains are up.
 package a2aintrospect
 
 import (
 	"bufio"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/a2a"
 )
 
-// Sources are optional readers; nil members simply omit the face.
+// Sources aggregates the seven v3 faces from real runtime sources (#5597).
+// All content is VERBATIM (user ruling: same workspace = trust domain, no
+// redaction layers). Faces left nil are omitted from the snapshot.
 type Sources struct {
-	Busy         func() *a2a.RuntimeBusy
-	Todos        func() []a2a.RuntimeTodo
-	Recent       func() []a2a.RuntimeToolTrace
-	Conversation func() []a2a.RuntimeConversationTurn
-	Crons        func() []a2a.RuntimeCron
+	Status   func() *a2a.RuntimeStatus
+	Inflight func() *a2a.RuntimeInflight
 
-	// Redactor is an optional pre-pass over conversation/recent summaries
-	// (e.g. agent.RedactExternalContent). Applied BEFORE a2a's own pattern
-	// redaction + truncation, so content faces get two layers (#5575 2c).
-	Redactor func(string) string
+	// Conversation serves verbatim turns for the window before the cursor
+	// (oldest-first), plus whether more exist (next cursor = opaque token
+	// the implementation understands).
+	Conversation func(cursor string, limit int) (turns []a2a.RuntimeConversationTurn, next string, truncated bool)
+
+	// Activity serves recent tool events + touched files with the same
+	// cursor contract.
+	Activity func(cursor string, limit int) (events []a2a.RuntimeActivityEvent, files []a2a.RuntimeFileTouch, next string, truncated bool)
+
+	Children func() *a2a.RuntimeChildren
+	Schedule func() *a2a.RuntimeSchedule
+	Env      func() *a2a.RuntimeEnv
+
+	DefaultConvLimit int // default 20
+	DefaultActLimit  int // default 50
 
 	// Now overrides the snapshot clock in tests.
 	Now func() time.Time
 }
 
-// RuntimeSnapshot aggregates all wired faces and applies the mode
-// degradation: metadata keeps counters/identities but drops content faces
-// (conversation/recent) per the #5575 design.
-func (s *Sources) RuntimeSnapshot(mode string) (*a2a.RuntimeSnapshotV2, error) {
-	snap := &a2a.RuntimeSnapshotV2{Schema: "v2", Mode: mode}
+func (s *Sources) convLimit(req a2a.SnapshotRequest) int {
+	if req.LimitConv > 0 {
+		return req.LimitConv
+	}
+	if s.DefaultConvLimit > 0 {
+		return s.DefaultConvLimit
+	}
+	return 20
+}
+
+func (s *Sources) actLimit(req a2a.SnapshotRequest) int {
+	if req.LimitAct > 0 {
+		return req.LimitAct
+	}
+	if s.DefaultActLimit > 0 {
+		return s.DefaultActLimit
+	}
+	return 50
+}
+
+func (s *Sources) wants(faces []string, face string) bool {
+	if len(faces) == 0 {
+		return true
+	}
+	for _, f := range faces {
+		if strings.EqualFold(f, face) {
+			return true
+		}
+	}
+	return false
+}
+
+// RuntimeSnapshotV3 aggregates the wired faces. brief depth keeps headers
+// and counters; full serves verbatim content with cursors.
+func (s *Sources) RuntimeSnapshotV3(req a2a.SnapshotRequest) (*a2a.RuntimeSnapshotV3, error) {
 	now := time.Now
 	if s.Now != nil {
 		now = s.Now
 	}
-	snap.TakenAt = now().UTC().Format(time.RFC3339)
-	if s.Busy != nil {
-		snap.Busy = s.Busy()
+	snap := &a2a.RuntimeSnapshotV3{Schema: "v3", TakenAt: now().UTC().Format(time.RFC3339), Depth: req.Depth}
+	if snap.Depth == "" {
+		snap.Depth = a2a.DepthFull
 	}
-	if s.Todos != nil {
-		snap.Todos = s.Todos()
+	faces := req.Faces
+
+	if s.wants(faces, "status") && s.Status != nil {
+		snap.Status = s.Status()
 	}
-	if s.Crons != nil {
-		snap.Crons = s.Crons()
+	if s.wants(faces, "inflight") && s.Inflight != nil {
+		snap.Inflight = s.Inflight()
 	}
-	if mode != a2a.IntrospectionMetadata {
-		if s.Recent != nil {
-			snap.Recent = s.Recent()
+	if s.wants(faces, "conversation") && s.Conversation != nil {
+		limit := s.convLimit(req)
+		if snap.Depth == a2a.DepthBrief {
+			limit = 5
 		}
-		if s.Conversation != nil {
-			snap.Conversation = s.Conversation()
+		turns, next, trunc := s.Conversation(req.CursorConv, limit)
+		if snap.Depth == a2a.DepthBrief {
+			for i := range turns {
+				if len(turns[i].Text) > 120 {
+					turns[i].Text = turns[i].Text[:120] + "..."
+				}
+			}
 		}
+		snap.Conversation = &a2a.RuntimeConversation{Turns: turns, NextCursor: next, Truncated: trunc}
 	}
-	if s.Redactor != nil {
-		// #5575 phase 3 ruling (user decision 2026-11-14): the conversation
-		// face ships WITHOUT content redaction — the .git/a2a.key domain
-		// gate IS the trust boundary, so same-key peers are trusted with raw
-		// context. Redaction stays on the other content faces (recent/todos/
-		// crons keep their shipped behavior); truncation remains as size
-		// discipline, not redaction. The domain gate is the trust boundary.
-		for i := range snap.Recent {
-			snap.Recent[i].Summary = s.Redactor(snap.Recent[i].Summary)
+	if s.wants(faces, "activity") && s.Activity != nil {
+		limit := s.actLimit(req)
+		if snap.Depth == a2a.DepthBrief {
+			limit = 10
 		}
-		for i := range snap.Todos {
-			snap.Todos[i].Subject = s.Redactor(snap.Todos[i].Subject)
-			snap.Todos[i].ActiveForm = s.Redactor(snap.Todos[i].ActiveForm)
-		}
-		for i := range snap.Crons {
-			snap.Crons[i].Prompt = s.Redactor(snap.Crons[i].Prompt)
-		}
+		events, files, next, trunc := s.Activity(req.CursorAct, limit)
+		snap.Activity = &a2a.RuntimeActivity{Events: events, Files: files, NextCursor: next, Truncated: trunc}
 	}
-	a2a.RedactSnapshotStrings(snap)
+	if s.wants(faces, "children") && s.Children != nil {
+		snap.Children = s.Children()
+	}
+	if s.wants(faces, "schedule") && s.Schedule != nil {
+		snap.Schedule = s.Schedule()
+	}
+	if s.wants(faces, "env") && s.Env != nil {
+		snap.Env = s.Env()
+	}
 	return snap, nil
 }
 
-// TailJSONL reads the last n lines of a JSONL file and returns one
-// summary string per line (the raw line capped by the shared redaction
-// discipline downstream). Missing files yield nil, nil — an absent source
-// is an empty face, not an error.
-func TailJSONL(path string, n int) []string {
-	if path == "" || n <= 0 {
-		return nil
+// ConversationFromTurns adapts a simple slice (no pagination) to the cursor
+// contract: the cursor is a plain index into the remaining tail.
+func ConversationFromTurns(all []a2a.RuntimeConversationTurn) func(cursor string, limit int) ([]a2a.RuntimeConversationTurn, string, bool) {
+	return func(cursor string, limit int) ([]a2a.RuntimeConversationTurn, string, bool) {
+		start := 0
+		if cursor != "" {
+			if n, err := strconv.Atoi(cursor); err == nil && n > 0 && n <= len(all) {
+				start = n
+			}
+		}
+		end := start + limit
+		trunc := false
+		if end >= len(all) {
+			end = len(all)
+		} else {
+			trunc = true
+		}
+		window := all[start:end]
+		next := ""
+		if trunc {
+			next = strconv.Itoa(end)
+		}
+		return window, next, trunc
 	}
+}
+
+// TailJSONL returns the last n non-empty lines of a JSONL file (oldest
+// first). Missing file yields nil.
+func TailJSONL(path string, n int) []string {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
-	var lines []string
+	var ring = make([]string, 0, n)
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
-		lines = append(lines, sc.Text())
-	}
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return lines
-}
-
-// ConversationFromLines shapes raw JSONL tail lines into conversation
-// turns: role detection is best-effort ("user"/"assistant"), the summary is
-// the first 200 runes of the raw payload (final redaction happens in
-// a2a.RedactSnapshotStrings).
-func ConversationFromLines(lines []string, max int) []a2a.RuntimeConversationTurn {
-	if len(lines) > max {
-		lines = lines[len(lines)-max:]
-	}
-	out := make([]a2a.RuntimeConversationTurn, 0, len(lines))
-	for _, l := range lines {
-		l = strings.TrimSpace(l)
-		if l == "" {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
 			continue
 		}
-		role := "assistant"
-		low := strings.ToLower(l)
-		if strings.Contains(low, `"role":"user"`) || strings.Contains(low, `"role": "user"`) {
-			role = "user"
+		if len(ring) == n {
+			copy(ring, ring[1:])
+			ring[n-1] = line
+		} else {
+			ring = append(ring, line)
 		}
-		r := []rune(l)
-		if len(r) > 200 {
-			r = r[:200]
-		}
-		out = append(out, a2a.RuntimeConversationTurn{Role: role, Summary: string(r)})
 	}
-	return out
+	return ring
 }

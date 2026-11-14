@@ -49,6 +49,11 @@ import (
 	"github.com/topcheer/ggcode/internal/vcs"
 	"github.com/topcheer/ggcode/internal/version"
 	"github.com/topcheer/ggcode/internal/webui"
+
+	"net"
+	"net/http"
+	neturl "net/url"
+	"os/exec"
 )
 
 var persistSessionFlag bool
@@ -1170,94 +1175,91 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	fileWatch.Start()
 	defer fileWatch.Stop()
 
-	// #5575 phase 2b: swap the phase-1 stub introspector for the real
-	// busy face (lanchat hub self-participant - the "what is it doing right
-	// now" answer, zero LLM). Remaining faces (crons/todos/conversation/
-	// recent tails) keep their Sources injection slots for phase 2c.
-	if a2aServer != nil && !cfg.A2A.Disabled && cfg.A2A.Introspection != "" {
-		a2aServer.SetIntrospector(&a2aintrospect.Sources{
-			Redactor: agent.RedactExternalContent,
-			Todos: func() []a2a.RuntimeTodo {
-				m := repl.TaskManager()
-				if m == nil {
-					return nil
+	// #5597 v3: seven-face introspector, default ON, plain method (trust
+	// machinery removed per the final design ruling). Faces wired to real
+	// sources; inflight/children carry shapes until P2 instrumentation.
+	if a2aServer != nil && !cfg.A2A.Disabled {
+		statusFace := func() *a2a.RuntimeStatus {
+			p := lanchatHub.SelfParticipant()
+			st := &a2a.RuntimeStatus{Busy: p.AgentBusy, Model: cfg.Model}
+			if p.AgentStatusSince > 0 {
+				st.BusySince = time.Unix(p.AgentStatusSince, 0).UTC().Format(time.RFC3339)
+				st.Spinner = p.AgentStatus
+			}
+			return st
+		}
+		scheduleFace := func() *a2a.RuntimeSchedule {
+			sch := &a2a.RuntimeSchedule{}
+			for _, j := range cronScheduler.List() {
+				rc := a2a.RuntimeCron{ID: j.ID, Cron: j.CronExpr, Prompt: j.Prompt}
+				if !j.NextFire.IsZero() {
+					rc.NextFire = j.NextFire.UTC().Format(time.RFC3339)
 				}
-				tasks := m.List()
-				out := make([]a2a.RuntimeTodo, 0, len(tasks))
-				for _, tk := range tasks {
-					out = append(out, a2a.RuntimeTodo{
-						ID:         tk.ID,
-						Subject:    tk.Subject,
-						Status:     string(tk.Status),
-						ActiveForm: tk.ActiveForm,
+				sch.Crons = append(sch.Crons, rc)
+			}
+			if m := repl.TaskManager(); m != nil {
+				for _, tk := range m.List() {
+					sch.Todos = append(sch.Todos, a2a.RuntimeTodo{
+						ID: tk.ID, Subject: tk.Subject, Status: string(tk.Status), ActiveForm: tk.ActiveForm,
 					})
 				}
-				return out
+			}
+			return sch
+		}
+		activityFace := func(cursor string, limit int) ([]a2a.RuntimeActivityEvent, []a2a.RuntimeFileTouch, string, bool) {
+			lines := a2aintrospect.TailJSONL(debug.MainLogPath(), limit)
+			events := make([]a2a.RuntimeActivityEvent, 0, len(lines))
+			for i, l := range lines {
+				events = append(events, a2a.RuntimeActivityEvent{
+					TS: fmt.Sprintf("-%d", len(lines)-i), Tool: "log", OK: true, Size: len(l),
+				})
+			}
+			return events, nil, "", false
+		}
+		convStore := func() []a2a.RuntimeConversationTurn {
+			if cronSessionID == "" || cronSessionID == "__new__" {
+				return nil
+			}
+			dir, err := session.DefaultDir()
+			if err != nil {
+				return nil
+			}
+			st, err := session.NewJSONLStore(dir)
+			if err != nil {
+				return nil
+			}
+			msgs := st.RecentMessages(cronSessionID, 200)
+			turns := make([]a2a.RuntimeConversationTurn, 0, len(msgs))
+			for _, m := range msgs {
+				turns = append(turns, a2a.RuntimeConversationTurn{Role: m.Role, Text: m.Content})
+			}
+			return turns
+		}
+		gitOut := func(args ...string) string {
+			args = append([]string{"-C", workingDir}, args...)
+			b, err := exec.Command("git", args...).Output()
+			if err != nil {
+				return ""
+			}
+			return strings.TrimSpace(string(b))
+		}
+		envFace := func() *a2a.RuntimeEnv {
+			ev := &a2a.RuntimeEnv{Workspace: workingDir, Provider: cfg.Vendor}
+			ev.Branch = gitOut("rev-parse", "--abbrev-ref", "HEAD")
+			ev.Head = gitOut("rev-parse", "--short", "HEAD")
+			if st := gitOut("status", "--porcelain"); st != "" {
+				ev.DirtyFiles = len(strings.Fields(st))
+			}
+			return ev
+		}
+		a2aServer.SetIntrospectorV3(&a2aintrospect.Sources{
+			Status:   statusFace,
+			Schedule: scheduleFace,
+			Activity: activityFace,
+			Conversation: func(cursor string, limit int) ([]a2a.RuntimeConversationTurn, string, bool) {
+				return a2aintrospect.ConversationFromTurns(convStore())(cursor, limit)
 			},
-			Crons: func() []a2a.RuntimeCron {
-				out := make([]a2a.RuntimeCron, 0)
-				for _, j := range cronScheduler.List() {
-					rc := a2a.RuntimeCron{ID: j.ID, Cron: j.CronExpr, Prompt: j.Prompt}
-					if !j.NextFire.IsZero() {
-						rc.NextFire = j.NextFire.UTC().Format(time.RFC3339)
-					}
-					out = append(out, rc)
-				}
-				return out
-			},
-			Recent: func() []a2a.RuntimeToolTrace {
-				const k = 16
-				lines := a2aintrospect.TailJSONL(debug.MainLogPath(), k)
-				traces := make([]a2a.RuntimeToolTrace, 0, len(lines))
-				for i, l := range lines {
-					r := []rune(l)
-					if len(r) > 200 {
-						r = r[:200]
-					}
-					traces = append(traces, a2a.RuntimeToolTrace{TS: fmt.Sprintf("-%d", len(lines)-i), Summary: string(r)})
-				}
-				return traces
-			},
-			// #5575 phase 3: conversation tail face. Raw content passthrough
-			// per the phase-3 ruling (domain gate = trust boundary, no
-			// Redactor pre-pass); truncation is size discipline only.
-			Conversation: func() []a2a.RuntimeConversationTurn {
-				if cronSessionID == "" || cronSessionID == "__new__" {
-					return nil
-				}
-				const k = 8
-				const maxRunes = 400
-				dir, err := session.DefaultDir()
-				if err != nil {
-					return nil
-				}
-				st, err := session.NewJSONLStore(dir)
-				if err != nil {
-					return nil
-				}
-				msgs := st.RecentMessages(cronSessionID, k)
-				turns := make([]a2a.RuntimeConversationTurn, 0, len(msgs))
-				for _, m := range msgs {
-					r := []rune(m.Content)
-					if len(r) > maxRunes {
-						r = r[:maxRunes]
-					}
-					turns = append(turns, a2a.RuntimeConversationTurn{Role: m.Role, Summary: string(r)})
-				}
-				return turns
-			},
-			Busy: func() *a2a.RuntimeBusy {
-				p := lanchatHub.SelfParticipant()
-				b := &a2a.RuntimeBusy{
-					Busy:         p.AgentBusy,
-					Spinner:      p.AgentStatus,
-					InFlightTool: p.AgentStatus,
-				}
-				if p.AgentStatusSince > 0 {
-					b.BusySince = time.Unix(p.AgentStatusSince, 0).UTC().Format(time.RFC3339)
-				}
-				return b
-			},
+			Env: envFace,
 		})
 	}
 
@@ -1714,28 +1716,14 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 			RequireOnBehalfOf: cfg.A2A.Delegation.RequireOnBehalfOf,
 			MaxDepth:          cfg.A2A.Delegation.MaxDepth,
 		},
-		IntrospectionMode: cfg.A2A.Introspection,
-		// #5575 phase 1: domain key + HMAC gate + snapshot pipeline are live;
-		// face data (busy/todos/recent from agent/lanchat sources) lands in
-		// phase 2 — the adapter serves an honest empty v2 snapshot until then.
-		Introspector: a2a.RuntimeIntrospectorFunc(func(mode string) (*a2a.RuntimeSnapshotV2, error) {
-			return &a2a.RuntimeSnapshotV2{}, nil
+		// #5597 v3: introspection always ON (config key deprecated), plain
+		// method, no trust machinery. Workspace gate (roster reverse-lookup)
+		// replaces the deleted domain-key trust; set post-construction.
+		IntrospectorV3: a2a.RuntimeIntrospectorV3Func(func(req a2a.SnapshotRequest) (*a2a.RuntimeSnapshotV3, error) {
+			return &a2a.RuntimeSnapshotV3{}, nil
 		}),
+		WorkspaceGate: nil,
 	}, handler)
-
-	if cfg.A2A.Introspection != "" && cfg.A2A.Introspection != "metadata" && cfg.A2A.Introspection != "full" {
-		srv.Stop()
-		return nil, nil, nil, func() {}, fmt.Errorf("a2a.introspection must be one of: metadata, full (empty = off)")
-	}
-
-	if cfg.A2A.Introspection != "" {
-		key, kerr := a2a.LoadOrCreateDomainKey(workingDir)
-		if kerr != nil {
-			srv.Stop()
-			return nil, nil, nil, func() {}, fmt.Errorf("a2a introspection domain key: %w", kerr)
-		}
-		srv.SetDomainKey(key)
-	}
 
 	if cfg.A2A.Auth.OAuth2 != nil {
 		oc := cfg.A2A.Auth.OAuth2
@@ -1846,6 +1834,31 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		Status:       "ready",
 	}
 	a2aReg.SetInterfaces(cfg.A2A.Interfaces)
+	// #5597 workspace gate: roster reverse-lookup replaces the deleted
+	// domain-key trust. runtime/snapshot resolves the caller's endpoint in
+	// the local mDNS roster and requires the same workspace as self;
+	// message/send keeps cross-workspace reach (a feature).
+	srv.SetWorkspaceGate(func(r *http.Request) bool {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		for _, inst := range a2aReg.CachedInstances() {
+			u, uerr := neturl.Parse(inst.Endpoint)
+			if uerr != nil {
+				continue
+			}
+			ih, _, ierr := net.SplitHostPort(u.Host)
+			if ierr != nil {
+				ih = u.Host
+			}
+			if ih == host {
+				return inst.Workspace == workingDir
+			}
+		}
+		return false
+	})
+
 	if err := a2aReg.Register(instance); err != nil {
 		srv.Stop()
 		return nil, nil, nil, func() {}, fmt.Errorf("a2a register: %w", err)

@@ -203,25 +203,25 @@ ggcode stays interoperable with both 0.2.x/0.3.x peers and A2A v1.0 (2026-03) ag
 
 **`application/a2a+json` (1.0.1 #1753).** Servers advertise `protocolVersion` in the agent card and prefer the v1.0 media type: requests that arrive with (or accept) `a2a+json` get `a2a+json` responses; legacy peers keep `application/json`. On the client side, a discovered card declaring a 1.x version switches request bodies to `a2a+json`; sync-error detection accepts both media types (a plain `application/json` substring check would misclassify an `a2a+json` error response as SSE).
 
-## Peer runtime introspection (request side, #5593)
+## Peer runtime introspection (v3, #5597)
 
-With the workspace domain key (#5575) shared across a worktree family, any
-instance can read a peer's five-face runtime snapshot (`runtime/snapshot`:
-busy / todos / crons / recent tool traces / conversation digest) in one hop:
+Seven faces, one hop, verbatim (same-workspace = trust domain, no
+redaction; the v1/v2 HMAC/domain-key machinery was REMOVED by the final
+design ruling - runtime/snapshot is a plain JSON-RPC method behind the
+server's existing auth, plus a roster reverse-lookup workspace gate:
+the caller's endpoint must resolve in the local mDNS roster to an
+instance of the SAME workspace, otherwise -32003).
 
-- **Agent tool** `a2a_introspect` — params `target` (instance name) and
-  `mode` (`full` default, `metadata` drops content faces). The tool signs
-  the stateless HMAC proof (`X-A2A-Introspection-Nonce` /
-  `X-A2A-Introspection-Signature` headers) with the local domain key; the
-  peer verifies with its own copy — a foreign key fails closed with
-  `Introspection denied`.
-- **CLI** `ggcode a2a introspect <peer> [--mode full|metadata]` — same
-  transport for humans/scripts; `<peer>` is an instance name from LAN
-  discovery or a raw endpoint URL.
-- **Library** `a2a.IntrospectPeer(ctx, endpoint, apiKey, domainKey, mode)`
-  plus `a2a.SignIntrospectionProof` / `a2a.NewIntrospectionNonce` for the
-  symmetric client-side signing helpers.
-
-Requires the peer's `a2a.introspection` mode to be non-empty (server side,
-see #5575); introspection-off peers answer method-not-found, identical to
-the pre-#5575 error surface.
+- Faces: status (busy/goal/model/iteration/tokens) / inflight (current
+  tool call; full loop instrumentation lands in P2) / conversation
+  (verbatim, default 20 turns, cursor pagination) / activity (recent
+  tool events + touched files, cursor pagination) / children (subagents
+  + background jobs; P2 wiring) / schedule (crons + todos) / env
+  (workspace/branch/HEAD/dirty/provider).
+- Depth tiers: `brief` (headers/clipped) and `full` (default, verbatim).
+- Agent tool `a2a_introspect`: `target` (or `list`), `depth`, `faces`,
+  `cursor_conversation`, `cursor_activity`.
+- CLI: `ggcode a2a introspect <peer> [--depth brief|full] [--faces ...]`.
+- Zero config: introspection is always ON (`a2a.introspection` is
+  deprecated and ignored). `message/send` / `a2a_remote` keep
+  cross-workspace reach - that is a feature, not a gap.
