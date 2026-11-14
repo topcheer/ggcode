@@ -168,6 +168,16 @@ type RuntimeEnv struct {
 	Provider   string              `json:"provider,omitempty"`
 	MCPServers []RuntimeEnvService `json:"mcp_servers,omitempty"`
 	IMAdapters []RuntimeEnvService `json:"im_adapters,omitempty"`
+	// #5635 P2: live mobile-share/tunnel connection state, same truth the
+	// local `runtime` tool reports (RuntimeMobileInfo provider).
+	Mobile *RuntimeMobileState `json:"mobile,omitempty"`
+}
+
+// RuntimeMobileState is the mobile share tunnel state in the env face.
+type RuntimeMobileState struct {
+	Connected bool   `json:"connected"`
+	RelayURL  string `json:"relay_url,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // RuntimeSnapshotV3 is the runtime/snapshot result: seven faces, zero LLM,

@@ -1299,6 +1299,20 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 					ev.IMAdapters = append(ev.IMAdapters, a2a.RuntimeEnvService{Name: a.Name, State: state, Error: a.LastError})
 				}
 			}
+			// #5635 P2: mobile share/tunnel connection state, reusing the
+			// same provider truth the local `runtime` tool reports.
+			if registry != nil {
+				if t, ok := registry.Get("runtime"); ok {
+					if rt, ok := t.(tool.RuntimeTool); ok && rt.Provider != nil {
+						mi := rt.Provider.RuntimeMobile()
+						ev.Mobile = &a2a.RuntimeMobileState{
+							Connected: mi.Connected,
+							RelayURL:  mi.RelayURL,
+							SessionID: mi.SessionID,
+						}
+					}
+				}
+			}
 			return ev
 		}
 		inflightFace := func() *a2a.RuntimeInflight {
