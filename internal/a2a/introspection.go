@@ -139,12 +139,24 @@ type RuntimeTodo struct {
 }
 
 // RuntimeEnv is face 7: workspace environment.
+// RuntimeEnvService is one mounted integration surfaced in the env face
+// (#5635): MCP servers, IM adapters, skill mounts. State is the runtime
+// truth ("connected", "muted", ...) - verbatim, no interpretation.
+type RuntimeEnvService struct {
+	Name  string `json:"name"`
+	State string `json:"state,omitempty"`
+	Error string `json:"error,omitempty"`
+	Tools int    `json:"tools,omitempty"`
+}
+
 type RuntimeEnv struct {
-	Workspace  string `json:"workspace,omitempty"`
-	Branch     string `json:"branch,omitempty"`
-	Head       string `json:"head,omitempty"`
-	DirtyFiles int    `json:"dirty_files,omitempty"`
-	Provider   string `json:"provider,omitempty"`
+	Workspace  string              `json:"workspace,omitempty"`
+	Branch     string              `json:"branch,omitempty"`
+	Head       string              `json:"head,omitempty"`
+	DirtyFiles int                 `json:"dirty_files,omitempty"`
+	Provider   string              `json:"provider,omitempty"`
+	MCPServers []RuntimeEnvService `json:"mcp_servers,omitempty"`
+	IMAdapters []RuntimeEnvService `json:"im_adapters,omitempty"`
 }
 
 // RuntimeSnapshotV3 is the runtime/snapshot result: seven faces, zero LLM,

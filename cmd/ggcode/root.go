@@ -1232,7 +1232,18 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			return events, nil, "", false
 		}
 		convStore := func() []a2a.RuntimeConversationTurn {
-			if cronSessionID == "" || cronSessionID == "__new__" {
+			// #5635: interactive seats (REPL) have no cron session ID - the
+			// old gate returned nil for them, so introspect showed 0 turns
+			// even right after a resume of a long-lived session. Fall back
+			// to the REPL's current session, which IS the live memory-state
+			// pointer (recent turns are read from the session ledger).
+			sid := cronSessionID
+			if sid == "" || sid == "__new__" {
+				if repl != nil {
+					sid = repl.CurrentSessionID()
+				}
+			}
+			if sid == "" || sid == "__new__" {
 				return nil
 			}
 			dir, err := session.DefaultDir()
@@ -1243,7 +1254,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			if err != nil {
 				return nil
 			}
-			msgs := st.RecentMessages(cronSessionID, 200)
+			msgs := st.RecentMessages(sid, 200)
 			turns := make([]a2a.RuntimeConversationTurn, 0, len(msgs))
 			for _, m := range msgs {
 				turns = append(turns, a2a.RuntimeConversationTurn{Role: m.Role, Text: m.Content})
@@ -1264,6 +1275,29 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			ev.Head = gitOut("rev-parse", "--short", "HEAD")
 			if st := gitOut("status", "--porcelain"); st != "" {
 				ev.DirtyFiles = len(strings.Fields(st))
+			}
+			// #5635: mounted integrations are runtime memory state the peer
+			// must see - MCP server mounts (name/status/tool count) and IM
+			// adapters (name/status), verbatim from the live managers.
+			if mcpMgr != nil {
+				for _, info := range mcpMgr.Snapshot() {
+					svc := a2a.RuntimeEnvService{Name: info.Name, State: string(info.Status)}
+					if info.Disabled {
+						svc.State = "disabled"
+					}
+					svc.Error = info.Error
+					svc.Tools = len(info.ToolNames)
+					ev.MCPServers = append(ev.MCPServers, svc)
+				}
+			}
+			if imMgr != nil {
+				for _, a := range imMgr.Snapshot().Adapters {
+					state := a.Status
+					if a.Healthy {
+						state = "connected"
+					}
+					ev.IMAdapters = append(ev.IMAdapters, a2a.RuntimeEnvService{Name: a.Name, State: state, Error: a.LastError})
+				}
 			}
 			return ev
 		}
