@@ -3,6 +3,7 @@ package tool
 import (
 	"bytes"
 	"context"
+	"debug/buildinfo"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -157,9 +158,31 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	execPath := t.Requester.ExecTargetPath()
 	okNote := "OK: restart armed. The agent loop terminates immediately after this result — no further tool calls, no further turns. The process restarts as soon as the turn unwinds (with a short fallback timeout). The session resumes automatically after restart."
 	if p := execPath; p != "" {
-		okNote += fmt.Sprintf(" Exec target: %s (current revision %s). After restart the startup banner verifies the running image.", p, t.Requester.ExecTargetRevision())
+		// dg-7: report BOTH revisions - the running image ("current") and
+		// the exec target's embedded vcs.revision. Arm-time readers verified
+		// against the wrong one: current is the OLD process by definition,
+		// and the target side was previously path-only.
+		okNote += fmt.Sprintf(" Exec target: %s (current revision %s, target revision %s). After restart the startup banner verifies the running image.", p, t.Requester.ExecTargetRevision(), fileRevision(execPath))
 	}
 	return Result{Content: okNote + nudgeNote, HaltAgent: true}, nil
+}
+
+// fileRevision extracts the embedded vcs.revision from a binary file
+// ("unknown" when absent, e.g. unstamped builds).
+func fileRevision(path string) string {
+	bi, err := buildinfo.ReadFile(path)
+	if err != nil {
+		return "unknown"
+	}
+	for _, kv := range bi.Settings {
+		if kv.Key == "vcs.revision" && kv.Value != "" {
+			if len(kv.Value) > 12 {
+				return kv.Value[:12]
+			}
+			return kv.Value
+		}
+	}
+	return "unknown"
 }
 
 // RestartSmokeTimeout bounds the #5553 pre-arm smoke (registry boot +
