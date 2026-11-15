@@ -131,9 +131,10 @@ type followGraceTickMsg struct{}
 type subAgentsCancelDoneMsg struct{}
 
 type systemNotifyMsg struct {
-	Text    string
-	ItemID  string
-	Replace bool
+	Text     string
+	ItemID   string
+	Replace  bool
+	Markdown bool
 }
 
 type skillsChangedMsg struct{}

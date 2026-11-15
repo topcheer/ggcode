@@ -37,6 +37,12 @@ func (m *Model) chatUpdateToolOutput(toolID, output string) {
 	})
 }
 
+func (m *Model) chatWriteSystemMarkdown(id, text string) {
+	item := chat.NewSystemItem(id, text, m.chatStyles)
+	item.SetMarkdown(true)
+	m.chatWrite(item)
+}
+
 func (m *Model) chatWriteUserMarkdown(id, text string) {
 	m.chatWrite(chat.NewMarkdownUserItem(id, text, m.chatStyles))
 }

@@ -384,7 +384,7 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 				if summary != "" {
 					msg = fmt.Sprintf("[Strategist: goal achieved - autopilot complete. %s]", summary)
 				}
-				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: msg})
+				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: msg, SystemRich: true})
 				a.ClearAutopilotGoal()
 
 				if codeChangedInRun(runStats) {

@@ -94,11 +94,19 @@ func (m Model) handleSystemNotifyMsg(msg systemNotifyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		m.chatWriteSystem(msg.ItemID, msg.Text)
+		if msg.Markdown {
+			m.chatWriteSystemMarkdown(msg.ItemID, msg.Text)
+		} else {
+			m.chatWriteSystem(msg.ItemID, msg.Text)
+		}
 		m.chatListFollowOutput()
 		return m, nil
 	}
-	m.chatWriteSystem(nextSystemID(), msg.Text)
+	if msg.Markdown {
+		m.chatWriteSystemMarkdown(nextSystemID(), msg.Text)
+	} else {
+		m.chatWriteSystem(nextSystemID(), msg.Text)
+	}
 	m.chatListFollowOutput()
 	return m, nil
 }

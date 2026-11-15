@@ -286,9 +286,10 @@ func (a *AssistantItem) Height(width int) int {
 
 type SystemItem struct {
 	CachedItem
-	id     string
-	text   string
-	styles Styles
+	id       string
+	text     string
+	styles   Styles
+	markdown bool
 }
 
 func NewSystemItem(id, text string, styles Styles) *SystemItem {
@@ -313,6 +314,13 @@ func (s *SystemItem) AppendText(text string) {
 	s.Invalidate()
 }
 
+// SetMarkdown enables markdown rendering for this system item (e.g. rich
+// strategist summaries). Plain status lines keep raw rendering.
+func (s *SystemItem) SetMarkdown(on bool) {
+	s.markdown = on
+	s.Invalidate()
+}
+
 func (s *SystemItem) Render(width int) string {
 	if cached, _, ok := s.GetCached(width); ok {
 		return cached
@@ -325,16 +333,21 @@ func (s *SystemItem) Render(width int) string {
 		contentWidth = 10
 	}
 
-	textLines := wrapLines(s.text, contentWidth)
+	var bodyLines []string
+	if s.markdown {
+		bodyLines = strings.Split(strings.TrimRight(markdown.Render(s.text, contentWidth), "\n"), "\n")
+	} else {
+		bodyLines = wrapLines(s.text, contentWidth)
+	}
 	var sb strings.Builder
-	for i, line := range textLines {
+	for i, line := range bodyLines {
 		if i == 0 {
 			sb.WriteString(s.styles.SystemStyle.Render(prefix))
 		} else {
 			sb.WriteString(strings.Repeat(" ", prefixWidth))
 		}
 		sb.WriteString(s.styles.SystemStyle.Render(line))
-		if i < len(textLines)-1 {
+		if i < len(bodyLines)-1 {
 			sb.WriteString("\n")
 		}
 	}
