@@ -1212,6 +1212,16 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			st.TokensIn = rs.TokensIn
 			st.TokensOut = rs.TokensOut
 			st.ContextPct = rs.ContextPct
+			// goal_progress block: autopilot health so peers can tell
+			// "winding down" from "stuck" without reading the goal text.
+			st.GoalProgress = &a2a.RuntimeGoalProgress{
+				HasGoal:       rs.Goal != "",
+				StrategistRun: rs.StrategistCalls,
+				NoProgressRun: rs.NoProgressStreak,
+			}
+			if rs.BudgetTotal > 0 {
+				st.BudgetPct = float64(rs.BudgetUsed) / float64(rs.BudgetTotal) * 100
+			}
 			return st
 		}
 		scheduleFace := func() *a2a.RuntimeSchedule {

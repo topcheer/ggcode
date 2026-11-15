@@ -22,6 +22,11 @@ type RuntimeStatsSnapshot struct {
 	TokensOut  int64   // current run's cumulative output tokens
 	ContextPct float64 // contextManager.TokenCount / promptBudget, clamped 0..100
 	Goal       string  // current autopilot goal ("" when not in autopilot)
+	// Autopilot progress signals for the status face's goal_progress block.
+	StrategistCalls  int
+	NoProgressStreak int
+	BudgetUsed       int64
+	BudgetTotal      int64
 }
 
 // runtimeStats accumulates the current run's counters. beginRun resets
@@ -108,6 +113,12 @@ func (a *Agent) RuntimeStats() RuntimeStatsSnapshot {
 
 	a.mu.RLock()
 	snap.Goal = a.autopilotGoal
+	// Autopilot progress signals (goal-progress block of the status
+	// face): peers judge "winding down vs stuck" from these counters.
+	snap.StrategistCalls = a.autopilotStrategistCount
+	snap.NoProgressStreak = a.strategistNoProgressCount
+	snap.BudgetUsed = a.SessionTokenUsed()
+	snap.BudgetTotal = a.SessionTokenBudget()
 	a.mu.RUnlock()
 
 	if a.contextManager != nil {
