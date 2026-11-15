@@ -156,6 +156,7 @@ func (u TokenUsage) CacheHitPercent() int {
 type StreamEvent struct {
 	Type              StreamEventType
 	Text              string
+	SystemRich        bool
 	ThinkingSignature string
 	Tool              ToolCallDelta
 	Result            string
