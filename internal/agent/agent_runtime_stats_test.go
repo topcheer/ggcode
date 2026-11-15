@@ -99,3 +99,18 @@ func TestCurrentTool_ParamsHeadTruncated(t *testing.T) {
 		t.Errorf("ParamsHead len = %d, want 120", len(got))
 	}
 }
+
+// goal_progress + budget snapshot fields survive the RuntimeStats copy
+// (status face consumes them).
+func TestRuntimeStatsGoalProgressAndBudgetFields(t *testing.T) {
+	s := RuntimeStatsSnapshot{
+		Goal:             "fix the gate",
+		StrategistCalls:  4,
+		NoProgressStreak: 1,
+		BudgetUsed:       1000,
+		BudgetTotal:      4000,
+	}
+	if s.StrategistCalls != 4 || s.NoProgressStreak != 1 || s.BudgetUsed != 1000 || s.BudgetTotal != 4000 {
+		t.Fatalf("snapshot fields lost: %+v", s)
+	}
+}
