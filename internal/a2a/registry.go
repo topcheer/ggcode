@@ -35,7 +35,13 @@ type InstanceInfo struct {
 
 func (i InstanceInfo) DisplayName() string {
 	name := filepath.Base(i.Workspace)
-	_, port, err := net.SplitHostPort(i.Endpoint)
+	// #5617: strip the scheme before SplitHostPort. Scheme-full endpoints
+	// ("http://host:port", what Server.Endpoint and mDNS discovery both
+	// produce) carry two colons and fail the split, which degraded
+	// DisplayName to the bare project name — collapsing every seat in a
+	// same-workspace fleet into one undifferentiated name and killing
+	// name:port disambiguation hints.
+	_, port, err := net.SplitHostPort(normEndpoint(i.Endpoint))
 	if err != nil {
 		return name
 	}

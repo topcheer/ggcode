@@ -23,6 +23,21 @@ type RemoteTool struct {
 	cacheAt  time.Time
 	// #5616 seat addressing: lanchat→a2a identity bridge (nil in tests/CLI).
 	identity IdentityLookup
+	// #5617: roster dir consulted by discover() when the registry has no
+	// registered self (one-shot CLI: SelfWorkspace() is "" before Register,
+	// which left the roster-identity overlay dead exactly where it was
+	// needed - a hub-less process resolving seat nicks cross-process).
+	rosterDir string
+}
+
+// SetRosterDir sets the workspace dir whose .ggcode/a2a-roster.json is
+// consulted for seat identity when the registry has no registered self.
+// Safe to call any time before first discovery; later calls re-discover.
+func (t *RemoteTool) SetRosterDir(dir string) {
+	t.mu.Lock()
+	t.rosterDir = dir
+	t.cache = nil // drop cache so the next discover re-applies the overlay
+	t.mu.Unlock()
 }
 
 func NewRemoteTool(reg *Registry, apiKey string) *RemoteTool {
@@ -283,8 +298,17 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	// does (SetSelfIdentity republishes it). Overlay roster identity onto
 	// mDNS entries by normalized endpoint so cross-process resolvers and the
 	// list view see seat nicks even without a live lanchat bridge.
+	// #5617: a one-shot CLI never registers, so SelfWorkspace() is empty
+	// and the overlay never fired - fall back to the explicit roster dir
+	// (SetRosterDir) so hub-less processes still resolve seat nicks.
+	t.mu.RLock()
+	rosterWs := t.rosterDir
+	t.mu.RUnlock()
 	if ws := t.registry.SelfWorkspace(); ws != "" {
-		for _, r := range ReadRoster(ws, t.registry.SelfID()) {
+		rosterWs = ws
+	}
+	if rosterWs != "" {
+		for _, r := range ReadRoster(rosterWs, t.registry.SelfID()) {
 			if r.Nick == "" {
 				continue
 			}

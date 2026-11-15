@@ -79,8 +79,12 @@ type IntrospectTool struct {
 	localTool *RemoteTool
 }
 
-func NewIntrospectTool(reg *Registry, apiKey, _ string) *IntrospectTool {
+func NewIntrospectTool(reg *Registry, apiKey, workingDir string) *IntrospectTool {
 	rt := NewRemoteTool(reg, apiKey)
+	// #5617: the workingDir was previously accepted but dropped, which
+	// left the inner RemoteTool without a roster fallback when the
+	// registry has no registered self (one-shot / hub-less callers).
+	rt.SetRosterDir(workingDir)
 	return &IntrospectTool{registry: reg, apiKey: apiKey, localTool: rt}
 }
 

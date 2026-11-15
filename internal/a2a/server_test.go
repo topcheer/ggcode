@@ -101,6 +101,11 @@ func TestInstanceDisplayName(t *testing.T) {
 		{"127.0.0.1:12345", "/Users/dev/projects/order-service", "order-service:12345"},
 		{"127.0.0.1:54321", "/Users/dev/projects/order-service", "order-service:54321"},
 		{"10.0.0.1:8080", "/home/user/gateway", "gateway:8080"},
+		// #5617: scheme-full endpoints (Server.Endpoint / mDNS discovery
+		// form) must still derive name:port instead of degrading to the bare
+		// project name.
+		{"http://10.0.0.1:8080", "/home/user/gateway", "gateway:8080"},
+		{"https://10.0.0.1:8443/", "/home/user/gateway", "gateway:8443"},
 		{"invalid", "/path/to/project", "project"},
 		{"", "/path/to/project", "project"},
 	}
