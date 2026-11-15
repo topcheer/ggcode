@@ -98,6 +98,22 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 			prompt += "\n\n## Skills\n" + skillsPrompt
 		}
 	}
+	// #5656: phase-loop discipline applies in EVERY permission mode, not
+	// just cruise. Without this, supervised sessions end their turn after
+	// one phase with a summary, waiting for the user to drive the next —
+	// the single most common "agent stops mid-goal" complaint.
+	prompt += "\n\n## Phase loop (every mode)\n" +
+		"- A multi-phase request is ONE request. Completing ONE phase (implement + verify) is a checkpoint in your own loop, NOT a stopping point: verify it end-to-end, then immediately start the next phase in the SAME turn.\n" +
+		"- Only end your turn when the entire request is done or you are genuinely blocked. Ending with unfinished phases, a progress summary, and no blocker is incomplete work, not a deliverable.\n" +
+		"- If you catch yourself writing a summary while a known next step exists, execute that step instead of describing it."
+	// #5656: supervised is a silent default today - the agent gets NO mode
+	// guidance, guesses how autonomous it may be, and errs toward stopping.
+	if !mode.IsCruiseMode() {
+		prompt += "\n\n## Current mode: supervised\n" +
+			"- You are in supervised mode: routine tool calls (read/search/edit/build/test/git/DM) flow without user confirmation - do NOT stop to ask permission for ordinary work.\n" +
+			"- Only genuinely destructive or irreversible actions are gated, and the gate itself will ask - not you. Never pre-emptively halt a multi-step task to ask whether to continue.\n" +
+			"- The phase-loop discipline above applies fully in this mode: keep driving all phases of the request in this turn."
+	}
 	if mode.IsCruiseMode() {
 		prompt += "\n\n## Autopilot\n" +
 			"You are in bypass (cruise) mode — work autonomously until the Goal is fully achieved.\n" +

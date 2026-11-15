@@ -9,28 +9,39 @@ import (
 )
 
 func (a *Agent) checkIncompleteTodos() string {
-	t, ok := a.tools.Get("todo_write")
-	if !ok {
-		return ""
-	}
-	tw, ok := t.(*tool.TodoWrite)
-	if !ok {
-		return ""
+	var incomplete []string
+	total, doneCount := 0, 0
+
+	// Source 1: todo_write todos.
+	if t, ok := a.tools.Get("todo_write"); ok {
+		if tw, ok := t.(*tool.TodoWrite); ok {
+			todos, err := tw.ListTodos()
+			if err != nil {
+				debug.Log("agent", "checkIncompleteTodos: todo read error: %v", err)
+			} else {
+				for _, td := range todos {
+					total++
+					switch td.Status {
+					case "pending":
+						incomplete = append(incomplete, fmt.Sprintf("  [pending] %s: %s", td.ID, td.Content))
+					case "in_progress":
+						incomplete = append(incomplete, fmt.Sprintf("  [IN PROGRESS] %s: %s", td.ID, td.Content))
+					default:
+						doneCount++
+					}
+				}
+			}
+		}
 	}
 
-	todos, err := tw.ListTodos()
-	if err != nil {
-		debug.Log("agent", "checkIncompleteTodos: read error: %v", err)
-		return ""
-	}
-	if len(todos) == 0 {
-		return ""
-	}
-
-	var incomplete []tool.Todo
-	for _, td := range todos {
-		if td.Status == "pending" || td.Status == "in_progress" {
-			incomplete = append(incomplete, td)
+	// Source 2 (#5656): session task board. Sessions that never call
+	// todo_write had NO pending-work signal at all - the todo-only check
+	// was a blind spot for them.
+	if t, ok := a.tools.Get("task_list"); ok {
+		if tl, ok := t.(interface{ PendingSubjects() []string }); ok {
+			for _, s := range tl.PendingSubjects() {
+				incomplete = append(incomplete, fmt.Sprintf("  [task] %s", s))
+			}
 		}
 	}
 
@@ -39,20 +50,11 @@ func (a *Agent) checkIncompleteTodos() string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("You have incomplete todo items that were not marked as done:\n\n")
-	for _, td := range incomplete {
-		mark := "pending"
-		if td.Status == "in_progress" {
-			mark = "IN PROGRESS"
-		}
-		fmt.Fprintf(&sb, "  [%s] %s: %s\n", mark, td.ID, td.Content)
+	sb.WriteString("You are ending your turn, but the session still has declared, unfinished work:\n\n")
+	for _, line := range incomplete {
+		sb.WriteString(line + "\n")
 	}
-	sb.WriteString("\n")
-	if len(incomplete) == len(todos) {
-		sb.WriteString("None of your todos are complete. Either complete them or remove them with todo_write if they are no longer relevant.")
-	} else {
-		fmt.Fprintf(&sb, "%d of %d todos are still incomplete. Complete them or remove them with todo_write if they are no longer relevant.", len(incomplete), len(todos))
-	}
+	sb.WriteString("\nContinue working on it now in this same turn. Only end the turn when the work is complete or genuinely blocked; if a blocker exists, name it explicitly in your final message. Do not just describe the remaining steps - execute them. (If an item is truly obsolete, remove it with todo_write/task_update first, then finish the rest.)\n")
 	return sb.String()
 }
 

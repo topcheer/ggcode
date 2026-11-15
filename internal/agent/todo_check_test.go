@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/topcheer/ggcode/internal/task"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -79,8 +80,8 @@ func TestCheckIncompleteTodos_HasPending(t *testing.T) {
 	if !strings.Contains(msg, "in progress task") {
 		t.Errorf("expected reminder to mention 'in progress task', got: %s", msg)
 	}
-	if !strings.Contains(msg, "2 of 3") {
-		t.Errorf("expected '2 of 3' in reminder, got: %s", msg)
+	if !strings.Contains(msg, "Continue working on it now") {
+		t.Errorf("expected continuation directive in reminder (#5656), got: %s", msg)
 	}
 
 	tw.ClearTodos()
@@ -93,7 +94,6 @@ func TestCheckIncompleteTodos_AllPending(t *testing.T) {
 	tw := tool.NewTodoWrite("test-session-all-pending")
 	reg.Register(tw)
 	a.tools = reg
-
 	input, _ := json.Marshal(map[string]interface{}{
 		"todos": []map[string]string{
 			{"id": "1", "content": "task A", "status": "pending"},
@@ -109,11 +109,34 @@ func TestCheckIncompleteTodos_AllPending(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected non-empty reminder")
 	}
-	if !strings.Contains(msg, "None of your todos") {
-		t.Errorf("expected 'None of your todos' message when all incomplete, got: %s", msg)
+	if !strings.Contains(msg, "unfinished work") {
+		t.Errorf("expected 'unfinished work' framing when all incomplete (#5656), got: %s", msg)
 	}
 
 	tw.ClearTodos()
+}
+
+// #5656: sessions that never call todo_write must still trip the guard via
+// the session task board - todo-only detection was a blind spot.
+func TestCheckIncompleteTodos_TaskBoardOnly(t *testing.T) {
+	withTestHomeTodos(t)
+	a := &Agent{}
+	reg := tool.NewRegistry()
+	mgr := task.NewManager()
+	mgr.Create("fix the gate", "phase 2 remains", "", nil)
+	reg.Register(tool.TaskListTool{Manager: mgr})
+	a.tools = reg
+
+	msg := a.checkIncompleteTodos()
+	if msg == "" {
+		t.Fatal("expected reminder from task-board pending task alone")
+	}
+	if !strings.Contains(msg, "fix the gate") {
+		t.Errorf("expected reminder to mention task subject, got: %s", msg)
+	}
+	if !strings.Contains(msg, "[task]") {
+		t.Errorf("expected task-board framing in reminder, got: %s", msg)
+	}
 }
 
 func TestCodeChangedInRun_NoEdits(t *testing.T) {
