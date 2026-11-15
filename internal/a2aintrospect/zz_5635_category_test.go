@@ -60,3 +60,21 @@ func TestIssue5635_CategoryPull(t *testing.T) {
 		t.Fatal("unknown category must error")
 	}
 }
+
+// env face carries the memory key index (#5657 followup plan): keys only,
+// no bodies - cross-seat knowledge visibility without content exposure.
+func TestEnvFaceMemoryKeysSerialized(t *testing.T) {
+	src := &Sources{
+		Env: func() *a2a.RuntimeEnv {
+			return &a2a.RuntimeEnv{Workspace: "/w", MemoryKeys: []string{"build-process", "api-gotcha"}}
+		},
+		Now: func() time.Time { return time.Unix(0, 0).UTC() },
+	}
+	snap, err := src.RuntimeSnapshotV3(a2a.SnapshotRequest{Depth: a2a.DepthBrief})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Env == nil || len(snap.Env.MemoryKeys) != 2 || snap.Env.MemoryKeys[0] != "build-process" {
+		t.Fatalf("env memory keys not carried: %+v", snap.Env)
+	}
+}
