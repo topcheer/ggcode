@@ -309,15 +309,24 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	}
 	if rosterWs != "" {
 		for _, r := range ReadRoster(rosterWs, t.registry.SelfID()) {
-			if r.Nick == "" {
+			// #5667: key-only roster rows still overlay (the mDNS TXT may lag
+			// the roster file); nick-only rows keep the #5616 behavior.
+			if r.Nick == "" && r.DomainKey == "" {
 				continue
 			}
 			ep := normEndpoint(r.Endpoint)
 			for i := range instances {
-				if instances[i].Nick == "" && normEndpoint(instances[i].Endpoint) == ep {
+				if normEndpoint(instances[i].Endpoint) != ep {
+					continue
+				}
+				if instances[i].Nick == "" && r.Nick != "" {
 					instances[i].Nick = r.Nick
 					instances[i].Role = r.Role
 					instances[i].Team = r.Team
+				}
+				if instances[i].DomainKey == "" && r.DomainKey != "" {
+					instances[i].DomainKeyID = r.DomainKeyID
+					instances[i].DomainKey = r.DomainKey
 				}
 			}
 		}

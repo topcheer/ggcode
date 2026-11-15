@@ -91,6 +91,20 @@ func newA2AIntrospectCmd() *cobra.Command {
 				instances = a2a.ReadRoster(wd, "")
 			}
 
+			// #5667: resolve the peer's workspace domain key for the
+			// declared-workspace proof - advertised on the discovery roster,
+			// with the own-workspace key file as the same-host fallback.
+			peerKey := func(endpoint string) []byte {
+				if key := a2a.DomainKeyForEndpoint(instances, endpoint); key != nil {
+					return key
+				}
+				wd, _ := os.Getwd()
+				if key, err := a2a.LoadOrCreateWorkspaceDomainKey(wd); err == nil {
+					return key
+				}
+				return nil
+			}
+
 			// list semantics (#5602): mirror the agent tool's target='list'.
 			if target == "list" {
 				fmt.Println("Discovered instances:")
@@ -106,7 +120,7 @@ func newA2AIntrospectCmd() *cobra.Command {
 				if !strings.Contains(endpoint, "://") {
 					endpoint = "http://" + endpoint
 				}
-				snap, err := a2a.IntrospectPeerV3(ctx, endpoint, apiKey, func() string { wd, _ := os.Getwd(); return wd }(), a2a.SnapshotRequest{Depth: depth, Faces: faces, Category: category})
+				snap, err := a2a.IntrospectPeerV3(ctx, endpoint, apiKey, func() string { wd, _ := os.Getwd(); return wd }(), peerKey(endpoint), a2a.SnapshotRequest{Depth: depth, Faces: faces, Category: category})
 				if err != nil {
 					return err
 				}
@@ -120,7 +134,7 @@ func newA2AIntrospectCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("seat %q not found in the discovered roster:\n%s\n(discovery: %v)", target, rosterLines(instances), derr)
 			}
-			snap, err := a2a.IntrospectPeerV3(ctx, inst.Endpoint, apiKey, func() string { wd, _ := os.Getwd(); return wd }(), a2a.SnapshotRequest{Depth: depth, Faces: faces, Category: category})
+			snap, err := a2a.IntrospectPeerV3(ctx, inst.Endpoint, apiKey, func() string { wd, _ := os.Getwd(); return wd }(), peerKey(inst.Endpoint), a2a.SnapshotRequest{Depth: depth, Faces: faces, Category: category})
 			if err != nil {
 				return err
 			}

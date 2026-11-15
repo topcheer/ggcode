@@ -2096,6 +2096,17 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		srv.SetTLSConfig(tlsCfg)
 	}
 
+	// #5667: workspace domain key - the credential that binds the
+	// declared-workspace trust arm. Load failure (unwritable workspace)
+	// fail-closes that arm to the roster reverse-lookup; loopback callers
+	// are unaffected.
+	domainKey, domainKeyErr := a2a.LoadOrCreateWorkspaceDomainKey(workingDir)
+	if domainKeyErr != nil {
+		debug.Log("a2a", "workspace domain key unavailable: %v (declared-workspace introspection arm closed)", domainKeyErr)
+		domainKey = nil
+	}
+	srv.SetDomainKey(domainKey)
+
 	if err := srv.Start(); err != nil {
 		return nil, nil, nil, func() {}, fmt.Errorf("a2a start: %w", err)
 	}
@@ -2109,6 +2120,13 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		AgentCardURL: srv.Endpoint() + "/.well-known/agent.json",
 		Status:       "ready",
 	}
+	// #5667: advertise the domain key on the LAN discovery channel (mDNS
+	// TXT + roster file) so same-workspace peers can mint the proof with
+	// zero manual config.
+	if domainKeyErr == nil {
+		instance.DomainKeyID = a2a.WorkspaceDomainKeyID(domainKey)
+		instance.DomainKey = a2a.EncodeDomainKey(domainKey)
+	}
 	a2aReg.SetInterfaces(cfg.A2A.Interfaces)
 	// #5597 workspace gate: roster reverse-lookup replaces the deleted
 	// domain-key trust. runtime/snapshot resolves the caller's endpoint in
@@ -2116,11 +2134,14 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	// message/send keeps cross-workspace reach (a feature).
 	srv.SetWorkspaceGate(func(r *http.Request) bool {
 		// #5605 A: loopback arm + roster match - decision pinned in a2a.
-		// #5655: declared-workspace arm first - same workspace path is the
-		// trust domain even across hosts (tool path was 0% usable on the
+		// #5655: declared-workspace arm - same workspace path is the trust
+		// domain even across hosts (tool path was 0% usable on the
 		// multi-host LAN because the roster reverse-lookup never saw the
 		// remote caller).
-		return a2a.WorkspaceGateDecisionWithDecl(r.RemoteAddr, r.Header.Get("X-Ggcode-Workspace"), a2aReg.CachedInstances(), workingDir)
+		// #5667: the declaration alone is no longer sufficient - it must
+		// carry a proof of possession of the workspace domain key (the
+		// path string is public data, not a credential).
+		return a2a.WorkspaceGateDecisionWithDecl(r.RemoteAddr, r.Header.Get("X-Ggcode-Workspace"), r.Header.Get(a2a.WorkspaceProofHeader), a2aReg.CachedInstances(), workingDir, domainKey, time.Now())
 	})
 
 	// #125/G3: explicit switch to refuse the unauthenticated loopback arm.
@@ -2144,6 +2165,9 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 
 	// #5593: one-hop peer runtime snapshot for agents (same domain key).
 	introspectTool := a2a.NewIntrospectTool(a2aReg, a2aAPIKey(cfg), workingDir)
+	// #5667: share the server's domain key so the tool mints proofs
+	// without re-reading the key file.
+	introspectTool.SetDomainKey(domainKey)
 	_ = reg.Register(introspectTool)
 
 	// #5616 seat addressing: bridge lanchat seat identity (nick/role/team,
