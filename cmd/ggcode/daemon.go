@@ -21,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/daemon"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
@@ -315,6 +316,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return append([]string(nil), promptSkillRefs...)
 	}
 
+	// cronSchedulerRef is the late-bound slot for the cron scheduler (#5530):
+	// the agent's run-completion reflection is registered below, before the
+	// scheduler is created; the atomic pointer lets the reflection goroutine
+	// resolve the live scheduler race-free once daemon wiring assigns it.
+	var cronSchedulerRef atomic.Pointer[cron.Scheduler]
+
 	ag = agent.NewAgent(prov, registry, systemPrompt, cfg.MaxIterations)
 
 	core.SetConfigAgent(ag)
@@ -344,7 +351,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			debug.Log("daemon", "Knight scenario record failed: %v", scenarioErr)
 		}
 	})
-	setupDaemonReflection(ag, workingDir)
+	setupDaemonReflection(ag, workingDir, cronSchedulerRef.Load)
 	agentruntime.ApplyResolvedLimitsToAgent(ag, resolved)
 	agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
@@ -579,6 +586,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			{Type: "text", Text: prompt},
 		})
 	})
+	// Publish the scheduler to the run-completion reflection path (#5530)
+	// so completed rounds report their produced-diff outcome.
+	cronSchedulerRef.Store(cronScheduler)
 	agentruntime.RegisterCronTools(registry, cronScheduler)
 
 	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)

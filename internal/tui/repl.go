@@ -1307,6 +1307,12 @@ type cronPromptMsg struct {
 	QueueIfBusy bool
 }
 
+// docSyncReminderSuffix is the documentation-sync reminder withDocSyncReminder
+// appends to prompts lacking doc-related keywords. Declared as a constant so
+// the cron outcome correlation (#5530) can strip the exact decoration and
+// recover the raw prompt a run was started with.
+const docSyncReminderSuffix = "\n\n[Reminder] If this task involves code changes, update related documentation (docs/guide/, README.md, docs/design/) to keep them in sync."
+
 func withDocSyncReminder(prompt string) string {
 	lower := strings.ToLower(prompt)
 
@@ -1315,7 +1321,18 @@ func withDocSyncReminder(prompt string) string {
 			return prompt
 		}
 	}
-	return prompt + "\n\n[Reminder] If this task involves code changes, update related documentation (docs/guide/, README.md, docs/design/) to keep them in sync."
+	return prompt + docSyncReminderSuffix
+}
+
+// stripDocSyncReminder inverts withDocSyncReminder: it removes the exact
+// reminder suffix when present so the raw prompt (e.g. a cron job's prompt)
+// can be correlated back to its originating job by exact match (#5530).
+// Prompts without the suffix are returned unchanged.
+func stripDocSyncReminder(prompt string) string {
+	if strings.HasSuffix(prompt, docSyncReminderSuffix) {
+		return strings.TrimSuffix(prompt, docSyncReminderSuffix)
+	}
+	return prompt
 }
 
 func (r *REPL) Run() error {

@@ -8,12 +8,22 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-func setupReflection(a *agent.Agent) {
+func setupReflection(a *agent.Agent, cronSchedulerFn func() *cron.Scheduler) {
 	a.SetReflectionFunc(func(stats agent.RunStats) {
+		// Cron no-diff terminal-state wiring (#5530): report every completed
+		// run's produced-diff signal before the ShouldReflect gate - an idle
+		// no-op round (no tool calls, no edits) is exactly the shape that gate
+		// skips and the guard exists to detect. Cron prompts are submitted
+		// with the doc-sync reminder appended, so the decoration is stripped
+		// before the exact-prompt match.
+		agentruntime.ReportCronRunOutcome(cronSchedulerFn, stats, stripDocSyncReminder)
+
 		if !agent.ShouldReflect(stats) {
 			return
 		}
