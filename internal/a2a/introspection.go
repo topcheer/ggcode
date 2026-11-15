@@ -133,6 +133,18 @@ type RuntimeActivity struct {
 	Files      []RuntimeFileTouch     `json:"files,omitempty"`
 	NextCursor string                 `json:"next_cursor,omitempty"`
 	Truncated  bool                   `json:"truncated,omitempty"`
+	// Stats: aggregate health of the sampled window (tool failure rate,
+	// retry chains) so a peer judges seat health without reading raw
+	// events (#5657-followup plan item 5).
+	Stats *RuntimeActivityStats `json:"stats,omitempty"`
+}
+
+// RuntimeActivityStats aggregates the sampled activity window.
+type RuntimeActivityStats struct {
+	ToolCalls    int     `json:"tool_calls"`
+	ToolFailures int     `json:"tool_failures"`
+	FailurePct   float64 `json:"failure_pct"`
+	RetryChains  int     `json:"retry_chains"` // consecutive same-tool error events
 }
 
 // RuntimeSubagent is a running sub-agent (children face; #5589 data in P2).
@@ -184,6 +196,10 @@ type RuntimeCron struct {
 	Cron     string `json:"cron,omitempty"`
 	NextFire string `json:"next_fire,omitempty"`
 	Prompt   string `json:"prompt,omitempty"`
+	// Health block (#5657-followup item 6): did the job actually fire?
+	LastFire    string `json:"last_fire,omitempty"`
+	FireCount   int    `json:"fire_count,omitempty"`
+	MissedCount int    `json:"missed_count,omitempty"`
 }
 
 // RuntimeTodo is one task-board entry.

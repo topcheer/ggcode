@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
@@ -71,5 +72,28 @@ func TestActivityFromRing_ReadsLiveDebugRing(t *testing.T) {
 	}
 	if !hit || len(events) == 0 {
 		t.Fatalf("mapped %d events from ring, mapping appears broken", len(events))
+	}
+}
+
+// Activity face stats block (#5657-followup item 5): failure rate and
+// same-tool consecutive-error retry chains, aggregated over the sampled
+// window.
+func TestActivityStatsFromEvents(t *testing.T) {
+	events := []a2a.RuntimeActivityEvent{
+		{Tool: "read_file", OK: true},
+		{Tool: "run_command", OK: false},
+		{Tool: "run_command", OK: false}, // same-tool consecutive error = retry chain
+		{Tool: "read_file", OK: true},    // resets the chain
+		{Tool: "edit_file", OK: true},
+	}
+	st := ActivityStatsFromEvents(events)
+	if st.ToolCalls != 5 || st.ToolFailures != 2 {
+		t.Fatalf("calls/failures = %d/%d, want 5/2", st.ToolCalls, st.ToolFailures)
+	}
+	if st.FailurePct != 40 {
+		t.Fatalf("FailurePct = %v, want 40", st.FailurePct)
+	}
+	if st.RetryChains != 1 {
+		t.Fatalf("RetryChains = %d, want 1 (only the consecutive same-tool pair)", st.RetryChains)
 	}
 }

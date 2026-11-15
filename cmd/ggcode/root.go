@@ -1231,6 +1231,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 				if !j.NextFire.IsZero() {
 					rc.NextFire = j.NextFire.UTC().Format(time.RFC3339)
 				}
+				// #5657-followup item 6: fire health so peers can tell a
+				// live schedule from a silently dead one.
+				if !j.LastFire.IsZero() {
+					rc.LastFire = j.LastFire.UTC().Format(time.RFC3339)
+				}
+				rc.FireCount = j.FireCount
+				rc.MissedCount = j.MissedCount
 				sch.Crons = append(sch.Crons, rc)
 			}
 			if m := repl.TaskManager(); m != nil {

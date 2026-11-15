@@ -27,6 +27,11 @@ type Job struct {
 	CreatedAt   time.Time
 	NextFire    time.Time
 	Paused      bool
+	// Fire outcome bookkeeping (#5657-followup item 6): schedule-face
+	// health block - peers see whether a job actually fires.
+	LastFire    time.Time `json:"last_fire,omitempty"`
+	FireCount   int       `json:"fire_count,omitempty"`
+	MissedCount int       `json:"missed_count,omitempty"`
 	// Persist marks a non-recurring job as durable across process restarts
 	// (persisted with an explicit NextFire and re-adopted on Load while still
 	// in the future). Zero-value false keeps ordinary one-shots volatile,
@@ -161,10 +166,12 @@ func (s *Scheduler) patrolCheck() {
 				continue
 			}
 			debug.Log("cron", "patrol: missed fire detected for %s, rescheduled to %s", id, next.Format(time.RFC3339))
+			job.MissedCount++
 			job.NextFire = next
 			s.scheduleJobLocked(job)
 		} else {
 			debug.Log("cron", "patrol: missed one-shot fire for %s, firing now", id)
+			job.MissedCount++
 			job.NextFire = now
 			s.scheduleJobLocked(job)
 		}
@@ -929,7 +936,10 @@ func (s *Scheduler) fireJob(job *Job, gen uint64) {
 	}
 	prompt := job.Prompt
 	queueIfBusy := job.QueueIfBusy
-	s.lastEnqueue[job.ID] = time.Now()
+	now := time.Now()
+	s.lastEnqueue[job.ID] = now
+	job.LastFire = now
+	job.FireCount++
 	s.mu.Unlock()
 
 	s.enqueue(prompt, queueIfBusy)

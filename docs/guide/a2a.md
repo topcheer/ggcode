@@ -269,6 +269,11 @@ domain even across hosts; without this the gate was 0% usable on
 multi-host LANs), otherwise the caller's endpoint must resolve in the
 local mDNS roster to an instance of the SAME workspace, else -32003).
 
+- Schedule face crons carry last_fire/fire_count/missed_count so a peer can
+  tell a live schedule from a silently dead one (#5657 followup item 6);
+  the activity face carries an aggregate stats block (tool_calls,
+  tool_failures, failure_pct, retry_chains) over the sampled window.
+
 - Faces: status (busy/goal/model/iteration/tokens_in/tokens_out/
   context_pct, live from the agent's run snapshot, #5635 P2) /
   (status also carries goal_progress - has_goal/strategist_calls/no_progress_streak -
