@@ -19,6 +19,7 @@ import (
 	grpcplugin "github.com/topcheer/ggcode/internal/plugin/grpc"
 	"github.com/topcheer/ggcode/internal/safego"
 
+	"github.com/topcheer/ggcode/internal/memreclaim"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
@@ -124,6 +125,9 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		idxMgr.SetSelfProbe(func() bool { return sessionidxd.ProbeAlive(home) })
 		registry.SetSessionIndex(idxMgr)
 		safego.Go("agentruntime.sessionidxStart", idxMgr.Start)
+		// #5682: return freed heap to the OS on a slow conditional cadence
+		// (MADV_FREE pages otherwise pin RSS far above heap in-use).
+		memreclaim.Start()
 
 		// Shared-index host (#5149, single-binary constraint): the FIRST
 		// interactive instance binds the transport and serves sibling
