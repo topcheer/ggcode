@@ -83,7 +83,10 @@ func Start() (stop func()) {
 			case <-done:
 				return
 			case <-t.C:
-				if idleSpanBytes() >= threshold {
+				var ms runtime.MemStats
+				(*statsFn.Load())(&ms)
+				writeStatsLine(&ms, false) // #5682 stats: no-op unless GGCODE_MEM_SAMPLE=1
+				if idleOf(&ms) >= threshold {
 					debug.Log("memreclaim", "reclaim: idle spans over threshold, forcing FreeOSMemory")
 					(*forceFn.Load())()
 				}
@@ -98,6 +101,10 @@ func Start() (stop func()) {
 func idleSpanBytes() uint64 {
 	var ms runtime.MemStats
 	(*statsFn.Load())(&ms)
+	return idleOf(&ms)
+}
+
+func idleOf(ms *runtime.MemStats) uint64 {
 	if ms.HeapIdle > ms.HeapInuse {
 		return ms.HeapIdle - ms.HeapInuse
 	}

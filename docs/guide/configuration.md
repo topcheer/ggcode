@@ -459,6 +459,9 @@ memory:
 | `GGCODE_CHAT_MAX_ITEMS` | Chat-list watermark: max rendered items kept in the TUI scrollback before the oldest are trimmed to 75% (default `250`). Full transcripts stay on disk (session JSONL). Raise it (e.g. `2000`) for longer visual scrollback at the cost of memory |
 | `GGCODE_MEMRECLAIM_INTERVAL` | Seconds between conditional heap-to-OS reclaim passes (default `1800`). Each tick calls `debug.FreeOSMemory()` only when idle spans exceed the threshold, shrinking RSS that MADV_FREE would otherwise pin. `0` disables (#5682) |
 | `GGCODE_MEMRECLAIM_THRESHOLD` | Idle-span bytes that must accumulate before a reclaim fires (default `536870912` = 512MB; floor 64MB). Below it, ticks are no-ops |
+| `GGCODE_MEM_SAMPLE` | Memory sampling with variable-level detail: `1`/`true` (or creating the marker file `~/.ggcode/mem-sample`) makes each reclaim tick append one JSONL record to `~/.ggcode/memstats-<pid>.jsonl` — MemStats summary plus the top-10 heap consumers aggregated by allocation site (in-use bytes + live objects per site). Default off |
+| `GGCODE_MEM_SAMPLE_TOP` | Number of top allocation sites kept per sampling record (default `10`) |
+| `GGCODE_MEM_SAMPLE_JSONL_DIR` | Directory for the sampling JSONL records (default `~/.ggcode`) |
 | `GGCODE_TOOL_TAPE` | Deterministic tool-call cassette: `record:<path>` or `replay:<path>` (JSONL). Replay misses fail closed — never a silent live call |
 | `GGCODE_LLM_TAPE` | LLM response cassette: `record:<path>` or `replay:<path>` (JSONL). Set together with `GGCODE_TOOL_TAPE` to reproduce a full trajectory offline with zero network calls |
 | `GGCODE_LLM_FAULT` | Deterministic LLM fault injection for agent chaos testing (sa-65): comma-separated `<kind>@<call>` directives with 1-based call index; kinds `crash`, `omit-tool`, `omit-content`, `value-args`, `value-text`. Pairs with `GGCODE_LLM_TAPE=replay:<path>` to test resilience mechanisms offline; invalid directives are skipped |
