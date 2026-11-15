@@ -155,7 +155,7 @@ func TestIssue5597_WorkspaceGate(t *testing.T) {
 func TestIssue5597_ClientRoundTrip(t *testing.T) {
 	ts := newV3Server(nil)
 	defer ts.Close()
-	snap, err := IntrospectPeerV3(context.Background(), ts.URL, "", SnapshotRequest{Depth: DepthFull})
+	snap, err := IntrospectPeerV3(context.Background(), ts.URL, "", "", SnapshotRequest{Depth: DepthFull})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,5 +214,21 @@ func TestIssue5605_RosterFileWarmFallback(t *testing.T) {
 	RosterRemove(dir, "a1")
 	if got = ReadRoster(dir, "me"); len(got) != 1 || got[0].ID != "a2" {
 		t.Fatalf("remove broke roster: %+v", got)
+	}
+}
+
+// #5655: the declared-workspace arm - a cross-host caller that self-declares
+// the same workspace path passes even when the roster reverse-lookup cannot
+// see it (multi-host LAN: the tool path was 0% usable without this).
+func TestWorkspaceGateDeclaredWorkspaceArm(t *testing.T) {
+	roster := []InstanceInfo{{Workspace: "/other", Endpoint: "http://192.168.1.50:9700"}}
+	if !WorkspaceGateDecisionWithDecl("192.168.1.99:5555", "/w", roster, "/w") {
+		t.Error("same-workspace declaration must pass regardless of roster/host")
+	}
+	if WorkspaceGateDecisionWithDecl("192.168.1.99:5555", "/other", roster, "/w") {
+		t.Error("mismatched declaration must not pass")
+	}
+	if WorkspaceGateDecisionWithDecl("192.168.1.99:5555", "", roster, "/w") {
+		t.Error("empty declaration falls back to roster lookup and must fail here")
 	}
 }
