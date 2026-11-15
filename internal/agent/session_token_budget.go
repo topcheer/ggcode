@@ -179,3 +179,15 @@ func (s *sessionTokenBudgetState) checkLocked() (string, bool) {
 
 	return "", false
 }
+
+// SessionTokenUsed returns tokens consumed against the session budget
+// (including delegated sub-agent spend), for the status face's budget_pct.
+func (a *Agent) SessionTokenUsed() int64 {
+	if a == nil {
+		return 0
+	}
+	st := sessionTokenBudgetStateFor(a)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.used + st.delegatedUsed
+}

@@ -73,6 +73,19 @@ type RuntimeStatus struct {
 	TokensIn   int64   `json:"tokens_in,omitempty"`
 	TokensOut  int64   `json:"tokens_out,omitempty"`
 	ContextPct float64 `json:"context_pct,omitempty"`
+	// GoalProgress: autopilot progress signals so a PEER can tell
+	// "winding down" from "stuck" without reading the goal text.
+	GoalProgress *RuntimeGoalProgress `json:"goal_progress,omitempty"`
+	// BudgetPct: session token budget usage (0 when unbudgeted) - lets
+	// peers avoid dispatching work to a seat about to hit its limit.
+	BudgetPct float64 `json:"budget_pct,omitempty"`
+}
+
+// RuntimeGoalProgress is the autopilot health block of the status face.
+type RuntimeGoalProgress struct {
+	HasGoal       bool `json:"has_goal"`
+	StrategistRun int  `json:"strategist_calls"`
+	NoProgressRun int  `json:"no_progress_streak"`
 }
 
 // RuntimeInflight is face 2: what is executing RIGHT NOW. P2 scope:
@@ -193,11 +206,14 @@ type RuntimeEnvService struct {
 }
 
 type RuntimeEnv struct {
-	Workspace  string              `json:"workspace,omitempty"`
-	Branch     string              `json:"branch,omitempty"`
-	Head       string              `json:"head,omitempty"`
-	DirtyFiles int                 `json:"dirty_files,omitempty"`
-	Provider   string              `json:"provider,omitempty"`
+	Workspace  string `json:"workspace,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+	Head       string `json:"head,omitempty"`
+	DirtyFiles int    `json:"dirty_files,omitempty"`
+	Provider   string `json:"provider,omitempty"`
+	// MemoryKeys: auto-saved memory keys (index only, bodies stay local;
+	// peers see what the agent remembers, not the content itself).
+	MemoryKeys []string            `json:"memory_keys,omitempty"`
 	MCPServers []RuntimeEnvService `json:"mcp_servers,omitempty"`
 	IMAdapters []RuntimeEnvService `json:"im_adapters,omitempty"`
 	Skills     []RuntimeEnvService `json:"skills,omitempty"`

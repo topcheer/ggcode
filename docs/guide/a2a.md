@@ -271,6 +271,9 @@ local mDNS roster to an instance of the SAME workspace, else -32003).
 
 - Faces: status (busy/goal/model/iteration/tokens_in/tokens_out/
   context_pct, live from the agent's run snapshot, #5635 P2) /
+  (status also carries goal_progress - has_goal/strategist_calls/no_progress_streak -
+  and budget_pct session-budget headroom; env face lists memory_keys, the
+  auto-memory key index, #5657 followup) /
   inflight (main-agent current tool call, sub-agent fallback) /
   conversation
   (verbatim, default 20 turns, cursor pagination) / activity (recent

@@ -1212,6 +1212,16 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			st.TokensIn = rs.TokensIn
 			st.TokensOut = rs.TokensOut
 			st.ContextPct = rs.ContextPct
+			// goal_progress block: autopilot health so peers can tell
+			// "winding down" from "stuck" without reading the goal text.
+			st.GoalProgress = &a2a.RuntimeGoalProgress{
+				HasGoal:       rs.Goal != "",
+				StrategistRun: rs.StrategistCalls,
+				NoProgressRun: rs.NoProgressStreak,
+			}
+			if rs.BudgetTotal > 0 {
+				st.BudgetPct = float64(rs.BudgetUsed) / float64(rs.BudgetTotal) * 100
+			}
 			return st
 		}
 		scheduleFace := func() *a2a.RuntimeSchedule {
@@ -1283,6 +1293,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			ev.Head = gitOut("rev-parse", "--short", "HEAD")
 			if st := gitOut("status", "--porcelain"); st != "" {
 				ev.DirtyFiles = len(strings.Fields(st))
+			}
+			// Memory index (keys only): what this agent remembers, for
+			// cross-seat knowledge reuse without exposing content.
+			if autoMem != nil {
+				if keys, kerr := autoMem.List(); kerr == nil {
+					ev.MemoryKeys = keys
+				}
 			}
 			// #5635 P2: mounted skills are peer-visible runtime state too
 			// (knight index, same truth the webui status panel reports).
