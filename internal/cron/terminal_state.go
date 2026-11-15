@@ -96,3 +96,22 @@ func (s *Scheduler) JobIDForPrompt(prompt string) string {
 	sort.Strings(ids)
 	return ids[0]
 }
+
+// RecordRunOutcome closes the production loop for the terminal-state guard
+// (#5273/#5530): a completed run reports the prompt it executed and whether
+// it produced a diff. The prompt is correlated back to its originating job
+// by exact match (JobIDForPrompt); runs that match no job - ordinary user
+// prompts - are ignored, so callers can invoke this unconditionally from
+// their run-completion path. Returns the matched job ID ("" when the run
+// matched no cron job or the outcome could not be recorded).
+func (s *Scheduler) RecordRunOutcome(prompt string, producedDiff bool) string {
+	id := s.JobIDForPrompt(prompt)
+	if id == "" {
+		return ""
+	}
+	if err := s.RecordFireOutcome(id, producedDiff); err != nil {
+		debug.Log("cron", "RecordRunOutcome: job %s: %v", id, err)
+		return ""
+	}
+	return id
+}

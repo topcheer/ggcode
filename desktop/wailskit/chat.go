@@ -199,6 +199,16 @@ func (b *ChatBridge) WorkingDir() string {
 	return b.workingDir
 }
 
+// cronSchedulerLive resolves the live cron scheduler for run-completion
+// consumers (#5530): the reflection callback correlates a finished run back
+// to its originating cron job and reports the produced-diff outcome.
+func (b *ChatBridge) cronSchedulerLive() *cron.Scheduler {
+	b.mu.Lock()
+	s := b.cronScheduler
+	b.mu.Unlock()
+	return s
+}
+
 func (b *ChatBridge) GetTunnelHost() *agentruntime.TunnelHost {
 	b.mu.Lock()
 	th := b.tunnelHost
@@ -1640,7 +1650,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	a.SetHookConfig(b.cfg.Hooks)
 
 	if b.workingDir != "" {
-		a.SetReflectionFunc(buildReflectionFunc(b.workingDir))
+		a.SetReflectionFunc(buildReflectionFunc(b.workingDir, b.cronSchedulerLive))
 	}
 
 	a.SetUsageHandler(func(usage provider.TokenUsage) {

@@ -2,12 +2,20 @@ package main
 
 import (
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-func setupDaemonReflection(ag *agent.Agent, workingDir string) {
+func setupDaemonReflection(ag *agent.Agent, workingDir string, cronSchedulerFn func() *cron.Scheduler) {
 	ag.SetReflectionFunc(func(stats agent.RunStats) {
+		// Cron no-diff terminal-state wiring (#5530), daemon face: the daemon
+		// submits cron prompts verbatim, so the run prompt is the exact job
+		// prompt. Reports before the ShouldReflect gate so idle no-op rounds
+		// still count toward the streak.
+		agentruntime.ReportCronRunOutcome(cronSchedulerFn, stats, nil)
+
 		if !agent.ShouldReflect(stats) {
 			return
 		}

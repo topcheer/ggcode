@@ -91,6 +91,34 @@ func (s *modeLiveState) get() (mode permission.PermissionMode, ok bool) {
 	return s.mode, true
 }
 
+// cronOutcomeState is the cross-copy holder for the live cron scheduler
+// (#5530): the agent-level reflection callback that reports run outcomes is
+// registered in NewModel, before the REPL assigns the scheduler, and every
+// Model value copy must resolve the same slot. Nil-safe throughout so bare
+// Model literals keep working.
+type cronOutcomeState struct {
+	mu    sync.Mutex
+	sched *cron.Scheduler
+}
+
+func (s *cronOutcomeState) set(sched *cron.Scheduler) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.sched = sched
+	s.mu.Unlock()
+}
+
+func (s *cronOutcomeState) get() *cron.Scheduler {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sched
+}
+
 type tunnelShareLiveState struct {
 	mu      sync.Mutex
 	session *tunnel.Session
@@ -193,6 +221,7 @@ type Model struct {
 	chatList                *chat.List
 	chatStyles              chat.Styles
 	cronScheduler           *cron.Scheduler
+	cronOutcome             *cronOutcomeState
 	taskMgr                 *task.Manager
 	resumeNote              *resumeNoteStore
 	lastQueuedChatID        string
@@ -654,6 +683,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		pending:                &pendingQueue{},
 		sessionMu:              &sync.Mutex{},
 		imRuntimeState:         &imRuntimeState{},
+		cronOutcome:            &cronOutcomeState{},
 		a2aEventState:          &a2aEventBufferState{},
 		tunnelMainStream:       &tunnelMainStreamState{},
 		tunnelShareBootstrap:   &tunnelShareBootstrapState{},
@@ -670,7 +700,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	}
 
 	if a != nil {
-		setupReflection(a)
+		setupReflection(a, m.cronSchedulerLive)
 	}
 
 	// Shared live share-face store: initialized exactly once here so every
@@ -963,6 +993,20 @@ func (m *Model) applyProbeResult(r provider.ProbeResult) {
 
 func (m *Model) SetCronScheduler(s *cron.Scheduler) {
 	m.cronScheduler = s
+	if m.cronOutcome == nil {
+		m.cronOutcome = &cronOutcomeState{}
+	}
+	m.cronOutcome.set(s)
+}
+
+// cronSchedulerLive resolves the live cron scheduler through the cross-copy
+// holder for run-completion consumers registered before the scheduler was
+// assigned (#5530). Nil-safe: a bare Model literal reports no scheduler.
+func (m *Model) cronSchedulerLive() *cron.Scheduler {
+	if m == nil || m.cronOutcome == nil {
+		return nil
+	}
+	return m.cronOutcome.get()
 }
 
 func (m *Model) SetSessionCreatedCallback(cb func(sessionID string)) {

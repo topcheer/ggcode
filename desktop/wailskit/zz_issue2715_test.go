@@ -57,7 +57,7 @@ func TestIssue2715ReflectionDoesNotIngestUnrelatedMemories(t *testing.T) {
 		t.Fatalf("seed run-insights: %v", err)
 	}
 
-	buildReflectionFunc(tmp)(issue2715Stats())
+	buildReflectionFunc(tmp, nil)(issue2715Stats())
 
 	got, err := am.LoadKey("run-insights")
 	if err != nil {
@@ -88,7 +88,7 @@ func TestIssue2715ReflectionFirstWriteRecordsProvenance(t *testing.T) {
 		t.Fatalf("seed api-gotcha: %v", err)
 	}
 
-	buildReflectionFunc(tmp)(issue2715Stats())
+	buildReflectionFunc(tmp, nil)(issue2715Stats())
 
 	got, err := am.LoadKey("run-insights")
 	if err != nil {
@@ -118,7 +118,7 @@ func TestIssue2715ReflectionAbortsSaveOnLoadError(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
 
-	buildReflectionFunc(tmp)(issue2715Stats())
+	buildReflectionFunc(tmp, nil)(issue2715Stats())
 
 	if _, err := am.LoadKey("run-insights"); err == nil {
 		t.Skip("load unexpectedly succeeded (running as root); cannot verify error path")
