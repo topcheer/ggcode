@@ -221,6 +221,15 @@ func FormatSnapshotV3(target, workspace string, s *RuntimeSnapshotV3) string {
 		}
 		b.WriteString(fmt.Sprintf("status: %s | model=%s goal=%q iter=%d tokens=%d/%d ctx=%.0f%%\n",
 			busy, st.Model, st.Goal, st.Iteration, st.TokensIn, st.TokensOut, st.ContextPct))
+		// G1 (#5672 followup): render the autopilot health + budget signals
+		// the server already assembles (peer judges winding-down vs stuck).
+		if st.GoalProgress != nil {
+			b.WriteString(fmt.Sprintf("  goal_progress: has_goal=%v strategist_calls=%d no_progress_streak=%d\n",
+				st.GoalProgress.HasGoal, st.GoalProgress.StrategistRun, st.GoalProgress.NoProgressRun))
+		}
+		if st.BudgetPct > 0 {
+			b.WriteString(fmt.Sprintf("  budget_pct: %.1f%% (session budget incl. delegated)\n", st.BudgetPct))
+		}
 	}
 	if s.Inflight != nil {
 		b.WriteString(fmt.Sprintf("inflight: tool=%s params=%s started=%s pendingApprovals=%d\n",
@@ -291,10 +300,14 @@ func FormatSnapshotV3(target, workspace string, s *RuntimeSnapshotV3) string {
 	if s.Env != nil {
 		b.WriteString(fmt.Sprintf("env: workspace=%s branch=%s head=%s dirty=%d provider=%s\n",
 			s.Env.Workspace, s.Env.Branch, s.Env.Head, s.Env.DirtyFiles, s.Env.Provider))
+		// G1: memory key index (names only, bodies stay local).
+		if len(s.Env.MemoryKeys) > 0 {
+			b.WriteString(fmt.Sprintf("  memory_keys: %s\n", strings.Join(s.Env.MemoryKeys, ", ")))
+		}
 	}
 	if s.Plan != nil {
-		b.WriteString(fmt.Sprintf("plan: %d todos, %d goal nodes, %d board tasks\n",
-			len(s.Plan.Todos), len(s.Plan.GoalNodes), len(s.Plan.Tasks)))
+		b.WriteString(fmt.Sprintf("plan: %d todos, %d goal nodes, %d board tasks, %d teams\n",
+			len(s.Plan.Todos), len(s.Plan.GoalNodes), len(s.Plan.Tasks), len(s.Plan.Teams)))
 		for i, t := range s.Plan.Todos {
 			if i >= 10 {
 				b.WriteString("  ... (todo render cap)\n")
@@ -321,6 +334,23 @@ func FormatSnapshotV3(target, workspace string, s *RuntimeSnapshotV3) string {
 			b.WriteString(fmt.Sprintf("  task [%s] %s", tk.Status, tk.Subject))
 			if tk.Owner != "" {
 				b.WriteString(fmt.Sprintf(" (owner=%s)", tk.Owner))
+			}
+			b.WriteString("\n")
+		}
+		for i, tm := range s.Plan.Teams {
+			if i >= 10 {
+				b.WriteString("  ... (team render cap)\n")
+				break
+			}
+			b.WriteString(fmt.Sprintf("  team %s (leader=%s tasks=%d members=%d)", tm.Name, tm.LeaderID, tm.TaskCount, len(tm.Members)))
+			if s.Depth == DepthBrief {
+				for j, m := range tm.Members {
+					if j >= 5 {
+						b.WriteString(" ...")
+						break
+					}
+					b.WriteString(fmt.Sprintf(" %s:%s", m.Nick, m.State))
+				}
 			}
 			b.WriteString("\n")
 		}
