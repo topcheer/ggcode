@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +66,16 @@ const (
 	DefaultSelfLimitBytes     = 500 << 20 // 500MB
 	DefaultExternalLimitBytes = 200 << 20 // 200MB
 	DefaultRefreshEvery       = 30 * time.Minute
+
+	// DefaultTotalBudget caps the DECODED external index heap per instance.
+	// Historically 0 (unbounded) for plain instances - the exemption let any
+	// self-sufficient instance (no live shared host) or a follower that once
+	// served as host decode the whole workspace idx set (~5.3GB on this
+	// machine) and hold the amplified heap forever: #5149 measured a single
+	// 547MB idx decoding to 2-3GB. 256MB keeps cross-session recall fast
+	// while bounding every non-host instance; the shared host raises it via
+	// SetTotalBudget. Override with GGCODE_SESSIONIDX_TOTAL_BUDGET (bytes).
+	DefaultTotalBudgetBytes = 256 << 20 // 256MB decoded-external cap
 )
 
 func NewManager(sessionsDir, liveSessionID string) *Manager {
@@ -74,11 +85,24 @@ func NewManager(sessionsDir, liveSessionID string) *Manager {
 		selfLimitBytes: DefaultSelfLimitBytes,
 		externalLimit:  DefaultExternalLimitBytes,
 		refreshEvery:   DefaultRefreshEvery,
+		totalBudget:    DefaultTotalBudget(),
 		external:       map[string]*extEntry{},
 		wsActive:       map[string]time.Time{},
 		idleUnload:     DefaultWsIdleUnload,
 		stop:           make(chan struct{}),
 	}
+}
+
+// DefaultTotalBudget is the per-instance decoded-external heap cap. Env
+// override GGCODE_SESSIONIDX_TOTAL_BUDGET (bytes, >0); 0 disables the cap
+// (historical behavior) and is only sensible for the shared host.
+func DefaultTotalBudget() int64 {
+	if v := os.Getenv("GGCODE_SESSIONIDX_TOTAL_BUDGET"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return DefaultTotalBudgetBytes
 }
 
 // SetLiveID binds (or rebinds) this instance's own session id and makes
