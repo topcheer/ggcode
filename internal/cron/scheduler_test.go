@@ -471,3 +471,22 @@ func boolStr(b bool) string {
 	}
 	return "false"
 }
+
+// #5657-followup item 6: one-shot fire path executes the bookkeeping
+// segment (enqueue happens => LastFire/FireCount were recorded on the
+// job under the same lock before the one-shot self-removes).
+func TestJobFireBookkeeping(t *testing.T) {
+	var fired atomic.Int32
+	s := NewScheduler(func(prompt string, queueIfBusy bool) { fired.Add(1) }, filepath.Join(t.TempDir(), "jobs.json"))
+	if _, err := s.CreateOneShotAt(time.Now().Add(50*time.Millisecond), "tick", false); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if fired.Load() >= 1 {
+			return // fire path ran: enqueue + bookkeeping under the same lock
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("one-shot never fired (enqueue callback not reached)")
+}
