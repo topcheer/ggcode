@@ -193,11 +193,14 @@ type RuntimeEnvService struct {
 }
 
 type RuntimeEnv struct {
-	Workspace  string              `json:"workspace,omitempty"`
-	Branch     string              `json:"branch,omitempty"`
-	Head       string              `json:"head,omitempty"`
-	DirtyFiles int                 `json:"dirty_files,omitempty"`
-	Provider   string              `json:"provider,omitempty"`
+	Workspace  string `json:"workspace,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+	Head       string `json:"head,omitempty"`
+	DirtyFiles int    `json:"dirty_files,omitempty"`
+	Provider   string `json:"provider,omitempty"`
+	// MemoryKeys: auto-saved memory keys (index only, bodies stay local;
+	// peers see what the agent remembers, not the content itself).
+	MemoryKeys []string            `json:"memory_keys,omitempty"`
 	MCPServers []RuntimeEnvService `json:"mcp_servers,omitempty"`
 	IMAdapters []RuntimeEnvService `json:"im_adapters,omitempty"`
 	Skills     []RuntimeEnvService `json:"skills,omitempty"`

@@ -1284,6 +1284,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			if st := gitOut("status", "--porcelain"); st != "" {
 				ev.DirtyFiles = len(strings.Fields(st))
 			}
+			// Memory index (keys only): what this agent remembers, for
+			// cross-seat knowledge reuse without exposing content.
+			if autoMem != nil {
+				if keys, kerr := autoMem.List(); kerr == nil {
+					ev.MemoryKeys = keys
+				}
+			}
 			// #5635 P2: mounted skills are peer-visible runtime state too
 			// (knight index, same truth the webui status panel reports).
 			if knightAgent != nil {
