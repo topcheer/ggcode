@@ -1,11 +1,18 @@
 package chat
 
 import (
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 )
 
-const DefaultMaxItems = 2000
+// DefaultMaxItems is the chat-list watermark. 250 keeps the rendered-item
+// heap bounded (items hold full tool-result text plus a render cache copy)
+// while still giving several screens of scrollback; full transcripts stay
+// on disk (session JSONL) and in the LLM context window. Override with
+// GGCODE_CHAT_MAX_ITEMS; 0/negative falls back to the default.
+const DefaultMaxItems = 250
 
 type List struct {
 	mu         sync.RWMutex
@@ -24,8 +31,19 @@ func NewList(width, height int) *List {
 		width:    width,
 		height:   height,
 		follow:   true,
-		maxItems: DefaultMaxItems,
+		maxItems: defaultMaxItems(),
 	}
+}
+
+// defaultMaxItems resolves the watermark: GGCODE_CHAT_MAX_ITEMS wins,
+// otherwise DefaultMaxItems.
+func defaultMaxItems() int {
+	if v := os.Getenv("GGCODE_CHAT_MAX_ITEMS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return DefaultMaxItems
 }
 
 func (l *List) Append(items ...Item) {
