@@ -484,17 +484,46 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 			sb.WriteString(fmt.Sprintf("  WARNING: far-future one-shot accepted via far=true - next fire is %d days away; verify the expression before relying on it.\n", int(time.Until(job.NextFire).Hours()/24)))
 		}
 	}
-	promptPreview := job.Prompt
-	if len([]rune(promptPreview)) > 80 {
-		promptPreview = string([]rune(promptPreview)[:80]) + "..."
+	if preview := cronPromptPreviewLine(job.Prompt); preview != "" {
+		sb.WriteString(fmt.Sprintf("  Prompt: %s\n", preview))
 	}
-	for _, line := range strings.Split(promptPreview, "\n") {
-		if strings.TrimSpace(line) != "" {
-			sb.WriteString(fmt.Sprintf("  Prompt: %s\n", strings.TrimSpace(line)))
+	return Result{Content: sb.String()}, nil
+}
+
+// cronPromptPreviewLine renders a single-line preview of a job prompt for cron
+// tool results. Whenever any part of the prompt is not rendered (clamped
+// within the first line, or dropped trailing lines), an explicit marker with
+// the dropped-rune count is appended, so a rendered preview is always
+// distinguishable from the complete prompt (#5661: marker-less truncation
+// poisoned agents' verify loops).
+func cronPromptPreviewLine(prompt string) string {
+	lines := strings.Split(prompt, "\n")
+	first := ""
+	firstIdx := -1
+	for i, ln := range lines {
+		if strings.TrimSpace(ln) != "" {
+			first = ln
+			firstIdx = i
 			break
 		}
 	}
-	return Result{Content: sb.String()}, nil
+	if first == "" {
+		return ""
+	}
+	const maxPreview = 80
+	runes := []rune(first)
+	dropped := 0
+	if len(runes) > maxPreview {
+		dropped += len(runes) - maxPreview
+		first = string(runes[:maxPreview]) + "..."
+	}
+	for _, ln := range lines[firstIdx+1:] {
+		dropped += len([]rune(ln))
+	}
+	if dropped > 0 {
+		first = fmt.Sprintf("%s [+%d chars truncated]", first, dropped)
+	}
+	return first
 }
 
 type CronPauseTool struct {
