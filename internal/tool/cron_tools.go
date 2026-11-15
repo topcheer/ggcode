@@ -316,7 +316,10 @@ func (t CronDeleteTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: fmt.Sprintf("delete job %q: %v", args.JobID, err)}, nil
 	}
 	if !deleted {
-		return Result{IsError: true, Content: fmt.Sprintf("job %q not found", args.JobID)}, nil
+		// Idempotent delete (#5673): the job is already gone -- most commonly a
+		// one-shot job that fired and removed itself. Tolerate instead of
+		// erroring so management scripts re-cleaning expired jobs don't fail.
+		return Result{Content: fmt.Sprintf("Job %s already gone (nothing to delete; a one-shot job that already fired self-deletes). No action needed.\n", args.JobID)}, nil
 	}
 	return Result{Content: fmt.Sprintf("Job %s deleted\n", args.JobID)}, nil
 }

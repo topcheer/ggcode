@@ -162,12 +162,18 @@ func TestCronDeleteTool_NotFound(t *testing.T) {
 	defer s.Shutdown()
 	tool := CronDeleteTool{Scheduler: s}
 
+	// #5673: delete of an already-gone job is idempotent and tolerant — most
+	// commonly a one-shot job that fired and self-deleted. It must NOT be an
+	// error, and must explain why nothing needed deleting.
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"jobId":"nonexistent"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.IsError {
-		t.Error("expected error for nonexistent job")
+	if result.IsError {
+		t.Errorf("expected idempotent success for already-gone job, got error: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "already gone") {
+		t.Errorf("expected explanatory content, got: %s", result.Content)
 	}
 }
 
