@@ -94,6 +94,14 @@ func formatSubAgentSnapshot(snap subagent.Snapshot) string {
 	if snap.CurrentPhase != "" {
 		sb.WriteString(fmt.Sprintf("    Phase: %s\n", snap.CurrentPhase))
 	}
+	if snap.Status == subagent.StatusRunning {
+		switch {
+		case snap.ToolExecuting:
+			sb.WriteString(fmt.Sprintf("    Executing tool for %s\n", activityAge(snap.LastActivity, time.Now())))
+		case !snap.LastActivity.IsZero():
+			sb.WriteString(fmt.Sprintf("    Last activity %s ago\n", activityAge(snap.LastActivity, time.Now())))
+		}
+	}
 	if snap.Status == subagent.StatusCompleted && strings.TrimSpace(snap.Result) != "" {
 
 		sb.WriteString(fmt.Sprintf("    Result: %s\n", truncate(snap.Result, 200)))
@@ -113,6 +121,13 @@ func formatSubAgentDuration(snap subagent.Snapshot) string {
 		return fmt.Sprintf(" (%v)", snap.EndedAt.Sub(snap.StartedAt).Round(time.Second))
 	}
 	return fmt.Sprintf(" (%v)", time.Since(snap.StartedAt).Round(time.Second))
+}
+
+func activityAge(last, now time.Time) string {
+	if last.IsZero() {
+		return "unknown"
+	}
+	return now.Sub(last).Round(time.Second).String()
 }
 
 func firstNonEmptyNonSpace(values ...string) string {

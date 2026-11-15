@@ -557,6 +557,11 @@ func formatProgressSummary(snap Snapshot) string {
 	if snap.CurrentTool != "" {
 		sb.WriteString(fmt.Sprintf(" · %s", snap.CurrentTool))
 	}
+	if snap.ToolExecuting {
+		sb.WriteString(" (running)")
+	} else if !snap.LastActivity.IsZero() {
+		sb.WriteString(fmt.Sprintf(" (idle %s)", time.Since(snap.LastActivity).Round(time.Second)))
+	}
 	if snap.CurrentPhase != "" {
 		sb.WriteString(fmt.Sprintf(" · %s", snap.CurrentPhase))
 	}
