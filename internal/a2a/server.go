@@ -1219,6 +1219,18 @@ func normalizeResponseID(id json.RawMessage) json.RawMessage {
 // (lanchat hub, cron scheduler, task board) are up (#5575 phase 2).
 func (s *Server) SetIntrospectorV3(inst RuntimeIntrospectorV3) { s.introspectorV3 = inst }
 
+// WorkspaceGateDecisionWithDecl adds the #5655 declared-workspace arm:
+// a caller that self-declares the SAME workspace path as self is inside
+// the trust domain by the #5597 ruling (same workspace = trust domain,
+// regardless of host). The roster reverse-lookup stays as the arm for
+// callers that do not declare (older peers).
+func WorkspaceGateDecisionWithDecl(remoteAddr, declaredWorkspace string, roster []InstanceInfo, selfWorkspace string) bool {
+	if declaredWorkspace != "" && declaredWorkspace == selfWorkspace {
+		return true
+	}
+	return WorkspaceGateDecision(remoteAddr, roster, selfWorkspace)
+}
+
 // WorkspaceGateDecision implements the #5597/#5605A caller gate:
 // loopback source passes (same machine shares the physical .git
 // family); otherwise the caller host must match a roster endpoint whose

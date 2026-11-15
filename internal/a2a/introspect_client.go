@@ -14,7 +14,7 @@ import (
 // IntrospectPeerV3 requests a runtime/snapshot from a peer over the plain
 // A2A JSON-RPC transport (#5597 v3: no HMAC/nonce headers - identical trust
 // to message/send, the server's existing first gate applies).
-func IntrospectPeerV3(ctx context.Context, endpoint, apiKey string, req SnapshotRequest) (*RuntimeSnapshotV3, error) {
+func IntrospectPeerV3(ctx context.Context, endpoint, apiKey, selfWorkspace string, req SnapshotRequest) (*RuntimeSnapshotV3, error) {
 	if req.Depth == "" {
 		req.Depth = DepthFull
 	}
@@ -37,6 +37,11 @@ func IntrospectPeerV3(ctx context.Context, endpoint, apiKey string, req Snapshot
 		return nil, err
 	}
 	hreq.Header.Set("Content-Type", "application/json")
+	// #5655: self-declare the caller's workspace so the peer's gate can
+	// apply the same-workspace trust arm across hosts.
+	if selfWorkspace != "" {
+		hreq.Header.Set("X-Ggcode-Workspace", selfWorkspace)
+	}
 	if apiKey != "" {
 		hreq.Header.Set("X-API-Key", apiKey)
 	}
@@ -161,7 +166,7 @@ func (t *IntrospectTool) Execute(ctx context.Context, input json.RawMessage) (to
 			return tool.Result{Content: fmt.Sprintf("Invalid input: unknown category %q (want mounts|state|content)", params.Category), IsError: true}, nil
 		}
 	}
-	snap, err := IntrospectPeerV3(ctx, inst.Endpoint, t.apiKey, SnapshotRequest{
+	snap, err := IntrospectPeerV3(ctx, inst.Endpoint, t.apiKey, t.registry.SelfWorkspace(), SnapshotRequest{
 		Depth:      params.Depth,
 		Faces:      params.Faces,
 		Category:   params.Category,

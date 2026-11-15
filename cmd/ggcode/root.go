@@ -2068,7 +2068,11 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	// message/send keeps cross-workspace reach (a feature).
 	srv.SetWorkspaceGate(func(r *http.Request) bool {
 		// #5605 A: loopback arm + roster match - decision pinned in a2a.
-		return a2a.WorkspaceGateDecision(r.RemoteAddr, a2aReg.CachedInstances(), workingDir)
+		// #5655: declared-workspace arm first - same workspace path is the
+		// trust domain even across hosts (tool path was 0% usable on the
+		// multi-host LAN because the roster reverse-lookup never saw the
+		// remote caller).
+		return a2a.WorkspaceGateDecisionWithDecl(r.RemoteAddr, r.Header.Get("X-Ggcode-Workspace"), a2aReg.CachedInstances(), workingDir)
 	})
 
 	// #125/G3: explicit switch to refuse the unauthenticated loopback arm.

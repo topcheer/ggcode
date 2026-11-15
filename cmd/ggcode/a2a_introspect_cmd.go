@@ -106,7 +106,7 @@ func newA2AIntrospectCmd() *cobra.Command {
 				if !strings.Contains(endpoint, "://") {
 					endpoint = "http://" + endpoint
 				}
-				snap, err := a2a.IntrospectPeerV3(ctx, endpoint, apiKey, a2a.SnapshotRequest{Depth: depth, Faces: faces, Category: category})
+				snap, err := a2a.IntrospectPeerV3(ctx, endpoint, apiKey, func() string { wd, _ := os.Getwd(); return wd }(), a2a.SnapshotRequest{Depth: depth, Faces: faces, Category: category})
 				if err != nil {
 					return err
 				}
@@ -120,7 +120,7 @@ func newA2AIntrospectCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("seat %q not found in the discovered roster:\n%s\n(discovery: %v)", target, rosterLines(instances), derr)
 			}
-			snap, err := a2a.IntrospectPeerV3(ctx, inst.Endpoint, apiKey, a2a.SnapshotRequest{Depth: depth, Faces: faces, Category: category})
+			snap, err := a2a.IntrospectPeerV3(ctx, inst.Endpoint, apiKey, func() string { wd, _ := os.Getwd(); return wd }(), a2a.SnapshotRequest{Depth: depth, Faces: faces, Category: category})
 			if err != nil {
 				return err
 			}
