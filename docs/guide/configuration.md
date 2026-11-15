@@ -455,6 +455,8 @@ memory:
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `GGCODE_DEBUG` | Enable debug logging (`1` to enable) |
+| `GGCODE_SESSIONIDX_TOTAL_BUDGET` | Cap on the decoded sibling-session-index heap per instance, in bytes (default `268435456` = 256MB). `0` disables the cap — only sensible for the shared index host. Keeps non-host instances from holding multi-GB decoded indexes (#5149 amplification) |
+| `GGCODE_CHAT_MAX_ITEMS` | Chat-list watermark: max rendered items kept in the TUI scrollback before the oldest are trimmed to 75% (default `250`). Full transcripts stay on disk (session JSONL). Raise it (e.g. `2000`) for longer visual scrollback at the cost of memory |
 | `GGCODE_TOOL_TAPE` | Deterministic tool-call cassette: `record:<path>` or `replay:<path>` (JSONL). Replay misses fail closed — never a silent live call |
 | `GGCODE_LLM_TAPE` | LLM response cassette: `record:<path>` or `replay:<path>` (JSONL). Set together with `GGCODE_TOOL_TAPE` to reproduce a full trajectory offline with zero network calls |
 | `GGCODE_LLM_FAULT` | Deterministic LLM fault injection for agent chaos testing (sa-65): comma-separated `<kind>@<call>` directives with 1-based call index; kinds `crash`, `omit-tool`, `omit-content`, `value-args`, `value-text`. Pairs with `GGCODE_LLM_TAPE=replay:<path>` to test resilience mechanisms offline; invalid directives are skipped |
