@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/rand/v2"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -264,5 +265,18 @@ func TestRestartToolHaltOnlyOnSuccess(t *testing.T) {
 		if res.HaltAgent {
 			t.Errorf("%s: IsError result must not halt the agent loop", tc.name)
 		}
+	}
+}
+
+// dg-7/#5657-followup: fileRevision reads the exec target's embedded
+// vcs.revision so arm reports can show BOTH revisions.
+func TestFileRevisionReadsOwnBinary(t *testing.T) {
+	// The test binary is itself unstamped, which pins the unstamped
+	// contract: an unstamped or unreadable target reports "unknown".
+	if rev := fileRevision(os.Args[0]); rev != "unknown" {
+		t.Fatalf("fileRevision(test bin) = %q, want unknown (test binaries are unstamped)", rev)
+	}
+	if fileRevision("/nonexistent/binary") != "unknown" {
+		t.Fatal("missing file must report unknown")
 	}
 }
