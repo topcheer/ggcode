@@ -108,7 +108,16 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		"- If you catch yourself writing a summary while a known next step exists, execute that step instead of describing it."
 	// #5656: supervised is a silent default today - the agent gets NO mode
 	// guidance, guesses how autonomous it may be, and errs toward stopping.
-	if !mode.IsCruiseMode() {
+	// #5657 (QA follow-up): plan mode is NOT supervised - it denies explicit
+	// file-writing tools, so the supervised hint would be factually wrong
+	// there. Plan mode gets its own accurate section instead.
+	switch {
+	case mode == permission.PlanMode:
+		prompt += "\n\n## Current mode: plan\n" +
+			"- You are in plan mode: reads, searches, shell probes, and builds/tests flow without user confirmation. Explicit file-writing tools are DENIED until the mode changes.\n" +
+			"- Keep driving the whole investigation in this turn (phase-loop discipline applies): gather everything needed for a complete, executable plan - do not stop after each question to ask whether to continue.\n" +
+			"- When the plan is ready, present it via exit_plan_mode; on approval the mode switches and you execute it end-to-end."
+	case !mode.IsCruiseMode():
 		prompt += "\n\n## Current mode: supervised\n" +
 			"- You are in supervised mode: routine tool calls (read/search/edit/build/test/git/DM) flow without user confirmation - do NOT stop to ask permission for ordinary work.\n" +
 			"- Only genuinely destructive or irreversible actions are gated, and the gate itself will ask - not you. Never pre-emptively halt a multi-step task to ask whether to continue.\n" +
