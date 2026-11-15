@@ -1244,6 +1244,11 @@ func WorkspaceGateDecision(remoteAddr string, roster []InstanceInfo, selfWorkspa
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
 		return true
 	}
+	// #5672: a same-host fleet may carry MULTIPLE workspaces; the FIRST
+	// host match is not authoritative. Scan every host-matching entry and
+	// pass if ANY of them belongs to our workspace (deterministic across
+	// roster order; first-match made the gate flip-flop on multi-workspace
+	// hosts).
 	for _, inst := range roster {
 		u, uerr := url.Parse(inst.Endpoint)
 		if uerr != nil {
@@ -1253,8 +1258,8 @@ func WorkspaceGateDecision(remoteAddr string, roster []InstanceInfo, selfWorkspa
 		if ierr != nil {
 			ih = u.Host
 		}
-		if ih == host {
-			return inst.Workspace == selfWorkspace
+		if ih == host && inst.Workspace == selfWorkspace {
+			return true
 		}
 	}
 	return false
