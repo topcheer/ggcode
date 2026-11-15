@@ -246,3 +246,18 @@ func TestTaskCreate_CJKSubjectRuneGate(t *testing.T) {
 		t.Fatal("250-rune subject must be rejected")
 	}
 }
+
+// #5657: PendingSubjects feeds the turn-boundary pending-work guard.
+func TestTaskListToolPendingSubjects(t *testing.T) {
+	mgr := task.NewManager()
+	st := task.StatusCompleted
+	mgr.Create("finish gate", "phase 2", "", nil)
+	mgr.Create("done thing", "shipped", "", nil)
+	if _, err := mgr.Update("task-2", task.UpdateOptions{Status: &st}); err != nil {
+		t.Fatal(err)
+	}
+	got := TaskListTool{Manager: mgr}.PendingSubjects()
+	if len(got) != 1 || got[0] != "task-1: finish gate" {
+		t.Fatalf("PendingSubjects = %v, want [task-1: finish gate]", got)
+	}
+}
