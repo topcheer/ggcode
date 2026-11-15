@@ -14,8 +14,11 @@ import (
 
 // IntrospectPeerV3 requests a runtime/snapshot from a peer over the plain
 // A2A JSON-RPC transport (#5597 v3: no HMAC/nonce headers - identical trust
-// to message/send, the server's existing first gate applies).
-func IntrospectPeerV3(ctx context.Context, endpoint, apiKey, selfWorkspace string, req SnapshotRequest) (*RuntimeSnapshotV3, error) {
+// to message/send, the server's existing first gate applies). #5667:
+// domainKey (when known) mints the X-Ggcode-Workspace-Proof credential the
+// peer's declared-workspace gate arm verifies; nil = no proof sent (the
+// peer falls back to its roster reverse-lookup arm).
+func IntrospectPeerV3(ctx context.Context, endpoint, apiKey, selfWorkspace string, domainKey []byte, req SnapshotRequest) (*RuntimeSnapshotV3, error) {
 	if req.Depth == "" {
 		req.Depth = DepthFull
 	}
@@ -42,6 +45,14 @@ func IntrospectPeerV3(ctx context.Context, endpoint, apiKey, selfWorkspace strin
 	// apply the same-workspace trust arm across hosts.
 	if selfWorkspace != "" {
 		hreq.Header.Set("X-Ggcode-Workspace", selfWorkspace)
+	}
+	// #5667: bind the declaration to a credential - a stateless proof of
+	// possession of the PEER's workspace domain key (resolved from the
+	// discovery roster; same-host/shared-FS callers share the key file).
+	if len(domainKey) == 32 {
+		if proof, perr := BuildWorkspaceProof(domainKey, MethodRuntimeSnapshot, time.Now()); perr == nil {
+			hreq.Header.Set(WorkspaceProofHeader, proof)
+		}
 	}
 	if apiKey != "" {
 		hreq.Header.Set("X-API-Key", apiKey)
@@ -84,6 +95,11 @@ type IntrospectTool struct {
 	apiKey    string
 	workspace string
 	localTool *RemoteTool
+
+	// #5667: own workspace domain key (SetDomainKey from the server
+	// wiring, or lazily loaded from the workspace on first use).
+	domainKey    []byte
+	domainKeySet bool
 }
 
 func NewIntrospectTool(reg *Registry, apiKey, selfWorkspace string) *IntrospectTool {
@@ -93,6 +109,43 @@ func NewIntrospectTool(reg *Registry, apiKey, selfWorkspace string) *IntrospectT
 	// registry has no registered self (one-shot / hub-less callers).
 	rt.SetRosterDir(selfWorkspace)
 	return &IntrospectTool{registry: reg, apiKey: apiKey, localTool: rt, workspace: selfWorkspace}
+}
+
+// SetDomainKey installs the caller-side workspace domain key (#5667).
+// Without it the tool lazily loads/creates the key from its workspace on
+// first introspect; failures degrade to sending no proof.
+func (t *IntrospectTool) SetDomainKey(key []byte) {
+	t.domainKey = key
+	t.domainKeySet = true
+}
+
+// ownDomainKey lazily resolves the local workspace key (same host or
+// shared-FS peers hold the same key file, so this is the correct proof
+// key for direct-endpoint targets without a roster entry).
+func (t *IntrospectTool) ownDomainKey() []byte {
+	if t.domainKeySet {
+		return t.domainKey
+	}
+	t.domainKeySet = true
+	if ws := t.selfWorkspace(); ws != "" {
+		if key, err := LoadOrCreateWorkspaceDomainKey(ws); err == nil {
+			t.domainKey = key
+		}
+	}
+	return t.domainKey
+}
+
+// peerDomainKey resolves the proof key for a target endpoint: the peer's
+// advertised key from the discovery roster first (the #5667 negotiation
+// channel), then the own-workspace key (correct for same-host and
+// network-shared workspaces).
+func (t *IntrospectTool) peerDomainKey(endpoint string) []byte {
+	if instances, err := t.localTool.discover(); err == nil {
+		if key := DomainKeyForEndpoint(instances, endpoint); key != nil {
+			return key
+		}
+	}
+	return t.ownDomainKey()
 }
 
 // selfWorkspace prefers the injected workspace (pipe/headless sessions
@@ -193,7 +246,7 @@ func (t *IntrospectTool) Execute(ctx context.Context, input json.RawMessage) (to
 			return tool.Result{Content: fmt.Sprintf("Invalid input: unknown category %q (want mounts|state|content)", params.Category), IsError: true}, nil
 		}
 	}
-	snap, err := IntrospectPeerV3(ctx, endpoint, t.apiKey, t.selfWorkspace(), SnapshotRequest{
+	snap, err := IntrospectPeerV3(ctx, endpoint, t.apiKey, t.selfWorkspace(), t.peerDomainKey(endpoint), SnapshotRequest{
 		Depth:      params.Depth,
 		Faces:      params.Faces,
 		Category:   params.Category,

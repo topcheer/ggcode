@@ -60,24 +60,7 @@ func (m *mdnsService) start(info InstanceInfo, interfaces []string) error {
 
 	name := sanitizeMDNSName(info.DisplayName())
 
-	txt := []string{
-		"id=" + info.ID,
-		"workspace=" + info.Workspace,
-		"status=" + info.Status,
-		"pid=" + strconv.Itoa(info.PID),
-		"started=" + info.StartedAt,
-	}
-	// #5616: seat identity fields when known - lets same-workspace fleets
-	// address seats by nick without a lanchat round-trip.
-	if info.Nick != "" {
-		txt = append(txt, "nick="+info.Nick)
-	}
-	if info.Role != "" {
-		txt = append(txt, "role="+info.Role)
-	}
-	if info.Team != "" {
-		txt = append(txt, "team="+info.Team)
-	}
+	txt := instanceTXT(info)
 
 	srv, err := mdnslib.NewServer(mdnslib.Config{
 		Domain:     mDNSDomain,
@@ -216,7 +199,42 @@ func serviceInfoToInstance(inst *mdnslib.ServiceInstanceInfo) *InstanceInfo {
 		Nick:         txt["nick"],
 		Role:         txt["role"],
 		Team:         txt["team"],
+		// #5667: workspace domain key advertisement.
+		DomainKeyID: txt["wkid"],
+		DomainKey:   txt["wkkey"],
 	}
+}
+
+// instanceTXT builds the mDNS TXT payload for an instance (#5667:
+// extracted from start so the advertisement round-trips under test).
+func instanceTXT(info InstanceInfo) []string {
+	txt := []string{
+		"id=" + info.ID,
+		"workspace=" + info.Workspace,
+		"status=" + info.Status,
+		"pid=" + strconv.Itoa(info.PID),
+		"started=" + info.StartedAt,
+	}
+	// #5616: seat identity fields when known - lets same-workspace fleets
+	// address seats by nick without a lanchat round-trip.
+	if info.Nick != "" {
+		txt = append(txt, "nick="+info.Nick)
+	}
+	if info.Role != "" {
+		txt = append(txt, "role="+info.Role)
+	}
+	if info.Team != "" {
+		txt = append(txt, "team="+info.Team)
+	}
+	// #5667: domain key advertisement - same-workspace peers resolve the
+	// declared-workspace credential from the discovery channel.
+	if info.DomainKeyID != "" {
+		txt = append(txt, "wkid="+info.DomainKeyID)
+	}
+	if info.DomainKey != "" {
+		txt = append(txt, "wkkey="+info.DomainKey)
+	}
+	return txt
 }
 
 func parseTXTFields(fields []string) map[string]string {

@@ -53,6 +53,9 @@ type Server struct {
 	// legacy behavior byte-identical).
 	introspectorV3 RuntimeIntrospectorV3
 	workspaceGate  func(*http.Request) bool
+	// #5667: workspace domain key - the credential the declared-workspace
+	// gate arm verifies (see workspace_key.go for the carrier decision).
+	domainKey []byte
 
 	extensions []AgentExtension
 
@@ -1214,18 +1217,31 @@ func normalizeResponseID(id json.RawMessage) json.RawMessage {
 
 // SetDomainKey installs the workspace domain key post-construction (the
 // assembly layer resolves it from the working dir after server creation).
+// #5667: the key backs the declared-workspace arm's credential check;
+// nil (load failure) fail-closes that arm to the roster reverse-lookup.
+func (s *Server) SetDomainKey(key []byte) { s.domainKey = key }
+
+// DomainKey returns the installed workspace domain key (nil = none).
+func (s *Server) DomainKey() []byte { return s.domainKey }
 
 // SetIntrospector replaces the phase-1 stub once the runtime chains
 // (lanchat hub, cron scheduler, task board) are up (#5575 phase 2).
 func (s *Server) SetIntrospectorV3(inst RuntimeIntrospectorV3) { s.introspectorV3 = inst }
 
-// WorkspaceGateDecisionWithDecl adds the #5655 declared-workspace arm:
-// a caller that self-declares the SAME workspace path as self is inside
-// the trust domain by the #5597 ruling (same workspace = trust domain,
-// regardless of host). The roster reverse-lookup stays as the arm for
-// callers that do not declare (older peers).
-func WorkspaceGateDecisionWithDecl(remoteAddr, declaredWorkspace string, roster []InstanceInfo, selfWorkspace string) bool {
-	if declaredWorkspace != "" && declaredWorkspace == selfWorkspace {
+// WorkspaceGateDecisionWithDecl adds the #5655 declared-workspace arm
+// with its #5667 credential binding: a caller that self-declares the
+// SAME workspace path AND proves possession of the workspace domain key
+// (X-Ggcode-Workspace-Proof, verified against selfKey) is inside the
+// trust domain by the #5597 ruling regardless of host. A bare matching
+// declaration no longer passes: the workspace path is a public string,
+// not a credential - before #5667 the effective barrier on a
+// default-config LAN was two public constants (the well-known default
+// API key + the path). Callers that do not declare, or cannot prove,
+// fall back to the roster reverse-lookup arm (older peers: loopback and
+// roster-matched hosts are unaffected).
+func WorkspaceGateDecisionWithDecl(remoteAddr, declaredWorkspace, proofHeader string, roster []InstanceInfo, selfWorkspace string, selfKey []byte, now time.Time) bool {
+	if declaredWorkspace != "" && declaredWorkspace == selfWorkspace &&
+		VerifyWorkspaceProof(selfKey, MethodRuntimeSnapshot, proofHeader, now) {
 		return true
 	}
 	return WorkspaceGateDecision(remoteAddr, roster, selfWorkspace)

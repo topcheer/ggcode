@@ -262,12 +262,33 @@ ggcode stays interoperable with both 0.2.x/0.3.x peers and A2A v1.0 (2026-03) ag
 Eight faces, one hop, verbatim (same-workspace = trust domain, no
 redaction; the v1/v2 HMAC/domain-key machinery was REMOVED by the final
 design ruling - runtime/snapshot is a plain JSON-RPC method behind the
-server's existing auth, plus a workspace gate with two arms: the
-caller's `X-Ggcode-Workspace` self-declaration matching the peer's own
-workspace path passes outright (#5655 - same workspace is the trust
-domain even across hosts; without this the gate was 0% usable on
-multi-host LANs), otherwise the caller's endpoint must resolve in the
-local mDNS roster to an instance of the SAME workspace, else -32003).
+server's existing auth, plus a workspace gate with three arms
+(#5667 tightened the declared arm): the caller's `X-Ggcode-Workspace`
+self-declaration matching the peer's own workspace path passes ONLY
+together with a valid `X-Ggcode-Workspace-Proof` - a stateless
+HMAC-SHA256 possession proof of the workspace DOMAIN KEY (#5655 made
+the declaration alone sufficient, which gated cross-workspace
+introspection on two public constants: the well-known default API key
+and the path string; #5667 binds the declaration to a per-workspace
+random credential); otherwise the caller's endpoint must resolve in
+the local mDNS roster to an instance of the SAME workspace (older
+peers, unchanged); loopback always passes.
+
+The domain key is a 32-byte secret at `<gitdir>/a2a.key` (the linked
+worktree family shares the main gitdir's key; non-git workspaces use
+`<workspace>/.ggcode/a2a-domain.key`). Cross-host negotiation rides
+the same LAN discovery channel that distributes nick/endpoint: each
+instance advertises the key ID and key material (`wkid`/`wkkey`) in
+its mDNS TXT record and the workspace roster file, so same-workspace
+peers mint proofs with ZERO manual config - including independent
+clones at identical paths on different hosts (the #5655 field shape).
+Trust scope: this blocks non-ggcode callers and foreign-workspace
+instances that only hold public constants; it is not a defense
+against an active LAN attacker spoofing discovery declarations
+(trust-on-first-use, same class as the rest of the LAN a2a stack -
+plaintext HTTP, static API keys). Proof timestamps allow ±10 minutes
+of clock skew; replay inside the window is accepted (identical to the
+static API-key first gate).
 
 - Schedule face crons carry last_fire/fire_count/missed_count so a peer can
   tell a live schedule from a silently dead one (#5657 followup item 6);

@@ -31,6 +31,14 @@ type InstanceInfo struct {
 	Role     string `json:"role,omitempty"`
 	Team     string `json:"team,omitempty"`
 	LastSeen int64  `json:"last_seen,omitempty"` // unix seconds; 0 = unknown
+
+	// #5667: workspace domain key advertisement. KeyID is public
+	// diagnostics; Key material rides the same LAN discovery channel as
+	// nick/endpoint (mDNS TXT + roster file) so same-workspace peers can
+	// mint the declared-workspace proof with zero manual config. See
+	// workspace_key.go for the trust scope.
+	DomainKeyID string `json:"domain_key_id,omitempty"`
+	DomainKey   string `json:"domain_key,omitempty"`
 }
 
 func (i InstanceInfo) DisplayName() string {

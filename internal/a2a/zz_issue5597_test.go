@@ -155,7 +155,7 @@ func TestIssue5597_WorkspaceGate(t *testing.T) {
 func TestIssue5597_ClientRoundTrip(t *testing.T) {
 	ts := newV3Server(nil)
 	defer ts.Close()
-	snap, err := IntrospectPeerV3(context.Background(), ts.URL, "", "", SnapshotRequest{Depth: DepthFull})
+	snap, err := IntrospectPeerV3(context.Background(), ts.URL, "", "", nil, SnapshotRequest{Depth: DepthFull})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,15 +220,34 @@ func TestIssue5605_RosterFileWarmFallback(t *testing.T) {
 // #5655: the declared-workspace arm - a cross-host caller that self-declares
 // the same workspace path passes even when the roster reverse-lookup cannot
 // see it (multi-host LAN: the tool path was 0% usable without this).
+// #5667: extended to the credential arm - the matching declaration now
+// ALSO requires a valid workspace-domain-key proof; a bare declaration
+// (the public path string alone) must fail closed on a non-loopback,
+// non-roster path.
 func TestWorkspaceGateDeclaredWorkspaceArm(t *testing.T) {
 	roster := []InstanceInfo{{Workspace: "/other", Endpoint: "http://192.168.1.50:9700"}}
-	if !WorkspaceGateDecisionWithDecl("192.168.1.99:5555", "/w", roster, "/w") {
-		t.Error("same-workspace declaration must pass regardless of roster/host")
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
 	}
-	if WorkspaceGateDecisionWithDecl("192.168.1.99:5555", "/other", roster, "/w") {
+	now := time.Now()
+	proof, err := BuildWorkspaceProof(key, MethodRuntimeSnapshot, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !WorkspaceGateDecisionWithDecl("192.168.1.99:5555", "/w", proof, roster, "/w", key, now) {
+		t.Error("same-workspace declaration + valid domain-key proof must pass regardless of roster/host")
+	}
+	if WorkspaceGateDecisionWithDecl("192.168.1.99:5555", "/w", "", roster, "/w", key, now) {
+		t.Error("bare same-workspace declaration without a proof must fail closed (#5667)")
+	}
+	if WorkspaceGateDecisionWithDecl("192.168.1.99:5555", "/w", proof, roster, "/w", nil, now) {
+		t.Error("declaration with proof but no server key installed must fail closed (#5667)")
+	}
+	if WorkspaceGateDecisionWithDecl("192.168.1.99:5555", "/other", proof, roster, "/w", key, now) {
 		t.Error("mismatched declaration must not pass")
 	}
-	if WorkspaceGateDecisionWithDecl("192.168.1.99:5555", "", roster, "/w") {
+	if WorkspaceGateDecisionWithDecl("192.168.1.99:5555", "", "", roster, "/w", key, now) {
 		t.Error("empty declaration falls back to roster lookup and must fail here")
 	}
 }
