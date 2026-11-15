@@ -1191,6 +1191,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)
 	fileWatch.Start()
 	defer fileWatch.Stop()
+	var teamRef *swarm.Manager // team view source (plan face); backfilled when swarmMgr is created below
 
 	// #5597 v3: seven-face introspector, default ON, plain method (trust
 	// machinery removed per the final design ruling). Faces wired to real
@@ -1395,6 +1396,26 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		// live so a peer sees the current state without tool round-trips.
 		planFace := func() *a2a.RuntimePlan {
 			pl := &a2a.RuntimePlan{}
+			// #5657-followup item 7: cross-seat collaboration view - teams
+			// this seat runs (brief keeps member states, full adds the board).
+			if teamRef != nil {
+				boards := map[string]swarm.TeamBoardSnapshot{}
+				for _, b := range teamRef.ListTeamBoards() {
+					boards[b.ID] = b
+				}
+				for _, ts := range teamRef.ListTeamStatuses() {
+					tv := a2a.RuntimeTeamView{TeamID: ts.ID, Name: ts.Name, LeaderID: ts.LeaderID, TaskCount: ts.TaskCount}
+					for _, m := range ts.Teammates {
+						tv.Members = append(tv.Members, a2a.RuntimeTeamMate{Nick: m.Name, State: string(m.Status), CurrentTask: m.CurrentTask})
+					}
+					if b, ok := boards[ts.ID]; ok {
+						for _, tk := range b.Tasks {
+							tv.Tasks = append(tv.Tasks, a2a.RuntimeBoardTask{ID: tk.ID, Subject: tk.Subject, Status: tk.Status, Assignee: tk.Assignee})
+						}
+					}
+					pl.Teams = append(pl.Teams, tv)
+				}
+			}
 			sid := ""
 			if repl != nil {
 				sid = repl.CurrentSessionID()
@@ -1487,6 +1508,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		return prov
 	}, swarmAgentFactory, swarmToolBuilder)
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
+	// #5657-followup item 7: backfill the team view source for the plan
+	// face closure (declared before the introspector is wired).
+	teamRef = swarmMgr
 	swarmMgr.SetUsageHandler(repl.SessionUsageHandler())
 	// #5464: teammates must be permission-gated like the primary agent
 	// (ag.SetPermissionPolicy above) - thread the active policy through.

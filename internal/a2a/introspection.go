@@ -253,6 +253,10 @@ type RuntimePlan struct {
 	Todos     []RuntimePlanTodo `json:"todos,omitempty"`
 	GoalNodes []RuntimeGoalNode `json:"goal_nodes,omitempty"`
 	Tasks     []RuntimePlanTask `json:"tasks,omitempty"`
+	// Teams: cross-seat collaboration view (#5657-followup item 7) -
+	// swarm teams this seat runs; brief keeps member states, full adds
+	// the board tasks.
+	Teams []RuntimeTeamView `json:"teams,omitempty"`
 }
 
 type RuntimePlanTodo struct {
@@ -339,4 +343,29 @@ func NewRuntimeSnapshotHandlerV3(inst RuntimeIntrospectorV3, now func() time.Tim
 		}
 		return snap, nil
 	}
+}
+
+// RuntimeTeamView is one team's collaboration view inside the plan face
+// (summary ruling: brief depth carries members only; full depth adds the
+// board tasks).
+type RuntimeTeamView struct {
+	TeamID    string             `json:"team_id"`
+	Name      string             `json:"name"`
+	LeaderID  string             `json:"leader_id,omitempty"`
+	TaskCount int                `json:"task_count,omitempty"`
+	Members   []RuntimeTeamMate  `json:"members,omitempty"`
+	Tasks     []RuntimeBoardTask `json:"tasks,omitempty"` // full depth only
+}
+
+type RuntimeTeamMate struct {
+	Nick        string `json:"nick"`
+	State       string `json:"state,omitempty"`
+	CurrentTask string `json:"current_task,omitempty"`
+}
+
+type RuntimeBoardTask struct {
+	ID       string `json:"id"`
+	Subject  string `json:"subject"`
+	Status   string `json:"status,omitempty"`
+	Assignee string `json:"assignee,omitempty"`
 }

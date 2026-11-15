@@ -289,7 +289,13 @@ local mDNS roster to an instance of the SAME workspace, else -32003).
   servers, IM adapters, active skills, mobile/tunnel state) / plan
   (the declared working set: session todos, durable goal graph, task
   board - intent and standing, not just activity).
-- Depth tiers: `brief` (headers/clipped) and `full` (default, verbatim).
+  Plan also carries teams: the swarm teams this seat runs - team,
+  leader, task count, member states (nick/state/current_task) and, at
+  full depth, the board tasks (#5657 followup item 7).
+- Depth tiers: `brief` IS the summary mode - heavy fields (conversation
+  bodies beyond clip, child event tails, cron prompt bodies, plan item
+  bodies, team board tasks) are stripped; fetch `full` or the specific
+  face for verbatim detail. `full` is complete verbatim.
 - Category pull (#5635 user ruling ②): `--category mounts|state|content`
   (agent tool param `category`) selects a face subset by layer -
   `mounts` = env (mounted MCP/IM/skills/mobile), `state` = status /
