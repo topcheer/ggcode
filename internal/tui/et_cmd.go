@@ -55,10 +55,10 @@ func (m Model) handleEtTunnelReadyMsg(msg etTunnelReadyMsg) (tea.Model, tea.Cmd)
 	// #5395: 最终成功消息按实际计划标注——付费隧道不得声称 free 限制。
 	planNote := "  (free plan: 4h lifetime, 1 Mbps)"
 	if msg.plan != "" {
-		planNote = "\n计划: " + msg.plan
+		planNote = tr(m.currentLanguage(), "et.plan_note", msg.plan)
 	}
 	fullURL := msg.url + msg.suffix
-	m.chatWriteSystem(nextSystemID(), prefix+": "+fullURL+planNote+"\n扫码可用手机打开（Esc 关闭二维码）")
+	m.chatWriteSystem(nextSystemID(), prefix+": "+fullURL+planNote+"\n"+m.t("et.qr_hint"))
 	// QR 内容=完整含 #token= 的 URL（鉴权随码，手机直接打开零输入）。
 	// 复用通用 QR overlay（与 IM 面板同机制），无新增渲染路径。
 	m.openQROverlayDirect(
@@ -71,9 +71,9 @@ func (m Model) handleEtTunnelReadyMsg(msg etTunnelReadyMsg) (tea.Model, tea.Cmd)
 }
 
 // maskToken 打码展示:仅留尾部 4 位
-func maskToken(tok string) string {
+func maskToken(lang Language, tok string) string {
 	if tok == "" {
-		return "(未设置)"
+		return tr(lang, "et.not_set")
 	}
 	if len(tok) <= 4 {
 		return "****"
@@ -84,17 +84,21 @@ func maskToken(tok string) string {
 // etPlanLabel 计划标注：login 回执 Plan 为准（free 账户 login 后 token 非空
 // 但并非付费，不得凭 token 误标 paid）；无回执（纯 /et setup 用户）退回
 // #5395 启发式：subdomain/token 任一非空即付费。
-func etPlanLabel(subdomain, token, planReceipt string) string {
+func etPlanLabel(lang Language, subdomain, token, planReceipt string) string {
 	if planReceipt != "" {
 		if planReceipt == "free" {
 			return "free"
 		}
-		return "paid(" + planReceipt + " 子域名=" + subdomain + " token=" + maskToken(token) + ")"
+		return tr(lang, "et.paid_full", planReceipt, subdomain, maskToken(lang, token))
 	}
 	if subdomain != "" || token != "" {
-		return "paid(子域名=" + subdomain + " token=" + maskToken(token) + ")"
+		return tr(lang, "et.paid_short", subdomain, maskToken(lang, token))
 	}
 	return "free"
+}
+
+func (m Model) etSetupUsage(subdomain, token string) string {
+	return m.t("et.setup_usage", maskToken(m.currentLanguage(), subdomain), subdomain, maskToken(m.currentLanguage(), token))
 }
 
 // handleEtCommand /et [on|off|show|setup <subdomain> <token>|login]
@@ -108,19 +112,18 @@ func (m Model) handleEtCommand(parts []string) tea.Cmd {
 	if sub == "setup" {
 		if len(parts) < 4 {
 			cfg := m.config.ETunnel
-			m.chatWriteSystem(nextSystemID(),
-				"用法: /et setup <子域名> <token>\n当前配置: 子域名="+maskToken(cfg.Subdomain)+"(域名本身非敏感,直接展示:"+cfg.Subdomain+") token="+maskToken(cfg.Token))
+			m.chatWriteSystem(nextSystemID(), m.t("et.setup_usage",
+				maskToken(m.currentLanguage(), cfg.Subdomain), cfg.Subdomain, maskToken(m.currentLanguage(), cfg.Token)))
 			return nil
 		}
 		m.config.ETunnel.Subdomain = strings.Trim(parts[2], ". ")
 		m.config.ETunnel.Token = parts[3]
 		if err := m.config.SaveScoped(m.configSaveScope); err != nil {
-			m.chatWriteSystem(nextSystemID(), "⚠ et setup 保存失败: "+err.Error())
+			m.chatWriteSystem(nextSystemID(), m.t("et.setup_savefail", err.Error()))
 			return nil
 		}
-		m.chatWriteSystem(nextSystemID(),
-			"⬢ et 配置已保存: 子域名="+m.config.ETunnel.Subdomain+" token="+maskToken(m.config.ETunnel.Token)+
-				"\n下次 /et on 将请求该自定义域名(需付费计划)。")
+		m.chatWriteSystem(nextSystemID(), m.t("et.setup_saved",
+			m.config.ETunnel.Subdomain, maskToken(m.currentLanguage(), m.config.ETunnel.Token)))
 		return nil
 	}
 
@@ -146,11 +149,11 @@ func (m Model) handleEtCommand(parts []string) tea.Cmd {
 			}
 		}
 		cfg := m.config.ETunnel
-		plan := etPlanLabel(cfg.Subdomain, cfg.Token, cfg.Plan)
+		plan := etPlanLabel(m.currentLanguage(), cfg.Subdomain, cfg.Token, cfg.Plan)
 		if u := m.webuiTunnel.TunnelURL(); u != "" {
-			m.chatWriteSystem(nextSystemID(), "⬢ et tunnel active: "+u+suffix+"\n计划: "+plan)
+			m.chatWriteSystem(nextSystemID(), m.t("et.status_active", u+suffix, plan))
 		} else {
-			m.chatWriteSystem(nextSystemID(), "ⓘ et tunnel 未激活。/et on 激活;计划: "+plan)
+			m.chatWriteSystem(nextSystemID(), m.t("et.status_inactive", plan))
 		}
 		return nil
 	case "on":
@@ -158,7 +161,7 @@ func (m Model) handleEtCommand(parts []string) tea.Cmd {
 	case "login":
 		return m.etLoginStart()
 	default:
-		m.chatWriteSystem(nextSystemID(), "用法: /et [on|off|show|setup <子域名> <token>|login]")
+		m.chatWriteSystem(nextSystemID(), m.t("et.usage"))
 		return nil
 	}
 }
@@ -179,7 +182,7 @@ func etLoginServer() string {
 // 超时）。token 生效时机=下次 /et on。
 func (m Model) etLoginStart() tea.Cmd {
 	m.chatWriteSystem(nextSystemID(),
-		"⬢ et login: 正在发起浏览器授权…（授权页将自动打开；超时上限 10 分钟）")
+		m.t("et.login_start"))
 
 	authCh := make(chan string, 1)
 	doneCh := make(chan etLoginDoneMsg, 1)
@@ -235,7 +238,7 @@ func credsPlan(c *etunnel.Credentials) string {
 // handleEtLoginAuthMsg 授权 URL 上屏（浏览器已尝试打开；未弹出则手动访问）。
 func (m Model) handleEtLoginAuthMsg(msg etLoginAuthMsg) (tea.Model, tea.Cmd) {
 	m.chatWriteSystem(nextSystemID(),
-		"⬢ et login: 请在浏览器完成授权（若未自动打开，访问:\n"+msg.authURL+"\n授权完成后回到本会话，凭据将自动保存）")
+		m.t("et.login_browser", msg.authURL))
 	return m, nil
 }
 
@@ -250,15 +253,14 @@ func (m Model) handleEtLoginDoneMsg(msg etLoginDoneMsg) (tea.Model, tea.Cmd) {
 	m.config.ETunnel.Plan = c.Plan
 	m.config.ETunnel.Subdomains = c.Subdomains
 	if err := m.config.SaveScoped(m.configSaveScope); err != nil {
-		return m, func() tea.Msg { return streamMsg("⚠ et login 凭据保存失败: " + err.Error()) }
+		return m, func() tea.Msg { return streamMsg(m.t("et.login_savefail", err.Error())) }
 	}
-	domains := "(无自定义域名=free)"
+	domains := m.t("et.login_nodomains")
 	if len(c.Subdomains) > 0 {
 		domains = strings.Join(c.Subdomains, ", ")
 	}
 	m.chatWriteSystem(nextSystemID(),
-		"⬢ et login 成功: 套餐="+c.Plan+" token="+maskToken(c.APIToken)+"\n可用域名: "+domains+
-			"\n下次 /et on 即以本账户凭据激活。")
+		m.t("et.login_success", c.Plan, maskToken(m.currentLanguage(), c.APIToken), domains))
 	return m, nil
 }
 
@@ -287,12 +289,12 @@ func (m Model) etTunnelOn() tea.Cmd {
 	localAddr := u.Host
 	// #5395: 与 show 分支及 StartTunnelOpts 的付费语义一致；login 回执 Plan
 	// 存在时以它为准（free 登录账户 token 非空但走免费路径，不误标 paid）。
-	plan := etPlanLabel(cfg.Subdomain, cfg.Token, cfg.Plan)
+	plan := etPlanLabel(m.currentLanguage(), cfg.Subdomain, cfg.Token, cfg.Plan)
 	paid := strings.HasPrefix(plan, "paid")
 	if paid {
 		m.chatWriteSystem(nextSystemID(), "⬢ Opening et tunnel via custom subdomain \""+cfg.Subdomain+"\" …")
 	} else {
-		m.chatWriteSystem(nextSystemID(), "⬢ Opening et tunnel via free plan (random subdomain, ~seconds)。付费定制域名: /et setup <子域名> <token>")
+		m.chatWriteSystem(nextSystemID(), m.t("et.on_freehint"))
 	}
 	return func() tea.Msg {
 		tunnelURL, started, terr := m.webuiTunnel.StartTunnelOpts(localAddr, cfg.Subdomain, cfg.Token)
