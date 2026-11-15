@@ -94,6 +94,19 @@ func formatSubAgentSnapshot(snap subagent.Snapshot) string {
 	if snap.CurrentPhase != "" {
 		sb.WriteString(fmt.Sprintf("    Phase: %s\n", snap.CurrentPhase))
 	}
+	if snap.ToolExecuting {
+		tool := snap.CurrentTool
+		if tool == "" {
+			tool = "tool"
+		}
+		if snap.LastActivity.IsZero() {
+			sb.WriteString(fmt.Sprintf("    Executing %s\n", truncate(tool, 80)))
+		} else {
+			sb.WriteString(fmt.Sprintf("    Executing %s for %s\n", truncate(tool, 80), time.Since(snap.LastActivity).Round(time.Second)))
+		}
+	} else if !snap.LastActivity.IsZero() {
+		sb.WriteString(fmt.Sprintf("    Last activity %s ago\n", time.Since(snap.LastActivity).Round(time.Second)))
+	}
 	if snap.Status == subagent.StatusCompleted && strings.TrimSpace(snap.Result) != "" {
 
 		sb.WriteString(fmt.Sprintf("    Result: %s\n", truncate(snap.Result, 200)))
