@@ -137,7 +137,7 @@ func (s *Sources) RuntimeSnapshotV3(req a2a.SnapshotRequest) (*a2a.RuntimeSnapsh
 			limit = 10
 		}
 		events, files, next, trunc := s.Activity(req.CursorAct, limit)
-		snap.Activity = &a2a.RuntimeActivity{Events: events, Files: files, NextCursor: next, Truncated: trunc}
+		snap.Activity = &a2a.RuntimeActivity{Events: events, Files: files, NextCursor: next, Truncated: trunc, Stats: ActivityStatsFromEvents(events)}
 	}
 	if s.wants(faces, "children") && s.Children != nil {
 		snap.Children = s.Children()

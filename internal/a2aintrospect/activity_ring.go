@@ -37,6 +37,34 @@ func ActivityFromRingEntries(entries []debug.RingEntry) []a2a.RuntimeActivityEve
 	return events
 }
 
+// ActivityStatsFromEvents aggregates a sampled activity window into the
+// health block of the activity face (#5657-followup plan item 5): tool
+// failure rate and same-tool consecutive-error retry chains.
+func ActivityStatsFromEvents(events []a2a.RuntimeActivityEvent) *a2a.RuntimeActivityStats {
+	st := &a2a.RuntimeActivityStats{}
+	lastFailTool := ""
+	for _, ev := range events {
+		if ev.Tool == ev.TS && ev.TS == "" {
+			continue
+		}
+		st.ToolCalls++
+		if !ev.OK {
+			st.ToolFailures++
+			if ev.Tool == lastFailTool {
+				st.RetryChains++
+			} else {
+				lastFailTool = ev.Tool
+			}
+		} else {
+			lastFailTool = ""
+		}
+	}
+	if st.ToolCalls > 0 {
+		st.FailurePct = float64(st.ToolFailures) / float64(st.ToolCalls) * 100
+	}
+	return st
+}
+
 // toolFromLogLine extracts the tool name from a debug log line carrying
 // a "tool=<name>" marker, e.g. "[agent] tool result ERROR: tool=run_command".
 func toolFromLogLine(msg string) (string, bool) {
