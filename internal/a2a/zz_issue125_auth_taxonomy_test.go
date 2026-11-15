@@ -85,7 +85,7 @@ func TestIssue125_CLI401Diagnosis(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, err := IntrospectPeerV3(context.Background(), ts.URL, "bad", SnapshotRequest{Depth: DepthFull})
+	_, err := IntrospectPeerV3(context.Background(), ts.URL, "bad", "", SnapshotRequest{Depth: DepthFull})
 	if err == nil {
 		t.Fatal("want error")
 	}

@@ -262,9 +262,12 @@ ggcode stays interoperable with both 0.2.x/0.3.x peers and A2A v1.0 (2026-03) ag
 Eight faces, one hop, verbatim (same-workspace = trust domain, no
 redaction; the v1/v2 HMAC/domain-key machinery was REMOVED by the final
 design ruling - runtime/snapshot is a plain JSON-RPC method behind the
-server's existing auth, plus a roster reverse-lookup workspace gate:
-the caller's endpoint must resolve in the local mDNS roster to an
-instance of the SAME workspace, otherwise -32003).
+server's existing auth, plus a workspace gate with two arms: the
+caller's `X-Ggcode-Workspace` self-declaration matching the peer's own
+workspace path passes outright (#5655 - same workspace is the trust
+domain even across hosts; without this the gate was 0% usable on
+multi-host LANs), otherwise the caller's endpoint must resolve in the
+local mDNS roster to an instance of the SAME workspace, else -32003).
 
 - Faces: status (busy/goal/model/iteration/tokens_in/tokens_out/
   context_pct, live from the agent's run snapshot, #5635 P2) /

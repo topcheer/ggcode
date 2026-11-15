@@ -243,3 +243,20 @@ func TestBuildInteractiveSystemPromptSharedWorkspaceAgents(t *testing.T) {
 		t.Fatal("section must be omitted when empty")
 	}
 }
+
+// #5657: phase-loop discipline and the supervised mode hint must appear in
+// EVERY mode (they used to be cruise-only / absent).
+func TestBuildInteractiveSystemPromptModeHintsEveryMode(t *testing.T) {
+	for _, mode := range []permission.PermissionMode{permission.SupervisedMode, permission.BypassMode} {
+		p := BuildInteractiveSystemPrompt(&config.Config{}, "/w", mode, nil, nil, nil, nil, "", "", "")
+		if !strings.Contains(p, "Phase loop (every mode)") {
+			t.Fatalf("mode %v: phase-loop section missing", mode)
+		}
+		if mode == permission.SupervisedMode && !strings.Contains(p, "Current mode: supervised") {
+			t.Fatal("supervised mode hint missing in supervised mode")
+		}
+		if mode == permission.BypassMode && strings.Contains(p, "Current mode: supervised") {
+			t.Fatal("supervised hint must not leak into bypass")
+		}
+	}
+}

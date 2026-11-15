@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -14,7 +15,7 @@ import (
 // IntrospectPeerV3 requests a runtime/snapshot from a peer over the plain
 // A2A JSON-RPC transport (#5597 v3: no HMAC/nonce headers - identical trust
 // to message/send, the server's existing first gate applies).
-func IntrospectPeerV3(ctx context.Context, endpoint, apiKey string, req SnapshotRequest) (*RuntimeSnapshotV3, error) {
+func IntrospectPeerV3(ctx context.Context, endpoint, apiKey, selfWorkspace string, req SnapshotRequest) (*RuntimeSnapshotV3, error) {
 	if req.Depth == "" {
 		req.Depth = DepthFull
 	}
@@ -37,6 +38,11 @@ func IntrospectPeerV3(ctx context.Context, endpoint, apiKey string, req Snapshot
 		return nil, err
 	}
 	hreq.Header.Set("Content-Type", "application/json")
+	// #5655: self-declare the caller's workspace so the peer's gate can
+	// apply the same-workspace trust arm across hosts.
+	if selfWorkspace != "" {
+		hreq.Header.Set("X-Ggcode-Workspace", selfWorkspace)
+	}
 	if apiKey != "" {
 		hreq.Header.Set("X-API-Key", apiKey)
 	}
@@ -76,16 +82,26 @@ func IntrospectPeerV3(ctx context.Context, endpoint, apiKey string, req Snapshot
 type IntrospectTool struct {
 	registry  *Registry
 	apiKey    string
+	workspace string
 	localTool *RemoteTool
 }
 
-func NewIntrospectTool(reg *Registry, apiKey, workingDir string) *IntrospectTool {
+func NewIntrospectTool(reg *Registry, apiKey, selfWorkspace string) *IntrospectTool {
 	rt := NewRemoteTool(reg, apiKey)
 	// #5617: the workingDir was previously accepted but dropped, which
 	// left the inner RemoteTool without a roster fallback when the
 	// registry has no registered self (one-shot / hub-less callers).
-	rt.SetRosterDir(workingDir)
-	return &IntrospectTool{registry: reg, apiKey: apiKey, localTool: rt}
+	rt.SetRosterDir(selfWorkspace)
+	return &IntrospectTool{registry: reg, apiKey: apiKey, localTool: rt, workspace: selfWorkspace}
+}
+
+// selfWorkspace prefers the injected workspace (pipe/headless sessions
+// have no populated registry) and falls back to the registry's own.
+func (t *IntrospectTool) selfWorkspace() string {
+	if t.workspace != "" {
+		return t.workspace
+	}
+	return t.registry.SelfWorkspace()
 }
 
 // SetIdentityLookup wires the seat-identity bridge through to the internal
@@ -152,16 +168,32 @@ func (t *IntrospectTool) Execute(ctx context.Context, input json.RawMessage) (to
 	if params.Target == "" || params.Target == "list" {
 		return t.localTool.listInstances(ctx, params.All)
 	}
-	inst, err := t.localTool.FindInstance(params.Target)
-	if err != nil {
-		return tool.Result{Content: err.Error(), IsError: true}, nil
+	// #5655: explicit host:port targets must work without a populated
+	// discovery roster (pipe/headless sessions browse no mDNS). Mirror the
+	// CLI's direct-endpoint arm instead of failing at FindInstance.
+	target := params.Target
+	if _, _, herr := net.SplitHostPort(target); herr != nil && strings.Contains(target, ":") {
+		target = "http://" + target
+	}
+	var endpoint string
+	if _, _, herr := net.SplitHostPort(strings.TrimPrefix(target, "http://")); herr == nil {
+		endpoint = target
+		if !strings.Contains(endpoint, "://") {
+			endpoint = "http://" + endpoint
+		}
+	} else {
+		inst, err := t.localTool.FindInstance(params.Target)
+		if err != nil {
+			return tool.Result{Content: err.Error(), IsError: true}, nil
+		}
+		endpoint = inst.Endpoint
 	}
 	if params.Category != "" {
 		if _, ok := ExpandCategoryFaces(params.Category); !ok {
 			return tool.Result{Content: fmt.Sprintf("Invalid input: unknown category %q (want mounts|state|content)", params.Category), IsError: true}, nil
 		}
 	}
-	snap, err := IntrospectPeerV3(ctx, inst.Endpoint, t.apiKey, SnapshotRequest{
+	snap, err := IntrospectPeerV3(ctx, endpoint, t.apiKey, t.selfWorkspace(), SnapshotRequest{
 		Depth:      params.Depth,
 		Faces:      params.Faces,
 		Category:   params.Category,
@@ -171,7 +203,7 @@ func (t *IntrospectTool) Execute(ctx context.Context, input json.RawMessage) (to
 	if err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}, nil
 	}
-	return tool.Result{Content: FormatSnapshotV3(params.Target, inst.Workspace, snap)}, nil
+	return tool.Result{Content: FormatSnapshotV3(params.Target, t.selfWorkspace(), snap)}, nil
 }
 
 // FormatSnapshotV3 renders the eight faces for an agent consumer.
