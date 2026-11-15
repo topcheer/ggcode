@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/checkpoint"
@@ -104,6 +105,15 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	}
 	registry := core.Registry
 	core.StartBackgroundServices()
+
+	// #5655 (verified live): the A2A introspect/remote tool family was
+	// registered only on the TUI path (startA2AServer), so pipe sessions
+	// had no schema-level access to a2a_introspect at all. Register a
+	// lightweight client-only face: mDNS discovery needs no server.
+	if a2aReg, rerr := a2a.NewRegistry(); rerr == nil {
+		_ = registry.Register(a2a.NewIntrospectTool(a2aReg, a2aAPIKey(cfg), workingDir))
+		_ = registry.Register(a2a.NewRemoteTool(a2aReg, a2aAPIKey(cfg)))
+	}
 
 	if jm := registry.JobManager(); jm != nil {
 		defer jm.ShutdownAll(2 * time.Second)
