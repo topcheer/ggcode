@@ -247,7 +247,7 @@ func TestBuildInteractiveSystemPromptSharedWorkspaceAgents(t *testing.T) {
 // #5657: phase-loop discipline and the supervised mode hint must appear in
 // EVERY mode (they used to be cruise-only / absent).
 func TestBuildInteractiveSystemPromptModeHintsEveryMode(t *testing.T) {
-	for _, mode := range []permission.PermissionMode{permission.SupervisedMode, permission.BypassMode} {
+	for _, mode := range []permission.PermissionMode{permission.SupervisedMode, permission.BypassMode, permission.AutoMode, permission.PlanMode} {
 		p := BuildInteractiveSystemPrompt(&config.Config{}, "/w", mode, nil, nil, nil, nil, "", "", "")
 		if !strings.Contains(p, "Phase loop (every mode)") {
 			t.Fatalf("mode %v: phase-loop section missing", mode)
@@ -258,5 +258,30 @@ func TestBuildInteractiveSystemPromptModeHintsEveryMode(t *testing.T) {
 		if mode == permission.BypassMode && strings.Contains(p, "Current mode: supervised") {
 			t.Fatal("supervised hint must not leak into bypass")
 		}
+	}
+}
+
+// #5657 QA follow-up: plan mode is not supervised. Its policy DENIES explicit
+// file-writing tools, so the supervised hint ("edit ... flow without user
+// confirmation") would be factually wrong there. Plan mode must get an
+// accurate plan-specific section instead.
+func TestIssue5657PlanModeGetsPlanHintNotSupervised(t *testing.T) {
+	p := BuildInteractiveSystemPrompt(&config.Config{}, "/w", permission.PlanMode, nil, nil, nil, nil, "", "", "")
+	if strings.Contains(p, "Current mode: supervised") {
+		t.Fatal("plan mode must not receive the supervised hint: plan policy denies write-file tools, so the hint would be factually wrong")
+	}
+	if !strings.Contains(p, "Current mode: plan") {
+		t.Fatal("plan mode must get its own accurate mode section")
+	}
+	if !strings.Contains(p, "DENIED until the mode changes") {
+		t.Fatal("plan hint must state the write-tool denial explicitly")
+	}
+	if !strings.Contains(p, "Phase loop (every mode)") {
+		t.Fatal("phase-loop discipline must still appear in plan mode")
+	}
+	// Cruise modes keep their own section, untouched.
+	b := BuildInteractiveSystemPrompt(&config.Config{}, "/w", permission.BypassMode, nil, nil, nil, nil, "", "", "")
+	if !strings.Contains(b, "## Autopilot") {
+		t.Fatal("bypass autopilot section must remain intact")
 	}
 }
