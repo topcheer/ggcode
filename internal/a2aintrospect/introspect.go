@@ -150,6 +150,15 @@ func (s *Sources) RuntimeSnapshotV3(req a2a.SnapshotRequest) (*a2a.RuntimeSnapsh
 	}
 	if s.wants(faces, "plan") && s.Plan != nil {
 		snap.Plan = s.Plan()
+		if snap.Depth == a2a.DepthBrief {
+			// summary ruling: brief keeps counts + statuses, drops item
+			// bodies and team board tasks (fetch full depth for details).
+			snap.Plan.Todos = nil
+			snap.Plan.GoalNodes = nil
+			for i := range snap.Plan.Teams {
+				snap.Plan.Teams[i].Tasks = nil
+			}
+		}
 	}
 	return snap, nil
 }

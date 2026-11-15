@@ -78,3 +78,35 @@ func TestEnvFaceMemoryKeysSerialized(t *testing.T) {
 		t.Fatalf("env memory keys not carried: %+v", snap.Env)
 	}
 }
+
+// #5657-followup item 7: plan.Teams - brief keeps member states, full
+// depth adds the board tasks.
+func TestPlanTeamsBriefVsFull(t *testing.T) {
+	src := &Sources{
+		Plan: func() *a2a.RuntimePlan {
+			return &a2a.RuntimePlan{Teams: []a2a.RuntimeTeamView{{
+				TeamID: "t1", Name: "team", TaskCount: 1,
+				Members: []a2a.RuntimeTeamMate{{Nick: "tm-1", State: "working", CurrentTask: "task-9"}},
+				Tasks:   []a2a.RuntimeBoardTask{{ID: "task-9", Subject: "do it", Status: "pending", Assignee: "tm-1"}},
+			}}}
+		},
+		Now: func() time.Time { return time.Unix(0, 0).UTC() },
+	}
+	brief, err := src.RuntimeSnapshotV3(a2a.SnapshotRequest{Depth: a2a.DepthBrief})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(brief.Plan.Teams) != 1 || len(brief.Plan.Teams[0].Members) != 1 {
+		t.Fatalf("brief must keep team + member states: %+v", brief.Plan.Teams)
+	}
+	if len(brief.Plan.Teams[0].Tasks) != 0 {
+		t.Fatal("brief must strip team board tasks")
+	}
+	full, err := src.RuntimeSnapshotV3(a2a.SnapshotRequest{Depth: a2a.DepthFull})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full.Plan.Teams[0].Tasks) != 1 || full.Plan.Teams[0].Tasks[0].ID != "task-9" {
+		t.Fatalf("full must keep board tasks: %+v", full.Plan.Teams)
+	}
+}
