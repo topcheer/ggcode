@@ -156,6 +156,22 @@ type TaskListTool struct {
 	Manager *task.Manager
 }
 
+// PendingSubjects returns "ID: subject" for every non-completed task, so
+// the agent's turn-boundary pending-work guard (#5656) can see session
+// task-board work even in sessions that never call todo_write.
+func (t TaskListTool) PendingSubjects() []string {
+	if t.Manager == nil {
+		return nil
+	}
+	var out []string
+	for _, tk := range t.Manager.List() {
+		if tk.Status == task.StatusPending || tk.Status == task.StatusInProgress {
+			out = append(out, tk.ID+": "+tk.Subject)
+		}
+	}
+	return out
+}
+
 func (t TaskListTool) Name() string { return "task_list" }
 func (t TaskListTool) Description() string {
 	return "List all tasks in the session with ID, subject, status, and blockedBy info."
