@@ -59,6 +59,7 @@ Some agents run asynchronously as sub-agents. When this happens, ggcode returns 
 
 - Use `list_agents` to see running delegations
 - Use `wait_agent` to wait for a specific delegation to complete
+- Snapshots distinguish stuck from progressing: an agent mid-tool shows `Executing <tool> for <age>`, an otherwise quiet one shows `Last activity <age> ago` (`wait_agent` progress summaries likewise carry `(running)` / `(idle <age>)`)
 - Results are displayed inline when ready
 - When a sub-agent finishes while the main agent is still working, a short completion notice (with a result summary) is pushed into the main agent's context at its next turn boundary, so it never has to poll blindly — multiple simultaneous completions arrive as one merged notice
 
