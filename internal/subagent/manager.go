@@ -107,6 +107,8 @@ type Snapshot struct {
 	Result          string
 	Error           string
 	EventsDropped   int
+	LastActivity    time.Time
+	ToolExecuting   bool
 
 	ExternalSources map[string]int
 	CreatedAt       time.Time
@@ -321,6 +323,8 @@ func (s *SubAgent) snapshot() Snapshot {
 		EndedAt:         s.EndedAt,
 		Events:          append([]AgentEvent(nil), s.events...),
 		EventsDropped:   s.eventsDropped,
+		LastActivity:    s.lastActivity,
+		ToolExecuting:   s.toolExecuting,
 		ExternalSources: maps.Clone(s.externalSources),
 	}
 	if s.Error != nil {
