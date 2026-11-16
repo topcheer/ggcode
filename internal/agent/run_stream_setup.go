@@ -269,6 +269,10 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 		}
 	}()
 
+	// #5552 sibling scan: the named return was declared but never assigned, so
+	// D1 always handed back a nil slice - the same shape as the #5549 D2 trap.
+	// Materialize the post-injection snapshot so the plumbing stays truthful.
+	msgs = a.contextManager.Messages()
 	return msgs, userText, toolDefs, nil
 }
 
