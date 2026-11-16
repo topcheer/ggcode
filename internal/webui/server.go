@@ -363,6 +363,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/knight/skills", a(s.handleKnightSkills))
 	s.mux.HandleFunc("/api/knight/action", a(s.handleKnightAction))
 	s.mux.HandleFunc("/api/knight/skill-content", a(s.handleKnightSkillContent))
+	s.registerPanelRoutes()
 	s.mux.HandleFunc("/api/status", a(s.handleStatus))
 }
 

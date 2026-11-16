@@ -1,10 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useChat } from "@/store/chat";
 import { ChatWS } from "@/ws/client";
 import MessageList from "@/chat/MessageList";
 import ChatControls, { ModeToggle } from "@/chat/ChatControls";
 import Composer from "@/chat/Composer";
 import WelcomeScreen from "@/pages/WelcomeScreen";
+import PanelModal from "@/panels/PanelModal";
+import { submitCommand, type PanelDirective } from "@/panels/types";
 
 /** Chat 页:TUI session 镜像(WS 增量+/api/chat/history 初始全量);ws=/api/chat/ws 同源提供 */
 export default function Chat() {
@@ -38,7 +40,19 @@ export default function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const [panel, setPanel] = useState<PanelDirective | null>(null);
+
+  // 斜杠命令分流(#5672 webui 面板系统):/ 开头走 commands 端点直通链,
+  // 面板类无参命令返回面板指令→渲染 PanelModal;带参命令直通 TUI 命令层。
   const send = (text: string, images?: string[], files?: { name: string; mime: string; data: string }[]) => {
+    if (text.startsWith("/") && !images?.length && !files?.length) {
+      submitCommand(text)
+        .then((r) => {
+          if (r.status === "panel" && r.kind && r.title && r.dataUrl) setPanel(r as PanelDirective);
+        })
+        .catch((e: Error) => useChat.setState({ lastError: e.message || String(e) }));
+      return;
+    }
     pushOptimistic(text);
     wsRef.current?.sendUser(text, images, files);
   };
@@ -81,6 +95,7 @@ export default function Chat() {
           </div>
         </>
       )}
+      {panel && <PanelModal panel={panel} onClose={() => setPanel(null)} />}
     </div>
   );
 }
