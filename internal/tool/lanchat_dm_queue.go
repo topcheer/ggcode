@@ -205,11 +205,12 @@ func (t *LanChatTool) flushPending(ctx context.Context, selfID string) []string 
 			t.dmQueue.mu.Unlock()
 			break // all further entries face the same budget; stop this round
 		}
+		var msg lanchat.Message
 		var err error
 		if e.asAgent {
-			err = t.Hub.SendAsAgent(ctx, recipient, lanchat.RoleAgent, e.text)
+			msg, err = t.Hub.SendAsAgentMsg(ctx, recipient, lanchat.RoleAgent, e.text)
 		} else {
-			err = t.Hub.SendDirect(ctx, recipient, lanchat.RoleHuman, e.text, nil)
+			msg, err = t.Hub.SendDirectMsg(ctx, recipient, lanchat.RoleHuman, e.text, nil)
 		}
 		if err != nil {
 			if e.attempts+1 >= dmQueueMaxFlush_attempts {
@@ -223,7 +224,9 @@ func (t *LanChatTool) flushPending(ctx context.Context, selfID string) []string 
 		}
 		t.rateLimiter.recordDM(selfID, recipient)
 		t.rateLimiter.senderBudget.record(selfID)
-		lines = append(lines, fmt.Sprintf("DM retry queue: flushed to %s", t.displayName(recipient)))
+		// #5727: name the message id so a queue-flushed DM (whose id the
+		// sender never saw at send time) is receipt-queryable.
+		lines = append(lines, fmt.Sprintf("DM retry queue: flushed to %s (message_id=%s)", t.displayName(recipient), msg.ID))
 	}
 	return lines
 }

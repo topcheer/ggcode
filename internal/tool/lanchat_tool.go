@@ -287,7 +287,7 @@ func (t LanChatTool) Description() string {
 		"- Do NOT send acknowledgments (\"got it\", \"thanks\"). Do the work silently.\n" +
 		"- Check action='list' for agent_busy status before messaging. Don't message busy agents unless urgent.\n" +
 		"- One message per task. No follow-up pings - check action='list' or wait.\n\n" +
-		"Actions: list, send (DM), broadcast (your team), broadcast_all (everyone), send_team, history, pending, approve, reject, set_identity. " +
+		"Actions: list, send (DM), broadcast (your team), broadcast_all (everyone), send_team, history, receipt (query per-recipient delivery), pending, approve, reject, set_identity. " +
 		"Nick format: <name>_<role>. Prefer addressing DMs by nick (survives peer restarts); use node_id only to break ties between identical nicks."
 }
 
@@ -297,8 +297,8 @@ func (t LanChatTool) Parameters() json.RawMessage {
 		"properties": {
 			"action": {
 				"type": "string",
-				"enum": ["list", "send", "broadcast", "broadcast_all", "send_team", "history", "pending", "approve", "reject", "set_identity"],
-				"description": "list=discover participants; send=DM one or more participants (requires 'to', supports comma-separated); broadcast=send to YOUR team members (team-scoped default); broadcast_all=send to ALL participants on the LAN; send_team=send to a specific team (requires 'team'); history=recent messages; pending=list @agent approvals; approve/reject a pending message (requires 'message_id'); set_identity=change your own nick, role, and/or team (requires at least one of 'nick', 'role', 'team'). Choose by scope: DM=send, your team=broadcast, specific team=send_team, everyone=broadcast_all."
+				"enum": ["list", "send", "broadcast", "broadcast_all", "send_team", "history", "receipt", "pending", "approve", "reject", "set_identity"],
+				"description": "list=discover participants; send=DM one or more participants (requires 'to', supports comma-separated); broadcast=send to YOUR team members (team-scoped default); broadcast_all=send to ALL participants on the LAN; send_team=send to a specific team (requires 'team'); history=recent messages; receipt=query per-recipient delivery receipts for a sent message (message_id optional - omit to list recent send ids); pending=list @agent approvals; approve/reject a pending message (requires 'message_id'); set_identity=change your own nick, role, and/or team (requires at least one of 'nick', 'role', 'team'). Choose by scope: DM=send, your team=broadcast, specific team=send_team, everyone=broadcast_all."
 			},
 			"message": {
 				"type": "string",
@@ -331,7 +331,7 @@ func (t LanChatTool) Parameters() json.RawMessage {
 			},
 			"message_id": {
 				"type": "string",
-				"description": "ID of the pending message to approve or reject."
+				"description": "ID of the pending message to approve or reject, or of a sent message to query per-recipient delivery receipts for (action='receipt'; omit to list recent send ids). Send results include the message_id per recipient."
 			},
 			"reason": {
 				"type": "string",
@@ -392,6 +392,8 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		return t.doSendTeam(ctx, args.Message, args.Team, asAgent)
 	case "history":
 		return t.doHistory(args.Limit), nil
+	case "receipt":
+		return t.doReceipt(args.MessageID), nil
 	case "pending":
 		return t.doPending(), nil
 	case "approve":
@@ -401,7 +403,7 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	case "reject":
 		return t.doReject(args.MessageID, args.Reason)
 	default:
-		return Result{IsError: true, Content: fmt.Sprintf("unknown action: %s (valid: list, send, broadcast, broadcast_all, send_team, history, pending, approve, reject, set_identity)", args.Action)}, nil
+		return Result{IsError: true, Content: fmt.Sprintf("unknown action: %s (valid: list, send, broadcast, broadcast_all, send_team, history, receipt, pending, approve, reject, set_identity)", args.Action)}, nil
 	}
 }
 
@@ -1029,12 +1031,21 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 
 	var errors []string
 	sent := 0
+	// #5727: capture the per-recipient message ids so the send result can
+	// name the records the receipt query surface reads. Ids exist even for
+	// failed transports (the disposition records "failed"), so partial
+	// sends stay fully queryable.
+	var receiptIDs []string
 	for _, nodeID := range resolved {
+		var msg lanchat.Message
 		var err error
 		if asAgent {
-			err = t.Hub.SendAsAgent(ctx, nodeID, toRole, content)
+			msg, err = t.Hub.SendAsAgentMsg(ctx, nodeID, toRole, content)
 		} else {
-			err = t.Hub.SendDirect(ctx, nodeID, toRole, content, nil)
+			msg, err = t.Hub.SendDirectMsg(ctx, nodeID, toRole, content, nil)
+		}
+		if msg.ID != "" {
+			receiptIDs = append(receiptIDs, fmt.Sprintf("%s=%s", t.displayName(nodeID), msg.ID))
 		}
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", t.displayName(nodeID), err))
@@ -1062,6 +1073,10 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 			errMsg += t.sharedWorkspaceHint(resolved)
 		}
 		errMsg += t.staleRecipientHint(resolved)
+		// #5727: even refused transports leave a queryable disposition.
+		if len(receiptIDs) > 0 {
+			errMsg += fmt.Sprintf("\nReceipt ids: %s", formatReceiptIDPairs(receiptIDs))
+		}
 		return Result{IsError: true, Content: errMsg}, nil
 	}
 
@@ -1111,6 +1126,11 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 		result += t.sharedWorkspaceHint(resolved)
 	}
 	result += t.staleRecipientHint(resolved)
+	// #5727: name the per-recipient receipt records so the sender can
+	// query delivery outcomes after this send returns.
+	if len(receiptIDs) > 0 {
+		result += fmt.Sprintf("\nReceipt ids (#5727): %s - query later with action='receipt', message_id=<id>.", formatReceiptIDPairs(receiptIDs))
+	}
 	return Result{Content: result + ".\n"}, nil
 }
 
@@ -1164,6 +1184,123 @@ func appendUnknownAndFailed(b *strings.Builder, unknown, failed []string, total 
 	}
 }
 
+// formatReceiptIDPairs renders "nick=<message_id>" pairs for a send result,
+// capped so a large broadcast does not flood the result line (#5727).
+func formatReceiptIDPairs(pairs []string) string {
+	const cap = 8
+	if len(pairs) <= cap {
+		return strings.Join(pairs, ", ")
+	}
+	return fmt.Sprintf("%s, ...and %d more (list recent ids with action='receipt' and no message_id)",
+		strings.Join(pairs[:cap], ", "), len(pairs)-cap)
+}
+
+// receiptStatusConfirmed reports whether a status is a real recipient-side
+// ACK (#5727 ambiguity policy). rejected still counts as confirmed: the seat
+// received the message and its policy answered - only the verdict wording
+// distinguishes it. Sender-local dispositions (sent/queued/skipped/failed)
+// are never confirmed.
+func receiptStatusConfirmed(status string) bool {
+	switch status {
+	case lanchat.StatusDelivered, lanchat.StatusPending, lanchat.StatusApproved,
+		lanchat.StatusProcessing, lanchat.StatusCompleted, lanchat.StatusRejected:
+		return true
+	}
+	return false
+}
+
+// deliveryVerdict summarizes per-recipient receipts into one line, keeping
+// the #4774 three-way vocabulary: confirmed / unknown / failed. "unknown"
+// means handed to transport with no ACK yet - neither success nor failure.
+func deliveryVerdict(recipients []lanchat.Receipt) string {
+	confirmed, unknown, local := 0, 0, 0
+	for _, r := range recipients {
+		switch {
+		case receiptStatusConfirmed(r.Status):
+			confirmed++
+		case r.Status == lanchat.StatusSent:
+			unknown++
+		default:
+			local++
+		}
+	}
+	n := len(recipients)
+	switch {
+	case confirmed == n:
+		return fmt.Sprintf("Delivery confirmed by all %d recipient(s).", n)
+	case confirmed > 0:
+		return fmt.Sprintf("Partial delivery: confirmed %d/%d, unknown %d/%d (no receipt yet), not-in-flight %d/%d.", confirmed, n, unknown, n, local, n)
+	case unknown > 0:
+		return fmt.Sprintf("Delivery unknown: 0/%d confirmed, %d/%d handed to transport with no receipt yet - unknown is neither success nor failure.", n, unknown, n)
+	default:
+		return fmt.Sprintf("Not delivered: 0/%d confirmed (%d queued/failed locally, never ACKed).", n, local)
+	}
+}
+
+// doReceipt is the #5727 queryable per-recipient delivery receipt surface.
+// With message_id it lists one status line per recipient of that send plus a
+// summary verdict; without message_id it lists recent recorded message ids
+// so a sender can discover what to query.
+func (t LanChatTool) doReceipt(messageID string) Result {
+	if messageID == "" {
+		ids := t.Hub.RecentDeliveryReceiptIDs(10)
+		if len(ids) == 0 {
+			return Result{Content: "No per-recipient receipt records yet. Records appear after a send (send/broadcast/broadcast_all/send_team) or an inbound receipt.\n"}
+		}
+		var b strings.Builder
+		b.WriteString("Recent sends with per-recipient receipt records (newest first):\n")
+		for _, id := range ids {
+			recipients := t.Hub.DeliveryReceipts(id)
+			counts := make(map[string]int)
+			for _, r := range recipients {
+				counts[r.Status]++
+			}
+			statuses := make([]string, 0, len(counts))
+			for _, st := range []string{lanchat.StatusDelivered, lanchat.StatusPending, lanchat.StatusApproved, lanchat.StatusProcessing, lanchat.StatusCompleted, lanchat.StatusRejected, lanchat.StatusSent, lanchat.StatusQueued, lanchat.StatusSkipped, lanchat.StatusFailed} {
+				if c := counts[st]; c > 0 {
+					statuses = append(statuses, fmt.Sprintf("%s=%d", st, c))
+				}
+			}
+			fmt.Fprintf(&b, "  %s: %d recipient(s) (%s)\n", id, len(recipients), strings.Join(statuses, ", "))
+		}
+		b.WriteString("Query one message with action='receipt', message_id=<id>.\n")
+		return Result{Content: b.String()}
+	}
+
+	recipients := t.Hub.DeliveryReceipts(messageID)
+	if len(recipients) == 0 {
+		// Fall back to the legacy single-receipt surface so ids recorded
+		// before this feature (or approval receipts from older peers) still
+		// answer.
+		if r, ok := t.Hub.GetReceipt(messageID); ok {
+			recipients = []lanchat.Receipt{r}
+		} else {
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"no receipt records for message_id=%s (unknown id, its records were evicted after many newer sends, or it belongs to a send made before the receipt feature)", messageID)}
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Per-recipient delivery receipts for message %s:\n", messageID)
+	for _, r := range recipients {
+		name := t.displayName(r.FromNodeID)
+		if name == r.FromNodeID {
+			fmt.Fprintf(&b, "  %s: %s", name, r.Status)
+		} else {
+			fmt.Fprintf(&b, "  %s (%s): %s", name, r.FromNodeID, r.Status)
+		}
+		if r.Reason != "" {
+			fmt.Fprintf(&b, " - %s", r.Reason)
+		}
+		if r.Timestamp > 0 {
+			fmt.Fprintf(&b, " at %s", time.UnixMilli(r.Timestamp).UTC().Format(time.RFC3339))
+		}
+		b.WriteByte('\n')
+	}
+	fmt.Fprintf(&b, "Verdict: %s\n", deliveryVerdict(recipients))
+	return Result{Content: b.String()}
+}
+
 func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent bool) (Result, error) {
 	if content == "" {
 		return Result{IsError: true, Content: "message content is required for broadcast_all"}, nil
@@ -1210,16 +1347,22 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 
 	var queued []string
 	var unknown, failed []string
+	// #5727: per-recipient message ids for the receipt query surface.
+	var receiptIDs []string
 	for _, nodeID := range allowed {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			unknown = append(unknown, fmt.Sprintf("%s: deadline hit before send", t.displayName(nodeID)))
 			continue
 		}
+		var msg lanchat.Message
 		var err error
 		if asAgent {
-			err = t.Hub.SendAsAgent(ctx, nodeID, toRole, content)
+			msg, err = t.Hub.SendAsAgentMsg(ctx, nodeID, toRole, content)
 		} else {
-			err = t.Hub.SendDirect(ctx, nodeID, toRole, content, nil)
+			msg, err = t.Hub.SendDirectMsg(ctx, nodeID, toRole, content, nil)
+		}
+		if msg.ID != "" {
+			receiptIDs = append(receiptIDs, fmt.Sprintf("%s=%s", t.displayName(nodeID), msg.ID))
 		}
 		switch {
 		case err == nil:
@@ -1246,14 +1389,20 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 		if asAgent {
 			errMsg += t.sharedWorkspaceHint(allowed)
 		}
+		if len(receiptIDs) > 0 {
+			errMsg += fmt.Sprintf("\nReceipt ids: %s", formatReceiptIDPairs(receiptIDs))
+		}
 		return Result{IsError: true, Content: errMsg}, nil
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Broadcast queued to %d/%d participants as %s (queued = handed to transport; lanchat is fire-and-forget, no delivery receipt yet).\n", len(queued), len(allPeers), role)
+	fmt.Fprintf(&b, "Broadcast queued to %d/%d participants as %s (queued = handed to transport; per-recipient delivery receipts are recorded and arrive asynchronously - query with action='receipt').\n", len(queued), len(allPeers), role)
 	appendUnknownAndFailed(&b, unknown, failed, len(allPeers))
 	if len(rateLimited) > 0 {
 		fmt.Fprintf(&b, "Rate-limited recipients skipped:\n%s\n", strings.Join(rateLimited, "\n"))
+	}
+	if len(receiptIDs) > 0 {
+		fmt.Fprintf(&b, "Receipt ids (#5727): %s\n", formatReceiptIDPairs(receiptIDs))
 	}
 	result := b.String()
 	if asAgent {
@@ -1328,16 +1477,22 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 	}
 	var queued []string
 	var unknown, failed []string
+	// #5727: per-recipient message ids for the receipt query surface.
+	var receiptIDs []string
 	for _, nodeID := range members {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			unknown = append(unknown, fmt.Sprintf("%s: deadline hit before send", t.displayName(nodeID)))
 			continue
 		}
+		var msg lanchat.Message
 		var err error
 		if asAgent {
-			err = t.Hub.SendAsAgent(ctx, nodeID, toRole, content)
+			msg, err = t.Hub.SendAsAgentMsg(ctx, nodeID, toRole, content)
 		} else {
-			err = t.Hub.SendDirect(ctx, nodeID, toRole, content, nil)
+			msg, err = t.Hub.SendDirectMsg(ctx, nodeID, toRole, content, nil)
+		}
+		if msg.ID != "" {
+			receiptIDs = append(receiptIDs, fmt.Sprintf("%s=%s", t.displayName(nodeID), msg.ID))
 		}
 		switch {
 		case err == nil:
@@ -1363,14 +1518,20 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 		if asAgent {
 			errMsg += t.sharedWorkspaceHint(members)
 		}
+		if len(receiptIDs) > 0 {
+			errMsg += fmt.Sprintf("\nReceipt ids: %s", formatReceiptIDPairs(receiptIDs))
+		}
 		return Result{IsError: true, Content: errMsg}, nil
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Sent (queued, no delivery receipt yet) to %d/%d members of team %q\n", len(queued), len(members), team)
+	fmt.Fprintf(&b, "Sent (queued; per-recipient delivery receipts recorded) to %d/%d members of team %q\n", len(queued), len(members), team)
 	appendUnknownAndFailed(&b, unknown, failed, len(members))
 	if len(rateLimited) > 0 {
 		fmt.Fprintf(&b, "Rate-limited members skipped:\n%s\n", strings.Join(rateLimited, "\n"))
+	}
+	if len(receiptIDs) > 0 {
+		fmt.Fprintf(&b, "Receipt ids (#5727): %s - query with action='receipt', message_id=<id>.\n", formatReceiptIDPairs(receiptIDs))
 	}
 	result := b.String()
 	if asAgent {
