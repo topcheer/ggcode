@@ -176,6 +176,7 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 	var instances []InstanceInfo
 	if r.mdnsSvc != nil {
 		instances = r.mdnsSvc.lookup()
+		r.mergeRosterIdentities(instances)
 	} else {
 		instances = r.CachedInstances()
 	}
@@ -186,6 +187,59 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 	r.mu.Unlock()
 
 	return append([]InstanceInfo(nil), instances...), nil
+}
+
+// mergeRosterIdentities fills seat identity (nick/role/team) from the
+// file-backed warm roster (#5607) into mDNS-discovered instances. The mDNS TXT
+// record is built once at Register time, before the lanchat hub exists and
+// SetSelfIdentity stamps the seat nick onto selfInfo, so advertisements of
+// seats whose identity landed post-registration carry no nick= TXT field —
+// while the roster entry IS republished with the identity (SetSelfIdentity ->
+// RosterUpsert). Merging here lets discovery consumers (introspect list Seat
+// face, seat addressing) see every nick the roster already knows.
+func (r *Registry) mergeRosterIdentities(instances []InstanceInfo) {
+	if len(instances) == 0 {
+		return
+	}
+	r.mu.Lock()
+	ws := ""
+	if r.selfInfo != nil {
+		ws = r.selfInfo.Workspace
+	}
+	r.mu.Unlock()
+	if ws == "" {
+		// One-shot clients (introspect CLI) never Register, so selfInfo is
+		// nil; fall back to the working directory, the same workspace
+		// convention the CLI itself uses for its roster warm fallback.
+		if wd, err := os.Getwd(); err == nil {
+			ws = wd
+		}
+	}
+	if ws == "" {
+		return
+	}
+	// Pass empty selfID so the self entry is included: the own advertisement
+	// is equally identity-frozen at Register time.
+	for _, ro := range ReadRoster(ws, "") {
+		if ro.PID == 0 || ro.Workspace == "" || (ro.Nick == "" && ro.Role == "" && ro.Team == "") {
+			continue
+		}
+		for i := range instances {
+			tgt := &instances[i]
+			if tgt.Nick != "" || tgt.PID != ro.PID || tgt.Workspace != ro.Workspace {
+				continue
+			}
+			if ro.Nick != "" {
+				tgt.Nick = ro.Nick
+			}
+			if ro.Role != "" {
+				tgt.Role = ro.Role
+			}
+			if ro.Team != "" {
+				tgt.Team = ro.Team
+			}
+		}
+	}
 }
 
 func (r *Registry) CachedInstances() []InstanceInfo {

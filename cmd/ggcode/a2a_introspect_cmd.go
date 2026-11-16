@@ -40,7 +40,15 @@ func rosterLines(instances []a2a.InstanceInfo) string {
 	}
 	var b strings.Builder
 	for _, inst := range instances {
-		b.WriteString(fmt.Sprintf("  - %s (%s) %s\n", inst.ID, inst.Workspace, inst.Endpoint))
+		seat := ""
+		if inst.Nick != "" {
+			if inst.Role != "" {
+				seat = fmt.Sprintf(" [Seat: %s (role=%s)]", inst.Nick, inst.Role)
+			} else {
+				seat = fmt.Sprintf(" [Seat: %s]", inst.Nick)
+			}
+		}
+		b.WriteString(fmt.Sprintf("  - %s (%s) %s%s\n", inst.ID, inst.Workspace, inst.Endpoint, seat))
 	}
 	return b.String()
 }
