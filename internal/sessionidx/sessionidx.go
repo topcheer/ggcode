@@ -130,6 +130,12 @@ func (ix *Index) Capped() bool {
 	return ix.capped
 }
 
+// approxBytesPerSourceByte is the postings-memory estimate charged per
+// indexed text byte (indexLine). It also drives the tail-build skip gate:
+// a source whose RAW size already implies an over-budget index can never
+// persist (capped builds are not saved), so building it would only churn.
+const approxBytesPerSourceByte = 40
+
 // DefaultSelfBudget is the resident cap for one instance's live-session
 // index (env GGCODE_SESSIONIDX_SELF_BUDGET, bytes). A live session whose
 // transcript outgrows the cap degrades its recall queries to a bounded
@@ -143,6 +149,16 @@ func DefaultSelfBudget() int64 {
 		}
 	}
 	return 256 << 20
+}
+
+// MaxIndexableSourceBytes returns the raw source size above which a fresh
+// build is guaranteed to end capped (budget / approxBytesPerSourceByte).
+// budget <= 0 (cap disabled) disables the gate too.
+func MaxIndexableSourceBytes(budget int64) int64 {
+	if budget <= 0 {
+		return 0
+	}
+	return budget / approxBytesPerSourceByte
 }
 
 // idxSkipDecodeBytes is the persisted-idx size above which Load skips the
@@ -312,12 +328,30 @@ func (ix *Index) Refresh() error {
 	ix.data.IndexedTo = offset
 	ix.data.SourceBytes = st.Size()
 	ix.data.BuiltAt = time.Now().UnixNano()
+	// #5710: the per-line gate above only runs BEFORE each line, so a
+	// refresh whose LAST line (or only line) pushes approxBytes over the
+	// budget ends over-cap yet uncapped - the flag then waits for the
+	// next refresh tick (30min in production), during which the index
+	// keeps serving and holding heap far past the budget. Re-check after
+	// the loop so the cap is final within the same refresh.
+	if ix.selfBudget > 0 && ix.approxBytes >= ix.selfBudget {
+		ix.capped = true
+	}
 	if ix.capped {
 		// Capped: do NOT persist. The in-RAM state is emptied postings plus
 		// an advanced IndexedTo; saving it would reload as capped=false with
 		// an empty index and no source-scan fallback (silent recall loss).
 		// The last-good idx stays on disk; on reload SetSelfBudget's
 		// retroactive drop re-caps it and the degraded scan re-engages.
+		//
+		// #5710: drop the partial postings NOW too. A capped index serves
+		// no queries (Query returns nil; recall degrades to the bounded
+		// source scan), so the map accumulated before the cap tripped is
+		// dead weight that can approach the whole budget in heap - the
+		// SetLiveID path (fresh sessions) hit exactly this on its way to
+		// the 1-3.3GB heapInuse class. approxBytes stays above the cap so
+		// ingestion never resumes and nothing re-decodes.
+		ix.data.Trigrams = map[string][]Posting{}
 		return nil
 	}
 	return ix.saveLocked()
@@ -385,7 +419,7 @@ func (ix *Index) indexLine(offset int64, length int32, line []byte) {
 		addPostings(ix.data.Trigrams, seen, txt, offset, length, roleByte, rec.TsNano)
 		total += len(txt)
 	}
-	ix.approxBytes += int64(total) * 40
+	ix.approxBytes += int64(total) * approxBytesPerSourceByte
 }
 
 func roleToByte(role string) byte {

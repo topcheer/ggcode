@@ -123,6 +123,13 @@ func (m *Manager) SetLiveID(id string) {
 		debug.Log("sessionidx", "setlive: load %s: %v", id, err)
 		return
 	}
+	// #5710: SetLiveID is the path every interactive instance takes when a
+	// session starts (agent.go calls it right after the transcript exists).
+	// Without the self budget a transcript-heavy live session materializes
+	// an uncapped trigram index - the 1-3.3GB heapInuse class observed on
+	// fresh instances within their first hour. Start() has always applied
+	// the budget; this path must too.
+	ix.SetSelfBudget(DefaultSelfBudget())
 	if err := ix.Refresh(); err != nil {
 		debug.Log("sessionidx", "setlive: refresh %s: %v", id, err)
 	}
@@ -186,10 +193,20 @@ func (m *Manager) TailMissingSources(maxSourceBytes int64) int {
 		if fi.Size() == 0 || (maxSourceBytes > 0 && fi.Size() > maxSourceBytes) {
 			continue
 		}
+		// #5710: cap tail builds with the same self budget. A capped build
+		// never persists (Refresh skips saveLocked), so a source whose raw
+		// size already implies an over-budget index would be rebuilt from
+		// scratch on every cycle - pure churn. Skip it up front; recall for
+		// such sessions stays on the bounded source scan.
+		budget := DefaultSelfBudget()
+		if overCap := MaxIndexableSourceBytes(budget); overCap > 0 && fi.Size() > overCap {
+			continue
+		}
 		ix, err := Load(m.dir, id)
 		if err != nil || ix == nil || ix.Capped() {
 			continue
 		}
+		ix.SetSelfBudget(budget)
 		if err := ix.Refresh(); err != nil {
 			debug.Log("sessionidx", "tail: build %s: %v", id, err)
 			continue
