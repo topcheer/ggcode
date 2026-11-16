@@ -112,6 +112,11 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 			"type": "string",
 			"description": "Optional type of specialized agent (e.g., 'Explore', 'Plan')"
 		},
+		"mode": {
+			"type": "string",
+			"enum": ["default", "research"],
+			"description": "Optional calibration of the same-file reread circuit breaker for read-heavy runs. 'research': the per-file reread threshold is raised from 3 to 12, the run receives a warning it can heed at that point, and only continued re-reading (24+) terminates it - use it for read-only research/verification tasks where re-opening a file across iterations is legitimate. 'default': strict breaker (terminate after 3 same-file reads with no intervening edit) regardless of toolset. If omitted, the calibration is chosen automatically: runs whose toolset contains no edit tool get 'research', all others get 'default'. The 'Explore' subagent_type implies 'research'."
+		},
 		"isolation": {
 			"type": "string",
 			"enum": ["none", "worktree"],
@@ -143,6 +148,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		Context      string   `json:"context"`
 		Model        string   `json:"model"`
 		SubagentType string   `json:"subagent_type"`
+		Mode         string   `json:"mode"`
 		Isolation    string   `json:"isolation"`
 		Description  string   `json:"description"`
 		MaxToolCalls int      `json:"max_tool_calls"`
@@ -153,6 +159,25 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	if args.Task == "" {
 		return Result{IsError: true, Content: "task is required"}, nil
+	}
+
+	// #5737: resolve the reread-breaker calibration. mode is the explicit
+	// signal; the Explore subagent type is read-only by charter (its output
+	// contract is listing code regions), so it implies the research
+	// calibration. An omitted mode keeps RereadPolicyAuto, which picks the
+	// calibration from the effective toolset inside the runner.
+	rereadPolicy := subagent.RereadPolicyAuto
+	switch strings.TrimSpace(args.Mode) {
+	case "":
+	case "default":
+		rereadPolicy = subagent.RereadPolicyDefault
+	case "research":
+		rereadPolicy = subagent.RereadPolicyResearch
+	default:
+		return Result{IsError: true, Content: fmt.Sprintf("invalid mode %q: supported values are \"default\" (strict same-file reread breaker) and \"research\" (raised threshold, warn before terminate)", args.Mode)}, nil
+	}
+	if rereadPolicy == subagent.RereadPolicyAuto && strings.EqualFold(strings.TrimSpace(args.SubagentType), "Explore") {
+		rereadPolicy = subagent.RereadPolicyResearch
 	}
 
 	isolation := strings.TrimSpace(args.Isolation)
@@ -213,6 +238,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		AgentType:    args.SubagentType,
 		Isolation:    isolation,
 		MaxToolCalls: maxToolCalls,
+		RereadPolicy: rereadPolicy,
 	})
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("%v. Fix the git state or retry with isolation=none.", err)}, nil
@@ -226,6 +252,10 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	if worktreePath != "" {
 		content += fmt.Sprintf("\nIsolated in git worktree: %s (branch: %s). Its edits stay off the parent working tree; inspect or merge from that path after the run completes.", worktreePath, filepath.Base(worktreePath))
 	}
+	if rereadPolicy == subagent.RereadPolicyResearch {
+		warnAt, tripAt := subagent.ResearchRereadLimits()
+		content += fmt.Sprintf("\nReread breaker: research calibration - warns at %d same-file reads, terminates at %d with no intervening edit (default strict breaker trips at %d).", warnAt, tripAt, 3)
+	}
 	return Result{Content: content}, nil
 }
 
@@ -237,6 +267,11 @@ type LaunchOptions struct {
 	Model       string
 	AgentType   string
 	Isolation   string
+	// RereadPolicy calibrates the #5013 same-file reread breaker (#5737):
+	// research grants read-heavy runs a raised threshold plus a warning
+	// before termination; default forces the strict breaker; auto resolves
+	// from the effective toolset inside the runner (read-only => research).
+	RereadPolicy subagent.RereadPolicy
 	// MaxToolCalls is a deterministic hard budget for the sub-agent's
 	// agent loop (max iterations, each iteration being one LLM turn that
 	// may issue tool calls). Values <= 0 fall back to the conservative
@@ -308,6 +343,7 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 			Model:               model,
 			AgentType:           opts.AgentType,
 			MaxToolCalls:        opts.MaxToolCalls,
+			RereadPolicy:        opts.RereadPolicy,
 			WorkingDir:          runWorkDir,
 			OnUsage:             t.OnUsage,
 			OnMetric:            t.OnMetric,

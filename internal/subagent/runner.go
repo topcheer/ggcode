@@ -49,6 +49,13 @@ type RunnerConfig struct {
 	Model        string
 	AgentType    string
 	WorkingDir   string
+	// RereadPolicy calibrates the #5013 same-file reread breaker for this
+	// run (#5737). Zero value (RereadPolicyAuto) keeps the strict #5013
+	// trip-after-3 behavior for every run that can edit files and grants
+	// the research calibration (higher threshold, warn before terminate)
+	// to structurally read-only runs; RereadPolicyDefault forces strict,
+	// RereadPolicyResearch forces the research calibration.
+	RereadPolicy RereadPolicy
 	// MaxToolCalls bounds the sub-agent run on BOTH axes (#5013): it is
 	// passed to the AgentFactory maxTurns parameter (LLM-turn cap, each
 	// turn may issue several tool calls) AND, when N>0, wired through the
@@ -228,8 +235,10 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	var textBuf strings.Builder
 
 	// #5013 Ask-2: same-file reread circuit breaker (deterministic guard
-	// complementing the written task contract).
-	rereads := newRereadBreaker()
+	// complementing the written task contract). #5737: calibrated per run -
+	// research/read-only runs get a higher threshold and a warning before
+	// termination instead of a hard stop at 4 reads.
+	rereads := newRereadBreakerWithPolicy(rereadPolicyForRun(cfg.RereadPolicy, cfg.AllowedTools, cfg.AllTools))
 	flushText := func() {
 		if textBuf.Len() == 0 {
 			return
@@ -286,13 +295,31 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				unnamedTools = append(unnamedTools, meta)
 			}
 
-			if path, n, tripped := rereads.record(meta.Name, meta.RawArgs); tripped {
-				debug.Log("subagent", "reread breaker tripped id=%s path=%s reads=%d", cfg.SubAgentID, path, n)
-				if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
-					sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "[reread-breaker] " + rereads.reason()})
+			if path, n, action := rereads.recordAction(meta.Name, meta.RawArgs); action != rereadNone {
+				if action == rereadWarn {
+					// #5737 research calibration: warn-and-continue. Surface the
+					// advisory in the event stream and inject it into the run's
+					// mailbox (best effort) so the model sees it as user-role input
+					// at the next iteration boundary and can course-correct before
+					// the hard stop.
+					debug.Log("subagent", "reread breaker warning id=%s path=%s reads=%d", cfg.SubAgentID, path, n)
+					if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+						sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "[reread-breaker] " + rereads.warning(path, n)})
+					}
+					cfg.Manager.NotifySystem(cfg.SubAgentID, "[reread-breaker] warning: "+rereads.warning(path, n))
+					_ = cfg.Manager.SendToAgent(cfg.SubAgentID, AgentMessage{
+						From:    "reread-breaker",
+						Message: rereads.warning(path, n),
+						Summary: "reread breaker warning",
+					})
+				} else {
+					debug.Log("subagent", "reread breaker tripped id=%s path=%s reads=%d", cfg.SubAgentID, path, n)
+					if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+						sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "[reread-breaker] " + rereads.reason()})
+					}
+					cfg.Manager.NotifySystem(cfg.SubAgentID, "[reread-breaker] terminating: "+rereads.reason())
+					cancel()
 				}
-				cfg.Manager.NotifySystem(cfg.SubAgentID, "[reread-breaker] terminating: "+rereads.reason())
-				cancel()
 			}
 		case provider.StreamEventToolResult:
 			flushText()
