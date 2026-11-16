@@ -34,9 +34,11 @@ export default function StatsPanel({ panel }: { panel: PanelDirective; onClose: 
           </div>
         </div>
       ))}
-      {(data.sections ?? []).length === 0 && (
+      {data.emptyReason ? (
+        <div className="p-3 text-ui-sm text-foreground-subtle">{String(data.emptyReason)}</div>
+      ) : (data.sections ?? []).length === 0 ? (
         <div className="p-3 text-ui-sm text-foreground-subtle">数据端点待接入(P4 数据面)</div>
-      )}
+      ) : null}
     </div>
   );
 }
