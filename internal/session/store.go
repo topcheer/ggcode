@@ -73,6 +73,12 @@ type Session struct {
 
 	TasksEnvJSON []byte `json:"tasks_env,omitempty"`
 
+	// KeyedInstructions is the folded runtime view of the durable keyed
+	// instruction layer (#5698, session.instructions.*). Persisted as
+	// append-only "instruction" records, folded last-wins at load; runtime
+	// only (json:"-") — the record log is the source of truth.
+	KeyedInstructions map[string]KeyedInstruction `json:"-"`
+
 	endpointStatsMu sync.RWMutex
 }
 
@@ -719,6 +725,8 @@ type jsonlRecord struct {
 
 	TasksEnvJSON []byte `json:"tasks_env,omitempty"`
 
+	Instruction *InstructionEvent `json:"instruction,omitempty"`
+
 	CheckpointSummaryMsgID string `json:"checkpoint_summary_msg_id,omitempty"`
 	CheckpointLastMsgID    string `json:"checkpoint_last_msg_id,omitempty"`
 	CheckpointTokens       int    `json:"checkpoint_tokens,omitempty"`
@@ -989,6 +997,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		postCPEntries      []lightweightEntry
 		allUsage           []jsonlRecord
 		allMetrics         []jsonlRecord
+		instructionRecords []jsonlRecord
 		haveCheckpoint     bool
 	)
 
@@ -1049,6 +1058,8 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		case "usage":
 
 			allUsage = append(allUsage, rec)
+		case "instruction":
+			instructionRecords = append(instructionRecords, rec)
 		case "metric":
 
 			allMetrics = append(allMetrics, rec)
@@ -1135,6 +1146,10 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			ses.ForkPoint = rec.ForkPoint
 		}
 	}
+
+	// #5698: keyed instructions fold independently of the message/checkpoint
+	// replay paths, so compaction and revert leave them intact.
+	foldInstructionRecords(ses, instructionRecords)
 
 	if ses.Workspace == "" {
 		ses.Workspace = CurrentWorkspacePath()

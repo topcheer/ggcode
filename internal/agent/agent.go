@@ -442,6 +442,11 @@ type Agent struct {
 	qualityScorer            *ResponseQualityScorer
 	systemPromptInjector     func() string
 	systemPromptLayers       []systemPromptLayer
+	keyedInstrMu             sync.Mutex
+	keyedInstr               map[string]keyedInstructionEntry
+	keyedInstrSink           KeyedInstructionSink
+	keyedInstrSessionID      string
+	keyedInstrAudit          []KeyedInstructionAuditLine
 	baseSystemPrompt         string
 	lastInjectedSystemPrompt string
 	harnessFPLast            string

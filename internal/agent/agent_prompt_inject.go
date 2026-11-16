@@ -47,6 +47,17 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 		}
 	}
 
+	// #5698: durable keyed session instructions render as stable keyed
+	// blocks (sorted by key). Only a changed entry's block rewrites, so the
+	// prefix cache stays valid for untouched blocks. announced carries the
+	// keys whose one-line delta rode this assembly.
+	var keyedAnnounced []string
+	if keyedBlock, announced := a.renderKeyedInstructionBlocks(); keyedBlock != "" {
+		dynamicParts = append(dynamicParts, keyedBlock)
+		keyedAnnounced = announced
+		debug.Log("agent", "Injected keyed session instructions into system prompt (%d announce line(s))", len(announced))
+	}
+
 	if rs := a.getRuleStore(); rs != nil {
 		intent := classifyTaskType(runPrompt)
 		rs.SetRunIntent(intent)
@@ -94,6 +105,13 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 		return
 	}
 	a.lastInjectedSystemPrompt = fullText
+
+	// #5698: the announce line(s) rode this shipped assembly — consume the
+	// announce bits now (step-boundary emission, exactly once per change).
+	if len(keyedAnnounced) > 0 {
+		a.consumeKeyedInstructionAnnounce(keyedAnnounced)
+		debug.Log("session-instructions", "announce emitted at step boundary for %d key(s)", len(keyedAnnounced))
+	}
 
 	ctxWindow := a.contextManager.ContextWindow()
 	if ctxWindow > 0 {
