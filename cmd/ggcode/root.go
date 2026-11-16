@@ -29,6 +29,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/intentions"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/mcp"
@@ -1191,6 +1192,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)
 	fileWatch.Start()
 	defer fileWatch.Stop()
+
+	// #5260 prospective intention layer: workspace-level store, engine
+	// surfaces fired intentions through the same session emit path as cron.
+	intentionStore := intentions.NewStore(intentions.DefaultStorePath(), cronSessionID)
+	intentionEngine := intentions.NewEngine(intentionStore, workingDir, cronScheduler.Emit)
+	intentionEngine.Start()
+	defer intentionEngine.Stop()
+	agentruntime.RegisterIntentionTools(registry, intentionStore, intentionEngine)
 	var teamRef *swarm.Manager // team view source (plan face); backfilled when swarmMgr is created below
 
 	// #5597 v3: seven-face introspector, default ON, plain method (trust
