@@ -70,8 +70,9 @@ var panelRegistry = map[string]panelSpec{
 	"stats": {Kind: "stats", Title: "Session Stats", DataURL: "/api/panel/stats", CmdPrefix: "", NoArg: true},
 	"usage": {Kind: "stats", Title: "Usage", DataURL: "/api/panel/usage", CmdPrefix: "", NoArg: true},
 
-	// ── 特例:lanchat 交互面板(先归 list-detail,后独立迭代) ────────
-	"chat": {Kind: "list-detail", Title: "LAN Chat", DataURL: "/api/panel/lanchat", CmdPrefix: "", NoArg: true},
+	// ── 特例:lanchat(/chat)不进面板注册表——它是双向交互对话面板而非
+	// 一次性选择,不适用"选择回填命令"语义;走直通链(TUI 侧打开面板,
+	// webui 用户经 WS 系统消息获知)。webui 原生 LAN 聊天界面属独立特性。
 }
 
 // panelDirectiveFor 判定一条 slash 命令是否应走面板指令而非直通:
