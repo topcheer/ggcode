@@ -58,7 +58,7 @@ func TestIssue5710SetLiveIDAppliesSelfBudget(t *testing.T) {
 		t.Fatal("#5710: SetLiveID built an uncapped index for an over-budget transcript")
 	}
 	ix.mu.RLock()
-	nTrig := len(ix.data.Trigrams)
+	nTrig := len(ix.triID)
 	ix.mu.RUnlock()
 	if nTrig != 0 {
 		t.Fatalf("#5710: capped SetLiveID index retained %d trigrams (postings must be dropped)", nTrig)
@@ -80,7 +80,7 @@ func TestIssue5710SetLiveIDIndexesUnderCap(t *testing.T) {
 		t.Fatal("under-cap live session must be indexed without capping")
 	}
 	ix.mu.RLock()
-	nTrig := len(ix.data.Trigrams)
+	nTrig := len(ix.triID)
 	ix.mu.RUnlock()
 	if nTrig == 0 {
 		t.Fatal("under-cap live session indexed no trigrams")

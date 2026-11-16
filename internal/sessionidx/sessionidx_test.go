@@ -41,7 +41,7 @@ func TestIndexRoundTripAndQuery(t *testing.T) {
 	if err := ix.Refresh(); err != nil {
 		t.Fatal(err)
 	}
-	if ix.data.IndexedTo == 0 {
+	if ix.indexedTo == 0 {
 		t.Fatal("nothing indexed")
 	}
 
@@ -85,7 +85,7 @@ func TestIncrementalTail(t *testing.T) {
 	if err := ix.Refresh(); err != nil {
 		t.Fatal(err)
 	}
-	after1 := ix.data.IndexedTo
+	after1 := ix.indexedTo
 
 	// append more (the only mutation path in production)
 	f, _ := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o600)
@@ -95,7 +95,7 @@ func TestIncrementalTail(t *testing.T) {
 	if err := ix.Refresh(); err != nil {
 		t.Fatal(err)
 	}
-	if ix.data.IndexedTo <= after1 {
+	if ix.indexedTo <= after1 {
 		t.Fatal("tail did not advance")
 	}
 	if hits := ix.Query([]string{"beta"}, 10); len(hits) == 0 {
