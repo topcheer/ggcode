@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -241,13 +242,25 @@ func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearc
 type FuzzyFileSearcher func(query string, maxResults int) []string
 
 func recursiveFuzzySearch(root, query string, maxDepth, maxResults int) []string {
+	// Budget guards: this runs synchronously inside the Bubble Tea event loop
+	// (updateAutoComplete), so an unbounded WalkDir over a huge tree (e.g. the
+	// user's home directory) freezes the whole TUI including Ctrl-C handling.
+	// Cap both wall time and visited entries.
+	return recursiveFuzzySearchBudgeted(root, query, maxDepth, maxResults, 200*time.Millisecond, 20000)
+}
+
+func recursiveFuzzySearchBudgeted(root, query string, maxDepth, maxResults int, budget time.Duration, maxVisits int) []string {
 	query = strings.ToLower(query)
 	var results []string
 	count := 0
 
+	deadline := time.Now().Add(budget)
+	visits := 0
+
 	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || count >= maxResults {
-			return nil
+		visits++
+		if err != nil || count >= maxResults || visits > maxVisits || time.Now().After(deadline) {
+			return filepath.SkipAll
 		}
 
 		rel, err := filepath.Rel(root, path)
