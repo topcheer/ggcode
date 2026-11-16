@@ -94,6 +94,17 @@ func mergeProviderInto(dst, src *catwalkProvider) {
 
 var localModelExtras = []modelEntry{
 	{ID: "glm-4v-plus", ContextWindow: 128000, MaxOutputTokens: 128000, SupportsVision: true, SourceProvider: "zhipuai"},
+	// W47 calibration rows (#5693): not yet present upstream (models.dev
+	// lag); guaranteed here so the drift-guard pins survive regen. Remove
+	// when upstream carries them (extras and upstream rows are identical,
+	// so the dupe is harmless until then).
+	{ID: "gpt-6.1-terra-pro", ContextWindow: 1050000, MaxOutputTokens: 128000, SupportsVision: true, SourceProvider: "openai"},
+	{ID: "openai/gpt-6.1-terra-pro", ContextWindow: 1050000, MaxOutputTokens: 128000, SupportsVision: true, SourceProvider: "openai"},
+	{ID: "gpt-6.1-sol-pro", ContextWindow: 1050000, MaxOutputTokens: 128000, SupportsVision: true, SourceProvider: "openai"},
+	{ID: "openai/gpt-6.1-sol-pro", ContextWindow: 1050000, MaxOutputTokens: 128000, SupportsVision: true, SourceProvider: "openai"},
+	{ID: "qwen4-max-preview", ContextWindow: 1000000, MaxOutputTokens: 393216, SupportsVision: true, SourceProvider: "alibaba-cn"},
+	{ID: "claude-mythos-5.1", ContextWindow: 1000000, MaxOutputTokens: 128000, SupportsVision: true, SourceProvider: "anthropic"},
+	{ID: "claude-mythos-5.2", ContextWindow: 1000000, MaxOutputTokens: 128000, SupportsVision: true, SourceProvider: "anthropic"},
 }
 
 var desiredProviders = map[string]string{
@@ -316,6 +327,50 @@ func visionOverrideFor(sourceProvider, id string) (bool, bool) {
 	return false, false
 }
 
+// upstreamCapabilityOverrides pins context/output fields where models.dev
+// data is known-wrong per official vendor docs (weekly calibration batches,
+// e.g. W47 #5693). Keyed "provider/model-id" (both lowercase), applied after
+// the upstream fetch BEFORE code generation so manual calibration survives
+// regen (the drift-guard pins zz_issue4936_test.go stay authoritative).
+// Sources are recorded per-entry in the calibration commit message.
+type capabilityOverride struct {
+	contextWindow   int
+	maxOutputTokens int
+}
+
+var upstreamCapabilityOverrides = map[string]capabilityOverride{
+	// W47 calibration (#5693): Claude 4.6+ dotted aliases -> official 1M/128K
+	"anthropic/claude-opus-4.8":   {1000000, 128000},
+	"anthropic/claude-opus-4.7":   {1000000, 128000},
+	"anthropic/claude-sonnet-4.6": {1000000, 128000},
+	"claude-opus-4.8":             {1000000, 128000},
+	"claude-opus-4.7":             {1000000, 128000},
+	"claude-sonnet-4.6":           {1000000, 128000},
+	// W47: gemini-4-{argon,carbon,hydrogen} ctx 1000000->1048576, out->65536
+	"google/gemini-4-argon":    {1048576, 65536},
+	"google/gemini-4-carbon":   {1048576, 65536},
+	"google/gemini-4-hydrogen": {1048576, 65536},
+	// #5141/#4936: deepseek v4 siblings clamp to official 384K (393216);
+	// context window stays at the upstream 1M family value (1048576).
+	"deepseek/deepseek-v4-flash-0731": {1048576, 393216},
+	"deepseek/deepseek-v4-pro-0813":   {1048576, 393216},
+	"deepseek-v4-flash:0731":          {1048576, 393216},
+	"deepseek-v4-pro:0813":            {1048576, 393216},
+	"deepseek-v4-pro@eu":              {1048576, 393216},
+}
+
+// capabilityOverrideFor resolves a capability override, tolerating both
+// upstream ID shapes (bare and provider-prefixed), same as visionOverrideFor.
+func capabilityOverrideFor(sourceProvider, id string) (capabilityOverride, bool) {
+	if v, ok := upstreamCapabilityOverrides[sourceProvider+"/"+id]; ok {
+		return v, true
+	}
+	if v, ok := upstreamCapabilityOverrides[id]; ok {
+		return v, true
+	}
+	return capabilityOverride{}, false
+}
+
 func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections []string, allEntries []modelEntry) {
 
 	pids := make([]string, 0, len(desiredProviders))
@@ -359,6 +414,15 @@ func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections
 					fmt.Fprintf(os.Stderr, "  override: %s/%s SupportsVision %v -> %v (#5332 local fix)\n", e.SourceProvider, e.ID, e.SupportsVision, fixed)
 				}
 				e.SupportsVision = fixed
+			}
+			// Weekly calibration layer (#5693 W47 + #5141/#4936): pin
+			// context/output fields so manual calibration survives regen.
+			if fixed, ok := capabilityOverrideFor(e.SourceProvider, e.ID); ok {
+				if e.ContextWindow != fixed.contextWindow || e.MaxOutputTokens != fixed.maxOutputTokens {
+					fmt.Fprintf(os.Stderr, "  override: %s/%s ctx/out %d/%d -> %d/%d (calibration layer)\n", e.SourceProvider, e.ID, e.ContextWindow, e.MaxOutputTokens, fixed.contextWindow, fixed.maxOutputTokens)
+				}
+				e.ContextWindow = fixed.contextWindow
+				e.MaxOutputTokens = fixed.maxOutputTokens
 			}
 			sectionEntries = append(sectionEntries, e)
 		}
