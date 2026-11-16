@@ -10,13 +10,19 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
+// #5700: the idle wake fires only when a fresh idle report is queued in
+// the manager - a subAgentDoneMsg with no underlying completion never
+// starts a run (dequeue-once wake discipline).
 func TestSubAgentDoneMsg_IdleAgent(t *testing.T) {
 
 	m := NewModel(nil, nil)
-	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
+	mgr := subagent.NewManager(config.SubAgentConfig{})
+	m.subAgentMgr = mgr
+	id := mgr.Spawn("code reviewer", "task", "task", nil, context.Background())
+	mgr.Complete(id, "done", nil)
 
 	msg := subAgentDoneMsg{
-		AgentID:   "sa-1",
+		AgentID:   id,
 		AgentName: "code reviewer",
 		IsError:   false,
 		Kind:      "subagent",
@@ -25,7 +31,7 @@ func TestSubAgentDoneMsg_IdleAgent(t *testing.T) {
 	next, cmd := m.Update(msg)
 	m = next.(Model)
 	if cmd == nil {
-		t.Fatal("expected a tea.Cmd to be returned when agent is idle, got nil")
+		t.Fatal("expected a tea.Cmd to be returned when a fresh idle report is queued, got nil")
 	}
 
 	assertSystemMessage(t, &m, "completed", "code reviewer")
@@ -181,10 +187,13 @@ func TestFormatSubAgentDoneNotice(t *testing.T) {
 func TestSubAgentDoneMsg_IdleStartsNewRun(t *testing.T) {
 
 	m := NewModel(nil, nil)
-	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
+	mgr := subagent.NewManager(config.SubAgentConfig{})
+	m.subAgentMgr = mgr
+	id := mgr.Spawn("reviewer", "task", "task", nil, context.Background())
+	mgr.Complete(id, "done", nil)
 
 	msg := subAgentDoneMsg{
-		AgentID:   "sa-review",
+		AgentID:   id,
 		AgentName: "reviewer",
 		IsError:   false,
 		Kind:      "subagent",
@@ -193,7 +202,7 @@ func TestSubAgentDoneMsg_IdleStartsNewRun(t *testing.T) {
 	_, cmd := m.Update(msg)
 
 	if cmd == nil {
-		t.Fatal("expected non-nil cmd when agent is idle after subAgentDoneMsg")
+		t.Fatal("expected non-nil cmd when a fresh idle report is queued after subAgentDoneMsg")
 	}
 
 	msg2 := cmd()

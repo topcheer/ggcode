@@ -166,6 +166,12 @@ func (m *Model) cancelActiveRun() {
 			if subMgr != nil {
 				cancelled := subMgr.CancelAll()
 				debug.Log("cancel", "async CancelAll: subagents cancelled=%d", cancelled)
+				// #5700 cancel-silence: pending idle reports are dropped
+				// and the wake disarmed so an interrupted parent is never
+				// self-woken by a late report (opencode defect class);
+				// results stay pollable via wait_agent. The next
+				// user-initiated submission re-arms the queue.
+				subMgr.SilenceIdleReports()
 			}
 			if swarmMgr != nil {
 				swarmMgr.CancelAll()

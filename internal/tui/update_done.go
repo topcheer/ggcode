@@ -36,6 +36,13 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	m.chatFinishAllRunningTools()
 	m.cancelFunc = nil
 	m.streamPrefixWritten = false
+	m.runEndedAt = time.Now()
+	if m.subAgentMgr != nil {
+		// #5700: reports already queued at run end keep their in-run
+		// delivery slot (the next run's completion feed) but must not
+		// fire the idle wake themselves.
+		m.subAgentMgr.ConsumeIdleWake()
+	}
 
 	m.chatFinishAssistant(m.currentAssistantID())
 	wasCanceled := m.runCanceled
@@ -103,6 +110,10 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	m.spinner.Stop()
 	m.chatFinishAllRunningTools()
 	m.cancelFunc = nil
+	m.runEndedAt = time.Now()
+	if m.subAgentMgr != nil {
+		m.subAgentMgr.ConsumeIdleWake()
+	}
 	m.chatFinishAssistant(m.currentAssistantID())
 	wasCanceled := m.runCanceled
 	wasFailed := m.runFailed

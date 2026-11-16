@@ -248,6 +248,11 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 }
 
 func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cmd {
+	if m.subAgentMgr != nil {
+		// #5700: any user-initiated submission re-arms the idle-report
+		// queue after a cancel silenced it.
+		m.subAgentMgr.ArmIdleReports()
+	}
 	if m.knight != nil && strings.TrimSpace(text) != "" {
 		m.knight.NotifyActivity()
 	}

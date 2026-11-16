@@ -687,6 +687,25 @@ func (r *REPL) SetJobManager(jm *tool.CommandJobManager) {
 	r.model.SetJobManager(jm)
 }
 
+// subagentCompletionFeed adapts the manager's idle-report queue to the
+// agent's in-run completion feed (#5700): consume-once drain, so reports
+// enqueued mid-turn are delivered exactly once at the next iteration
+// boundary and never re-delivered.
+func subagentCompletionFeed(mgr *subagent.Manager) func() []agent.SubagentCompletion {
+	return func() []agent.SubagentCompletion {
+		var out []agent.SubagentCompletion
+		for _, rep := range mgr.DrainIdleReports() {
+			out = append(out, agent.SubagentCompletion{
+				ID:      rep.ID,
+				Name:    rep.Name,
+				Failed:  rep.Status == subagent.StatusFailed || rep.Status == subagent.StatusCancelled,
+				Summary: rep.Summary,
+			})
+		}
+		return out
+	}
+}
+
 func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider, tools *tool.Registry) {
 	r.model.SetSubAgentManager(mgr)
 
@@ -751,29 +770,11 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		WorkingDir:      r.model.agent.WorkingDir(),
 	})
 
-	r.model.agent.SetSubagentCompletionFeed(func() []agent.SubagentCompletion {
-		var out []agent.SubagentCompletion
-		for _, st := range mgr.Statuses() {
-			switch st.Status {
-			case subagent.StatusCompleted:
-			case subagent.StatusFailed, subagent.StatusCancelled:
-				c := agent.SubagentCompletion{ID: st.ID, Name: st.Name, Failed: true}
-				if res, ok := mgr.GetTaskOutput(st.ID); ok {
-					c.Summary = res
-				}
-				out = append(out, c)
-				continue
-			default:
-				continue
-			}
-			c := agent.SubagentCompletion{ID: st.ID, Name: st.Name}
-			if res, ok := mgr.GetTaskOutput(st.ID); ok {
-				c.Summary = res
-			}
-			out = append(out, c)
-		}
-		return out
-	})
+	// #5700: the completion feed drains the manager's idle-report queue
+	// (consume-once) instead of rescanning Statuses() - reports enqueued
+	// mid-turn are delivered at the next iteration boundary and can never
+	// be delivered twice, while results remain pollable via wait_agent.
+	r.model.agent.SetSubagentCompletionFeed(subagentCompletionFeed(mgr))
 	tools.Register(tool.BestOfNTool{
 		Manager: mgr,
 		Run:     agentruntime.BestOfNRunnerFor(spawnTool, mgr),
