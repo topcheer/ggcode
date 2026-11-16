@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +18,16 @@ const (
 	mentionPrefix      = "@"
 	maxMentionFileSize = 100 * 1024
 	maxMentions        = 5
+
+	// Synchronous-IO budgets (#5741). CompleteMention runs synchronously in
+	// the Bubble Tea event loop on every keystroke after an @ mention, so its
+	// directory scan must be bounded the same way recursiveFuzzySearch is.
+	maxMentionCompletionScans = 20000 // max directory entries scanned per keystroke (matches the fuzzy walk's visit cap)
+	maxMentionCompletions     = 100   // max completions returned per keystroke
+	// ExpandMentions runs off-loop, but an unbounded listing of a mentioned
+	// directory floods the prompt (and the model context) with every entry.
+	maxMentionDirEntries = 200 // max entries listed per mentioned directory
+	readDirChunkSize     = 128 // os.File.ReadDir batch size for budgeted reads
 )
 
 type Mention struct {
@@ -131,7 +143,7 @@ func ExpandMentions(input string, workDir string) (string, error) {
 	for _, m := range mentions {
 		if m.IsDir {
 
-			entries, err := os.ReadDir(m.Path)
+			entries, truncated, err := readDirBudgeted(m.Path, maxMentionDirEntries)
 			if err != nil {
 				expanded.WriteString(fmt.Sprintf("\n@%s (error reading directory: %v)\n", m.Path, err))
 				continue
@@ -140,6 +152,9 @@ func ExpandMentions(input string, workDir string) (string, error) {
 			expanded.WriteString(fmt.Sprintf("\n@%s/ (directory):\n", relPath))
 			for _, e := range entries {
 				expanded.WriteString(fmt.Sprintf("  %s\n", e.Name()))
+			}
+			if truncated {
+				expanded.WriteString(fmt.Sprintf("  ... listing capped at %d entries\n", maxMentionDirEntries))
 			}
 		} else {
 
@@ -152,9 +167,16 @@ func ExpandMentions(input string, workDir string) (string, error) {
 				expanded.WriteString(fmt.Sprintf("\n@%s (skipped: file exceeds %d bytes)\n", m.Path, maxMentionFileSize))
 				continue
 			}
-			data, err := os.ReadFile(m.Path)
+			// Bounded read: the Stat above already skips oversized files,
+			// but the file can grow between Stat and read, so cap the read
+			// itself too (#5741).
+			data, overLimit, err := readFileCapped(m.Path, maxMentionFileSize)
 			if err != nil {
 				expanded.WriteString(fmt.Sprintf("\n@%s (error reading: %v)\n", m.Path, err))
+				continue
+			}
+			if overLimit {
+				expanded.WriteString(fmt.Sprintf("\n@%s (skipped: file exceeds %d bytes)\n", m.Path, maxMentionFileSize))
 				continue
 			}
 			relPath, _ := filepath.Rel(workDir, m.Path)
@@ -163,6 +185,76 @@ func ExpandMentions(input string, workDir string) (string, error) {
 	}
 
 	return expanded.String(), nil
+}
+
+// readDirBudgeted reads at most maxEntries entries from dir using chunked
+// os.File.ReadDir, so neither the per-call syscall batches nor the returned
+// slice can grow unbounded on huge directories (#5741). The returned entries
+// are sorted by name, matching os.ReadDir semantics within the scanned
+// prefix. truncated reports whether the directory had more entries than the
+// cap.
+func readDirBudgeted(dir string, maxEntries int) (entries []os.DirEntry, truncated bool, err error) {
+	if maxEntries <= 0 {
+		return nil, false, nil
+	}
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+loop:
+	for len(entries) < maxEntries {
+		want := min(maxEntries-len(entries), readDirChunkSize)
+		batch, rerr := f.ReadDir(want)
+		if len(batch) > 0 {
+			entries = append(entries, batch...)
+		}
+		if rerr != nil {
+			if !errors.Is(rerr, io.EOF) {
+				if len(entries) == 0 {
+					return nil, false, rerr
+				}
+				return entries, false, rerr
+			}
+			break loop
+		}
+		if len(batch) == 0 {
+			break loop
+		}
+	}
+	if len(entries) >= maxEntries {
+		// The cap was reached; probe one more entry to learn whether the
+		// directory is actually exhausted.
+		if one, perr := f.ReadDir(1); perr == nil && len(one) > 0 {
+			truncated = true
+		}
+	}
+	slices.SortFunc(entries, func(a, b os.DirEntry) int {
+		return strings.Compare(a.Name(), b.Name())
+	})
+	return entries, truncated, nil
+}
+
+// readFileCapped reads at most limit+1 bytes from path. overLimit reports
+// whether the file contains more than limit bytes, so a file that grew after
+// a size check cannot push an unbounded payload into the prompt (#5741).
+func readFileCapped(path string, limit int64) (data []byte, overLimit bool, err error) {
+	if limit < 0 {
+		return nil, true, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+	buf, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if int64(len(buf)) > limit {
+		return nil, true, nil
+	}
+	return buf, false, nil
 }
 
 func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearcher) []string {
@@ -197,13 +289,19 @@ func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearc
 		return nil
 	}
 
-	entries, err := os.ReadDir(dir)
+	// Budgeted scan (#5741): this runs synchronously inside the Bubble Tea
+	// event loop on every keystroke; os.ReadDir would slurp a huge directory
+	// whole. readDirBudgeted bounds both the syscalls and the result.
+	entries, _, err := readDirBudgeted(dir, maxMentionCompletionScans)
 	if err != nil {
 		return nil
 	}
 
 	var completions []string
 	for _, e := range entries {
+		if len(completions) >= maxMentionCompletions {
+			break
+		}
 		name := e.Name()
 		if partial != "" && !strings.HasPrefix(name, partial) {
 			continue
