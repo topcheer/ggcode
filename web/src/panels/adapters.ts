@@ -21,7 +21,7 @@ const IM_FIELD_ORDER: { key: string; label: string; type?: string; help?: string
   { key: "allow_from", label: "白名单(逗号分隔)", type: "text" },
 ];
 
-/** IM 适配器平面对象 → 表单 fields + PUT 回写提交 */
+/** endpoint adapter: GET+PUT /api/im/adapters/<name> — 平面对象 → 表单 fields 归一 */
 export function adaptIMAdapter(raw: Record<string, unknown>, dataUrl: string): FormData_ {
   const fields: Field[] = [];
   for (const f of IM_FIELD_ORDER) {
@@ -47,7 +47,7 @@ export function adaptIMAdapter(raw: Record<string, unknown>, dataUrl: string): F
   return { kind: "form", fields, submit: { method: "PUT", url: dataUrl } } as FormData_;
 }
 
-/** 表单值 → IM 适配器 PUT body(checkbox/数组/map 行重组;secret 空值剔除) */
+/** endpoint payload builder: 表单值 → IM 适配器 PUT body(checkbox/数组/map 行重组;secret 空值剔除) */
 export function imFormToConfig(vals: Record<string, string>, fieldDefs: Field[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const defs = new Map(fieldDefs.map((f) => [f.name, f]));
@@ -81,7 +81,7 @@ export function imFormToConfig(vals: Record<string, string>, fieldDefs: Field[])
 
 type RawItem = Record<string, unknown>;
 
-/** cron/skills/mcp 异形 → ListDetailData items 归一 */
+/** endpoint adapter: cron/skills/mcp 三异形 endpoint → ListDetailData items 归一 */
 export function adaptListDetail(raw: unknown, dataUrl: string): ListDetailData {
   const items: { id: string; title: string; subtitle?: string; badges?: string[] }[] = [];
   const arr = Array.isArray(raw) ? (raw as RawItem[]) : [];
