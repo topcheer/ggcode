@@ -20,6 +20,7 @@ func (t SendMessageTool) Description() string {
 	return "Send an async message or lightweight task to another worker. " +
 		"For swarm teammates (tm-*): delivers to inbox; prefer swarm_task_create for tracked work. " +
 		"For sub-agents (agent-*): mailbox messages reach a still-running sub-agent at its next iteration; finished runs never see them - spawn a new agent for follow-up work. " +
+		"Delivery confirms mailbox enqueue only - it does NOT mean read or acted on, and there is no push-back when the recipient processes it; to observe consumption and results use subagent_context (live events) / wait_agent or list_agents (final report) for agent-*, or teammate_results for tm-*. " +
 		"to='*' for best-effort broadcast (not tracked). Provide team_id when known."
 }
 func (t SendMessageTool) Parameters() json.RawMessage {
