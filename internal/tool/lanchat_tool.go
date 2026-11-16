@@ -15,6 +15,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/lanchat"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 type LanChatTool struct {
@@ -36,7 +37,7 @@ func NewLanChatTool(hub *lanchat.Hub, cfg config.LanChatConfig) LanChatTool {
 		t.dmQueue = newDMRetryQueue()
 		ctx, cancel := context.WithCancel(context.Background())
 		t.dmQueueCancel = cancel
-		go t.dmQueueFlushLoop(ctx)
+		safego.Go("lanchat.dmQueueFlushLoop", func() { t.dmQueueFlushLoop(ctx) })
 	}
 
 	if hub != nil {
