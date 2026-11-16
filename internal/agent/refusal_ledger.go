@@ -347,12 +347,15 @@ func isRefusalFlagBodyByte(b byte) bool {
 	return b == '-' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
 }
 
-// --- #4795 (S-26): flag anchors carry the command domain they were refused
+// --- #4795 (S-26): anchors carry the command domain they were refused
 // in. A `git push --force` refusal must not block `git worktree remove
-// --force`: the anchors share the flag but not the action domain. Path
-// anchors stay wildcard (they name protected objects, not verbs), and any
-// flag anchor whose excerpt carries no command context stays wildcard too -
-// the conservative side that keeps #3460 poisoning protection intact.
+// --force`: the anchors share the flag but not the action domain. Flag
+// anchors whose excerpt carries no command context stay wildcard, and path
+// anchors scope ONLY under an explicit git-family verb carrier
+// (refusalPathDomainVerbs) - semantic verbs ("delete", "remove") keep the
+// wildcard so a "don't delete config.yaml" refusal still blocks the whole
+// deletion family. Both are the conservative side that keeps #3460
+// poisoning protection intact.
 
 var refusalDomainHeadPattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]*`)
 
@@ -526,6 +529,107 @@ func refusalSplitCommandUnits(command string) []string {
 	return units
 }
 
+// refusalPathDomainVerbs (#4795 residual, 2026-11-17): command verbs that
+// name exactly one action family, so a path anchor carried by a refusal
+// mentioning them is scoped to that family ("never push to release/2.0"
+// must not block `git checkout release/2.0`). Deliberately EXCLUDES
+// semantic verbs with no command vocabulary ("delete", "remove",
+// "overwrite", "modify"): "don't delete config.yaml" intends the whole
+// deletion family (rm, shred, git rm), and scoping it to a literal
+// "delete" domain would silently unblock `rm config.yaml` - the
+// wrongly-opened real lock the 11-01 owner ruling warns about. Only
+// verbs that ARE the command word scope a path anchor; everything else
+// keeps the wildcard.
+var refusalPathDomainVerbs = map[string]bool{
+	"push": true, "pull": true, "fetch": true, "merge": true,
+	"rebase": true, "cherry-pick": true, "revert": true, "reset": true,
+	"checkout": true, "switch": true, "restore": true, "clone": true,
+	"branch": true, "worktree": true, "stash": true, "tag": true,
+	"commit": true, "rm": true, "mv": true,
+}
+
+// refusalStemDomainVerb returns the domain verb for a carrier word,
+// accepting plain inflections ("pushing"/"pushed"/"pushes" -> "push").
+// A wrong stem simply misses the set and falls back to wildcard
+// (fail-closed); it can never invent a domain.
+func refusalStemDomainVerb(w string) string {
+	if refusalPathDomainVerbs[w] {
+		return w
+	}
+	for _, suf := range []string{"ing", "ed", "es", "s"} {
+		if strings.HasSuffix(w, suf) {
+			if stem := w[:len(w)-len(suf)]; refusalPathDomainVerbs[stem] {
+				return stem
+			}
+		}
+	}
+	return ""
+}
+
+// refusalPathCarriers returns the excerpt text preceding the first
+// occurrence of the path anchor - the words that name the action the
+// refusal attaches to that path. Lowercased so the already-lowercased
+// anchor always finds its site; a miss yields "" (wildcard).
+func refusalPathCarriers(excerpt, anchor string) string {
+	if anchor == "" {
+		return ""
+	}
+	lower := strings.ToLower(excerpt)
+	i := strings.Index(lower, anchor)
+	if i < 0 {
+		return ""
+	}
+	return lower[:i]
+}
+
+// refusalPathAnchorDomain derives the command domain a PATH anchor
+// belongs to, unlike refusalAnchorDomain only from carrier verbs in
+// refusalPathDomainVerbs (after directive-filler skip and light
+// stemming). `git <sub>` contexts resolve to the specific
+// `git-<sub>` domain. "" means wildcard: no usable verb was
+// carried, or the verb was a semantic word outside the safe set - both
+// keep the pre-#4795 conservative scope.
+func refusalPathAnchorDomain(carriers string) string {
+	words := strings.Fields(carriers)
+	for i := 0; i < len(words); i++ {
+		w := refusalTrimDomainToken(words[i])
+		if refusalDirectiveWords[w] || isRefusalDomainWrapper(w) {
+			continue
+		}
+		head := refusalDomainHeadPattern.FindString(w)
+		if head == "" {
+			return ""
+		}
+		if head == "git" && i+1 < len(words) {
+			next := refusalTrimDomainToken(words[i+1])
+			if !strings.HasPrefix(next, "-") {
+				if sub := refusalDomainHeadPattern.FindString(next); sub != "" {
+					if v := refusalStemDomainVerb(sub); v != "" {
+						return "git-" + v
+					}
+				}
+			}
+		}
+		return refusalStemDomainVerb(head)
+	}
+	return ""
+}
+
+// refusalPathDomainAllows is refusalDomainAllows for path anchors: the
+// carriers are the words before THIS anchor's occurrence (a path can sit
+// after its verb anywhere in the excerpt), and the derived domain must be
+// a refusalPathDomainVerbs family or the anchor stays wildcard.
+func refusalPathDomainAllows(excerpt, anchor string, callDomains map[string]bool) bool {
+	if callDomains == nil {
+		return true
+	}
+	domain := refusalPathAnchorDomain(refusalPathCarriers(excerpt, anchor))
+	if domain == "" {
+		return true
+	}
+	return callDomains[domain]
+}
+
 // refusalDomainAllows reports whether a call whose command domains are
 // callDomains may still be blocked by an anchor with the given carriers.
 // A wildcard anchor domain ("" - no command context) or an unparsable call
@@ -571,15 +675,27 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 		}
 		carriers := refusalDomainCarriers(e.Excerpt)
 		for _, t := range refusalTargets(e.Excerpt) {
-			if refusalAnchorHit(lower, t) && refusalDomainAllows(t, carriers, callDomains) {
-				age := refusalAgeWords(now - e.Ts)
-				return fmt.Sprintf(
-					"blocked by persisted user refusal (%s): \"%s\". "+
-						"The user refused this action and that refusal is enforced across runs. "+
-						"Do not attempt it again unless the user explicitly lifts the refusal; "+
-						"ask them to confirm (they can also run /refusals clear).",
-					age, e.Excerpt)
+			if !refusalAnchorHit(lower, t) {
+				continue
 			}
+			// #4795: flag anchors scope by the command context carried in
+			// their excerpt; path anchors scope only under an explicit
+			// git-family verb carrier (semantic verbs such as "delete"
+			// keep the wildcard - see refusalPathDomainVerbs).
+			if t[0] == '-' {
+				if !refusalDomainAllows(t, carriers, callDomains) {
+					continue
+				}
+			} else if !refusalPathDomainAllows(e.Excerpt, t, callDomains) {
+				continue
+			}
+			age := refusalAgeWords(now - e.Ts)
+			return fmt.Sprintf(
+				"blocked by persisted user refusal (%s): \"%s\". "+
+					"The user refused this action and that refusal is enforced across runs. "+
+					"Do not attempt it again unless the user explicitly lifts the refusal; "+
+					"ask them to confirm (they can also run /refusals clear).",
+				age, e.Excerpt)
 		}
 	}
 	return ""
