@@ -157,11 +157,55 @@ func (m Model) handleSubAgentDoneMsg(msg subAgentDoneMsg) (Model, tea.Cmd) {
 			return m, graceCmd
 		}
 
+		if msg.Kind != "teammate" && m.subAgentMgr != nil {
+			// #5700 idle-report wake: drain reports that arrived after the
+			// last run ended and wake the parent exactly once with a
+			// batched digest. Reports already pending at run end stay
+			// queued for the next run's in-run delivery (finished-parent
+			// silence); the drain is consume-once, so N concurrent
+			// completions coalesce into this single turn.
+			if fresh := m.subAgentMgr.DrainIdleReportsSince(m.runEndedAt); len(fresh) > 0 {
+				debug.Log("agent", "idle-report wake: %d fresh report(s), submitting one digest turn", len(fresh))
+				return m, tea.Batch(graceCmd, m.submitText(formatIdleReportDigest(fresh), true))
+			}
+			return m, graceCmd
+		}
+
 		return m, tea.Batch(graceCmd, m.submitText(agentHint, true))
 	}
 
 	return m, graceCmd
 
+}
+
+// formatIdleReportDigest renders drained idle reports as the single
+// synthetic user turn that wakes an idle parent (#5700). Batching keeps
+// the wake cost at one model turn regardless of how many children
+// finished while the parent was idle.
+func formatIdleReportDigest(reports []subagent.IdleReport) string {
+	var b strings.Builder
+	if len(reports) == 1 {
+		b.WriteString("A sub-agent run finished while you were idle:\n")
+	} else {
+		b.WriteString(fmt.Sprintf("%d sub-agent runs finished while you were idle:\n", len(reports)))
+	}
+	for _, r := range reports {
+		name := r.Name
+		if name == "" {
+			name = r.ID
+		}
+		status := "completed"
+		if r.Status != subagent.StatusCompleted {
+			status = strings.ToUpper(string(r.Status))
+		}
+		line := fmt.Sprintf("- %s (%s): %s", r.ID, name, status)
+		if s := strings.TrimSpace(r.Summary); s != "" {
+			line += " - " + s
+		}
+		b.WriteString(line + "\n")
+	}
+	b.WriteString("When a result is relevant to your current task, harvest the full output with wait_agent or list_agents; otherwise continue what you were doing. Do not re-spawn.")
+	return b.String()
 }
 
 func (m Model) handleSubAgentFollowRefreshMsg(msg subAgentFollowRefreshMsg) (Model, tea.Cmd) {

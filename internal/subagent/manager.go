@@ -87,6 +87,7 @@ type SubAgent struct {
 	goroutineStarted bool
 	lastActivity     time.Time
 	toolExecuting    bool
+	idleReportSent   bool
 	mu               sync.Mutex
 }
 
@@ -383,6 +384,12 @@ type Manager struct {
 	inactivityTimeout time.Duration
 
 	semOwners map[string]bool
+
+	idleMu       sync.Mutex
+	idleQueue    []IdleReport
+	idleWake     chan struct{}
+	idleDropped  int
+	idleSilenced bool
 }
 
 func NewManager(cfg config.SubAgentConfig) *Manager {
@@ -410,6 +417,7 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 		maxConcurrent:     max,
 		maxTotal:          cfg.MaxTotal,
 		semOwners:         make(map[string]bool),
+		idleWake:          make(chan struct{}, 1),
 	}
 	m.startWatchdog()
 	return m
@@ -481,6 +489,7 @@ func (m *Manager) reapInactiveAgents() {
 		sa.mu.Unlock()
 		m.mu.Unlock()
 
+		m.enqueueIdleReport(sa)
 		m.notifyUpdate(sa)
 		debug.Log("subagent", "watchdog: failed never-started pending sub-agent %s (slot reclaimed)", id)
 	}
@@ -527,6 +536,7 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 		m.mu.Lock()
 		m.agents[errID] = sa
 		m.mu.Unlock()
+		m.enqueueIdleReport(sa)
 		return errID
 	default:
 	}
@@ -549,6 +559,7 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 		close(sa.done)
 		m.agents[errID] = sa
 		m.mu.Unlock()
+		m.enqueueIdleReport(sa)
 		return errID
 	}
 	running := 0
@@ -576,6 +587,7 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 		close(sa.done)
 		m.agents[errID] = sa
 		m.mu.Unlock()
+		m.enqueueIdleReport(sa)
 		return errID
 	}
 	m.nextID++
@@ -784,6 +796,7 @@ func (m *Manager) Cancel(id string) bool {
 		sa.closeDone()
 	}
 	sa.mu.Unlock()
+	m.enqueueIdleReport(sa)
 	m.notifyUpdate(sa)
 	return true
 }
@@ -987,6 +1000,7 @@ func (m *Manager) Complete(id string, result string, err error) {
 		sa.mu.Unlock()
 
 		if backfilled {
+			m.refreshIdleReport(sa)
 			if onComplete != nil {
 				onComplete(sa)
 			}
@@ -1012,6 +1026,7 @@ func (m *Manager) Complete(id string, result string, err error) {
 	sa.closeDone()
 	sa.mu.Unlock()
 
+	m.enqueueIdleReport(sa)
 	if onComplete != nil {
 		onComplete(sa)
 	}

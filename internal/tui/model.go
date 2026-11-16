@@ -427,6 +427,7 @@ type Model struct {
 	runCanceled          bool
 	runFailed            bool
 	runStartTime         time.Time
+	runEndedAt           time.Time
 	subAgentsCanceling   bool
 	lastUserSubmission   string
 	crashResumeTask      string
