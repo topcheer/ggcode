@@ -21,7 +21,7 @@ const IM_FIELD_ORDER: { key: string; label: string; type?: string; help?: string
   { key: "allow_from", label: "白名单(逗号分隔)", type: "text" },
 ];
 
-/** endpoint adapter: GET+PUT /api/im/adapters/<name> — 平面对象 → 表单 fields 归一 */
+/** endpoint adapter: GET+PUT /api/im/adapters/<name> - 平面对象 → 表单 fields 归一 */
 export function adaptIMAdapter(raw: Record<string, unknown>, dataUrl: string): FormData_ {
   const fields: Field[] = [];
   for (const f of IM_FIELD_ORDER) {
