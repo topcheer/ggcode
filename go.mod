@@ -6,16 +6,16 @@ require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.1.1
 	charm.land/glamour/v2 v2.0.1
-	charm.land/lipgloss/v2 v2.0.6
+	charm.land/lipgloss/v2 v2.1.1
 	github.com/BurntSushi/toml v1.6.0
 	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/charmbracelet/x/term v0.2.2
-	github.com/chromedp/cdproto v0.159.2
-	github.com/chromedp/chromedp v0.23.0
+	github.com/chromedp/cdproto v0.160.3
+	github.com/chromedp/chromedp v0.23.1
 	github.com/creack/pty/v2 v2.0.1
-	github.com/dop251/goja v0.0.0-20261108153707-d8dfb4d8b999
+	github.com/dop251/goja v0.0.0-20261110204830-f493a2b600d6
 	github.com/eekstunt/telegramify-markdown-go v0.2.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -32,7 +32,7 @@ require (
 	github.com/pion/logging v0.2.4
 	github.com/pion/webrtc/v4 v4.2.26
 	github.com/sashabaranov/go-openai v1.43.0
-	github.com/saucelabs/forwarder v1.6.4
+	github.com/saucelabs/forwarder v1.6.5
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.1.0
@@ -41,10 +41,10 @@ require (
 	github.com/young2j/oxmltotext v1.0.3
 	github.com/yuin/goldmark v1.8.7
 	go.mau.fi/util v0.11.0
-	go.mau.fi/whatsmeow v0.0.0-20261107160454-79dc2a8c33df
+	go.mau.fi/whatsmeow v0.0.0-20261113220833-ecc39170bc14
 	golang.org/x/crypto v0.59.0
-	golang.org/x/image v0.47.0
-	golang.org/x/mod v0.42.0
+	golang.org/x/image v0.48.0
+	golang.org/x/mod v0.43.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.48.0
@@ -150,7 +150,7 @@ require (
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.2 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/topcheer/etunnel v1.6.8
+	github.com/topcheer/etunnel v1.7.6
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.77.0 // indirect
