@@ -167,6 +167,7 @@ type Server struct {
 	knightActionFn  KnightActionFunc
 	knightContentFn KnightSkillContentFunc
 	statusFn        RuntimeStatusFunc
+	panelDataFns    map[string]func() any // webui 面板注入式数据面(SetPanelDataFn)
 	sessionStore    session.Store
 	workspace       string
 	saveScope       string

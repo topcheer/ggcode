@@ -102,3 +102,13 @@ func panelDirectiveFor(text string) (panelSpec, string, bool) {
 func (s *Server) registerPanelRoutes() {
 	s.mux.HandleFunc("/api/panel/", s.handlePanelData)
 }
+
+// SetPanelDataFn 注入面板数据供给面(root 装配处以闭包提供,最小提层:
+// 数据源实例(自动记忆/会话仓/运行态)已在 root 作用域,取数逻辑不复制)。
+// 命中后对应 /api/panel/<name> 返回真实数据;未注入的面板维持 501。
+func (s *Server) SetPanelDataFn(name string, fn func() any) {
+	if s.panelDataFns == nil {
+		s.panelDataFns = map[string]func() any{}
+	}
+	s.panelDataFns[name] = fn
+}

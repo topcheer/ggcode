@@ -95,3 +95,31 @@ func TestPanelDataPending501(t *testing.T) {
 		t.Errorf("plugins panel = %d, want 501 pending", rec.Code)
 	}
 }
+
+// TestPanelDataInjection 注入面优先级钉测:SetPanelDataFn 命中即真数据,
+// 未注入(usage/plugins)维持 501 占位(#5714 增量)。
+func TestPanelDataInjection(t *testing.T) {
+	s := &Server{}
+	s.SetPanelDataFn("memory", func() any {
+		return map[string]any{"kind": "list-detail", "items": []map[string]any{{"id": "k", "title": "k"}}}
+	})
+	rec := httptest.NewRecorder()
+	s.handlePanelData(rec, httptest.NewRequest(http.MethodGet, "/api/panel/memory", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("injected memory panel = %d, want 200", rec.Code)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("decode injected panel: %v", err)
+	}
+	items, _ := m["items"].([]any)
+	if len(items) != 1 {
+		t.Errorf("injected items = %d, want 1 (body: %s)", len(items), rec.Body.String())
+	}
+	// 未注入面维持 501
+	rec2 := httptest.NewRecorder()
+	s.handlePanelData(rec2, httptest.NewRequest(http.MethodGet, "/api/panel/usage", nil))
+	if rec2.Code != http.StatusNotImplemented {
+		t.Errorf("non-injected usage panel = %d, want 501", rec2.Code)
+	}
+}
