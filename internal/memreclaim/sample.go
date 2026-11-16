@@ -10,8 +10,21 @@ package memreclaim
 //     (in-use bytes + live object count per site, from the runtime heap
 //     profile) - variable-level granularity without dumping the whole
 //     profile.
+//   - tailSites + sitesTotal (#5720): the top-N cut used to drop the long
+//     tail with zero accounting - growth beyond the last visible row was
+//     indistinguishable from "no growth". Records now carry a tail
+//     aggregation bucket (site count / in-use bytes / live objects summed
+//     over everything past the cut) plus sitesTotal, the sampled in-use
+//     bytes summed over ALL sites (top + tail).
 //
-// N defaults to 20 (GGCODE_MEM_SAMPLE_TOP). Dir override:
+// CAVEAT - attribution scale (#5701/#5720): per-site bytes come from the
+// pprof debug=1 text form and are RAW UNSCALED SAMPLED BYTES (512KB
+// sampling rate). sitesTotal therefore under-reports true heap usage
+// (observed ~10x gap vs heapInuseBytes, concentrated in small-allocation
+// churn). Compare sitesTotal and heapInuseBytes before concluding "growth
+// outside attribution".
+//
+// N defaults to 10 (GGCODE_MEM_SAMPLE_TOP). Dir override:
 // GGCODE_MEM_SAMPLE_JSONL_DIR. Full profiles remain available on demand
 // via the built-in pprof port.
 
@@ -64,11 +77,23 @@ type siteStat struct {
 	// #5710 widened attribution: the old key was the raw innermost symbol
 	// WITH its +0x PC offset, which split one function across several rows
 	// (addPostings+0x3cf vs +0x3a3) and carried no caller context.
+	//
+	// Bytes/Objects are raw unscaled sampled values (512KB pprof sampling
+	// rate) - see the CAVEAT block in the file header (#5720).
 	Site    string `json:"site"`
 	Fn      string `json:"fn"`               // innermost frame, offsets stripped
 	Caller  string `json:"caller,omitempty"` // second frame, offsets stripped
 	Bytes   uint64 `json:"inuseBytes"`       // in-use bytes allocated from this site
 	Objects uint64 `json:"liveObjects"`
+}
+
+// tailStat aggregates every heap site past the top-N cut (#5720): the
+// long tail was previously dropped with zero accounting. Bytes/Objects
+// carry the same unscaled-sample caveat as siteStat.
+type tailStat struct {
+	Sites       uint64 `json:"sites"`       // number of aggregated sites past the cut
+	InuseBytes  uint64 `json:"inuseBytes"`  // summed sampled in-use bytes
+	LiveObjects uint64 `json:"liveObjects"` // summed live object count
 }
 
 type statsRecord struct {
@@ -82,6 +107,8 @@ type statsRecord struct {
 	SysB         uint64     `json:"sysBytes"`
 	NumGC        uint32     `json:"numGC"`
 	TopSites     []siteStat `json:"topSites,omitempty"`
+	TailSites    *tailStat  `json:"tailSites,omitempty"`  // #5720: sites past the top-N cut, aggregated
+	SitesTotal   uint64     `json:"sitesTotal,omitempty"` // #5720: sampled in-use bytes over ALL sites (top+tail)
 }
 
 // writeStatsLine samples MemStats + heap top-sites and appends one JSONL
@@ -98,6 +125,7 @@ func writeStatsLine(ms *runtime.MemStats, force bool) {
 		}
 		dir = filepath.Join(home, ".ggcode")
 	}
+	top, tail, total := heapTopSitesFull(topSitesLimit())
 	rec := statsRecord{
 		TS:           time.Now().UTC().Format(time.RFC3339),
 		PID:          os.Getpid(),
@@ -108,7 +136,11 @@ func writeStatsLine(ms *runtime.MemStats, force bool) {
 		StackSysB:    ms.StackSys,
 		SysB:         ms.Sys,
 		NumGC:        ms.NumGC,
-		TopSites:     heapTopSites(topSitesLimit()),
+		TopSites:     top,
+		SitesTotal:   total,
+	}
+	if tail.Sites > 0 {
+		rec.TailSites = &tail
 	}
 	b, err := json.Marshal(rec)
 	if err != nil {
@@ -142,11 +174,19 @@ func writeStatsLine(ms *runtime.MemStats, force bool) {
 // addPostings+0x3cf from +0x3a3) and workload paths stay distinguishable
 // (who called the allocator).
 func heapTopSites(n int) []siteStat {
+	top, _, _ := heapTopSitesFull(n)
+	return top
+}
+
+// heapTopSitesFull additionally returns the #5720 tail bucket (sites past
+// the top-N cut, aggregated) and sitesTotal (sampled in-use bytes over all
+// aggregated sites), so records can account for the long tail.
+func heapTopSitesFull(n int) ([]siteStat, tailStat, uint64) {
 	var buf bytes.Buffer
 	if err := pprof.Lookup("heap").WriteTo(&buf, 1); err != nil {
-		return nil
+		return nil, tailStat{}, 0
 	}
-	return parseHeapTopSites(&buf, n)
+	return parseHeapTopSitesFull(&buf, n)
 }
 
 // stripSymOff removes the trailing "+0x..." PC offset from a symbolized
@@ -172,6 +212,16 @@ func siteKey(fn, caller string) string {
 // offset-stripped. Blocks with no symbolized frame are skipped. Split
 // from heapTopSites so the walk is testable on synthetic profiles.
 func parseHeapTopSites(r io.Reader, n int) []siteStat {
+	top, _, _ := parseHeapTopSitesFull(r, n)
+	return top
+}
+
+// parseHeapTopSitesFull is parseHeapTopSites plus the #5720 tail bucket:
+// the sites past the top-N cut, aggregated into one tailStat, and
+// sitesTotal - the sampled in-use bytes summed over ALL aggregated sites
+// (top + tail). Truncation semantics for the top slice are identical to
+// parseHeapTopSites (the #5710 pins depend on them).
+func parseHeapTopSitesFull(r io.Reader, n int) ([]siteStat, tailStat, uint64) {
 	agg := map[string]*siteStat{}
 	flush := func(fn, caller string, objs, bts uint64) {
 		if fn == "" {
@@ -240,8 +290,18 @@ func parseHeapTopSites(r io.Reader, n int) []siteStat {
 		out = append(out, *e)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Bytes > out[j].Bytes })
+	var total uint64
+	for _, e := range out {
+		total += e.Bytes
+	}
+	var tail tailStat
 	if len(out) > n {
+		for _, e := range out[n:] {
+			tail.Sites++
+			tail.InuseBytes += e.Bytes
+			tail.LiveObjects += e.Objects
+		}
 		out = out[:n]
 	}
-	return out
+	return out, tail, total
 }
