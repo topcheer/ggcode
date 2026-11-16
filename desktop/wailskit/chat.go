@@ -3554,12 +3554,18 @@ func (b *ChatBridge) Close() {
 	b.mu.Lock()
 	subAgents := b.subAgentMgr
 	swarms := b.swarmMgr
+	intentionEngine := b.intentionEngine
 	b.mu.Unlock()
 	if subAgents != nil {
 		subAgents.CancelAll()
 	}
 	if swarms != nil {
 		swarms.CancelAll()
+	}
+	// #5260: stop the intention engine poll loop with the bridge (mirrors
+	// the deferred Stop in cmd/ggcode root/daemon wiring).
+	if intentionEngine != nil {
+		intentionEngine.Stop()
 	}
 
 	b.cleanupEphemeralSession()
