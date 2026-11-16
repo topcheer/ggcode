@@ -167,6 +167,7 @@ type Server struct {
 	knightActionFn  KnightActionFunc
 	knightContentFn KnightSkillContentFunc
 	statusFn        RuntimeStatusFunc
+	panelDataFns    map[string]func() any // webui 面板注入式数据面(SetPanelDataFn)
 	sessionStore    session.Store
 	workspace       string
 	saveScope       string
@@ -363,6 +364,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/knight/skills", a(s.handleKnightSkills))
 	s.mux.HandleFunc("/api/knight/action", a(s.handleKnightAction))
 	s.mux.HandleFunc("/api/knight/skill-content", a(s.handleKnightSkillContent))
+	s.registerPanelRoutes()
 	s.mux.HandleFunc("/api/status", a(s.handleStatus))
 }
 

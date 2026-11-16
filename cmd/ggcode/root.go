@@ -1712,6 +1712,61 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	// 聊天三能力(模型/effort/mode)注入:webui 复用 TUI slash 命令全链
 	webuiSrv.SetChatCommandFn(repl.SubmitCommand)
 	webuiSrv.SetChatControlsFn(repl.ChatControlsSnapshot)
+	// webui 面板注入式数据面(#5714):闭包直取 root 作用域数据源,
+	// 取数逻辑零复制(autoMem/sessionStore/statusFn 皆现成)。
+	webuiSrv.SetPanelDataFn("memory", func() any {
+		entries, err := core.AutoMemory.ListDetailed()
+		if err != nil {
+			return map[string]any{"kind": "list-detail", "items": []any{}, "error": err.Error()}
+		}
+		items := make([]map[string]any, 0, len(entries))
+		for _, e := range entries {
+			items = append(items, map[string]any{"id": e.Key, "title": e.Key, "subtitle": fmt.Sprintf("%d uses", e.Uses), "badges": []string{fmt.Sprintf("%d uses", e.Uses)}})
+		}
+		return map[string]any{"kind": "list-detail", "items": items}
+	})
+	webuiSrv.SetPanelDataFn("tags", func() any {
+		sessions, err := store.List()
+		if err != nil {
+			return map[string]any{"kind": "list-detail", "items": []any{}, "error": err.Error()}
+		}
+		counts := map[string]int{}
+		for _, ses := range sessions {
+			for _, t := range ses.Tags {
+				counts[t]++
+			}
+		}
+		type tagItem struct {
+			name  string
+			count int
+		}
+		list := make([]tagItem, 0, len(counts))
+		for t, n := range counts {
+			list = append(list, tagItem{t, n})
+		}
+		sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
+		items := make([]map[string]any, 0, len(list))
+		for _, it := range list {
+			items = append(items, map[string]any{"id": it.name, "title": it.name, "subtitle": fmt.Sprintf("%d sessions", it.count)})
+		}
+		return map[string]any{"kind": "list-detail", "items": items}
+	})
+	webuiSrv.SetPanelDataFn("stats", func() any {
+		st := repl.RuntimeStatus()
+		return map[string]any{
+			"kind": "stats",
+			"sections": []map[string]any{{
+				"title": "Runtime",
+				"metrics": []map[string]string{
+					{"label": "Workspace", "value": st.Workspace},
+					{"label": "PID", "value": fmt.Sprintf("%d", st.PID)},
+					{"label": "Model", "value": st.Vendor + "/" + st.Model},
+					{"label": "Mode", "value": st.PermissionMode},
+					{"label": "Context", "value": fmt.Sprintf("%d", st.ContextWindow)},
+				},
+			}},
+		}
+	})
 	// 插入消息队列:三事件广播(append/dequeue/clear)+连接时快照
 	repl.SetQueueNotifyFn(webuiSrv.EmitQueueEvent)
 	webuiSrv.SetQueueSnapshotFn(repl.QueuedSubmissions)

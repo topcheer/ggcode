@@ -52,6 +52,20 @@ func (s *Server) handleChatCommand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "not a slash command")
 		return
 	}
+	// 面板类命令(无参形态):不送 TUI(那会在 TUI 屏弹面板,webui 用户
+	// 不可见),返回面板指令让前端渲染 webui 面板;选择回填为带参命令
+	// 二次提交走下方直通链。带参命令永不进此分支。
+	if spec, base, ok := panelDirectiveFor(req.Text); ok {
+		writeJSON(w, map[string]interface{}{
+			"status":    "panel",
+			"command":   "/" + base,
+			"kind":      spec.Kind,
+			"title":     spec.Title,
+			"dataUrl":   spec.DataURL,
+			"cmdPrefix": spec.CmdPrefix,
+		})
+		return
+	}
 	if err := s.chatCommandFn(req.Text); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
