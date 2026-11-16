@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 )
 
@@ -42,7 +43,7 @@ type RuntimeTool struct {
 func (t RuntimeTool) Name() string { return "runtime" }
 
 func (t RuntimeTool) Description() string {
-	return "Query runtime status: session ID, permission mode, provider/model, language, IM adapter status, and mobile tunnel connection. Read-only, always allowed."
+	return "Query runtime status: session ID, process PID, permission mode, provider/model, language, IM adapter status, and mobile tunnel connection. Read-only, always allowed."
 }
 
 func (t RuntimeTool) Parameters() json.RawMessage {
@@ -74,6 +75,7 @@ func (f runtimeStatusFormatter) String() string {
 	b = append(b, "Runtime Status:\n"...)
 
 	b = append(b, fmt.Sprintf("  Session ID: %s\n", p.RuntimeSessionID())...)
+	b = append(b, fmt.Sprintf("  PID: %d\n", os.Getpid())...)
 	b = append(b, fmt.Sprintf("  Permission mode: %s\n", p.RuntimePermissionMode())...)
 	b = append(b, fmt.Sprintf("  Vendor: %s\n", p.RuntimeVendor())...)
 	b = append(b, fmt.Sprintf("  Endpoint: %s\n", p.RuntimeEndpoint())...)
