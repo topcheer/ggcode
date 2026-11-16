@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ListDetailData, PanelDirective } from "./types";
 import { submitCommand } from "./types";
+import { adaptListDetail } from "./adapters";
 
 type Item = { id: string; title: string; subtitle?: string; badges?: string[] };
 
@@ -14,19 +15,12 @@ export default function ListDetailPanel({ panel, onClose }: { panel: PanelDirect
   useEffect(() => {
     fetch(panel.dataUrl)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`数据拉取失败 (${r.status})`))))
-      .then((d: ListDetailData) => setData(d))
+      // 异形端点归一:cron 顶层数组/skills 双键/mcp 嵌套 → {items}
+      .then((raw: unknown) => setData(adaptListDetail(raw, panel.dataUrl)))
       .catch((e: Error) => setErr(e.message || String(e)));
   }, [panel.dataUrl]);
 
-  // 既有端点形状适配:兼容 {items}|{sessions}|数组 三形态,归一为 Item[]
-  const items: Item[] = (() => {
-    const raw = (data?.items ?? (data as unknown as { sessions?: Item[] })?.sessions ?? data) as
-      | Item[]
-      | Record<string, unknown>
-      | undefined;
-    if (Array.isArray(raw)) return raw;
-    return [];
-  })();
+  const items: Item[] = (data?.items ?? []) as Item[];
 
   const act = async (item: Item) => {
     const cmd = data?.submit?.command ?? panel.cmdPrefix;

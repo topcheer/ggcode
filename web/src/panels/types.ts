@@ -43,8 +43,9 @@ export type ListDetailData = {
 
 export type FormData_ = {
   kind: "form";
-  fields?: { name: string; label: string; type?: string; placeholder?: string; secret?: boolean; help?: string }[];
-  submit?: { command: string };
+  fields?: { name: string; label: string; type?: string; placeholder?: string; secret?: boolean; help?: string; value?: string }[];
+  /** 提交双模式:http(方法+URL 回写,如 IM 适配器 PUT)优先;command(拼参回填命令) */
+  submit?: { method?: string; url?: string; command?: string };
   [k: string]: unknown;
 };
 
