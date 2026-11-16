@@ -117,6 +117,17 @@ def main():
             fmt_mb(rec.get("heapReleasedBytes", rec.get("heap_released_bytes", 0))),
             rec.get("numGC", rec.get("num_gc", 0)),
             span))
+        # #5720 tail accounting: tailSites aggregates everything past the
+        # top-N cut; sitesTotal is the sampled sum over ALL sites. Both are
+        # absent on pre-#5720 rows (tolerated, same policy as fn/caller).
+        tail = rec.get("tailSites") or rec.get("tail_sites")
+        if isinstance(tail, dict):
+            tb = tail.get("inuseBytes", tail.get("inuse_bytes", 0))
+            print("           tail: %s across %s sites past the cut" % (
+                fmt_mb(tb), tail.get("sites", "?")))
+        st = rec.get("sitesTotal", rec.get("sites_total", 0))
+        if st:
+            print("           sitesTotal: %s (unscaled sample; compare heapInuse)" % fmt_mb(st))
 
     ranked = sorted(agg.items(), key=lambda kv: -kv[1])[: args.top]
     print()
