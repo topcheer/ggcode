@@ -21,6 +21,9 @@ type LanChatTool struct {
 	Hub         *lanchat.Hub
 	rateLimiter *agentRateLimiter
 	dmCooldown  time.Duration
+	// #5558: sender-local opt-in retry queue + per-sender budget.
+	dmQueue       *dmRetryQueue
+	dmQueueCancel context.CancelFunc
 }
 
 func NewLanChatTool(hub *lanchat.Hub, cfg config.LanChatConfig) LanChatTool {
@@ -28,6 +31,12 @@ func NewLanChatTool(hub *lanchat.Hub, cfg config.LanChatConfig) LanChatTool {
 		Hub:         hub,
 		rateLimiter: newAgentRateLimiter(),
 		dmCooldown:  cfg.EffectiveDMCooldown(),
+	}
+	if dmQueueEnabled() {
+		t.dmQueue = newDMRetryQueue()
+		ctx, cancel := context.WithCancel(context.Background())
+		t.dmQueueCancel = cancel
+		go t.dmQueueFlushLoop(ctx)
 	}
 
 	if hub != nil {
@@ -41,38 +50,49 @@ func NewLanChatTool(hub *lanchat.Hub, cfg config.LanChatConfig) LanChatTool {
 type agentRateLimiter struct {
 	mu         sync.Mutex
 	dmLastSent map[string]time.Time
+	// #5558 Residual 2: per-sender rolling budget across all recipients.
+	senderBudget *senderDMBudget
 }
 
 const defaultAgentDMCooldown = 150 * time.Second
 
 func newAgentRateLimiter() *agentRateLimiter {
 	return &agentRateLimiter{
-		dmLastSent: make(map[string]time.Time),
+		dmLastSent:   make(map[string]time.Time),
+		senderBudget: newSenderDMBudget(),
 	}
 }
 
-func (r *agentRateLimiter) checkDM(sender, recipient string, cooldown time.Duration) string {
+// checkDMBlock is the #5558 dual-dimension gate: per-pair cooldown first,
+// then the per-sender rolling budget. Each dimension names itself and its own
+// countdown in the returned message.
+func (r *agentRateLimiter) checkDMBlock(sender, recipient string, cooldown time.Duration) dmBlock {
 	if cooldown <= 0 {
 		cooldown = defaultAgentDMCooldown
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	key := sender + "\u2192" + recipient
 	last, ok := r.dmLastSent[key]
-	if !ok {
-		return ""
+	r.mu.Unlock()
+	if ok {
+		elapsed := time.Since(last)
+		if elapsed < cooldown {
+			return dmBlock{dimension: "pair", remaining: cooldown - elapsed}
+		}
 	}
-	elapsed := time.Since(last)
-	if elapsed >= cooldown {
-		return ""
+	if r.senderBudget != nil {
+		if wait := r.senderBudget.check(sender); wait > 0 {
+			return dmBlock{dimension: "sender-budget", remaining: wait}
+		}
 	}
-	remaining := cooldown - elapsed
-	return fmt.Sprintf(
-		"rate-limited (%s remaining) - use sleep tool with seconds=%d to defer retry",
-		formatCooldown(remaining),
-		int(remaining.Seconds())+1,
-	)
+	return dmBlock{dimension: "", remaining: 0}
+}
+
+func (r *agentRateLimiter) checkDM(sender, recipient string, cooldown time.Duration) string {
+	if b := r.checkDMBlock(sender, recipient, cooldown); b.dimension != "" {
+		return b.message()
+	}
+	return ""
 }
 
 func (r *agentRateLimiter) recordDM(sender, recipient string) {
@@ -80,6 +100,9 @@ func (r *agentRateLimiter) recordDM(sender, recipient string) {
 	defer r.mu.Unlock()
 	key := sender + "\u2192" + recipient
 	r.dmLastSent[key] = time.Now()
+	if r.senderBudget != nil {
+		r.senderBudget.record(sender)
+	}
 }
 
 func (r *agentRateLimiter) resetDMForPeer(selfID, peerID string) {
@@ -963,8 +986,12 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 		selfID := t.Hub.NodeID()
 		var allowed []string
 		for _, nodeID := range resolved {
-			if msg := t.rateLimiter.checkDM(selfID, nodeID, t.dmCooldown); msg != "" {
-				rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", t.displayName(nodeID), msg))
+			if b := t.rateLimiter.checkDMBlock(selfID, nodeID, t.dmCooldown); b.dimension != "" {
+				if queued, line := t.tryQueueBlockedDM(selfID, nodeID, content, asAgent, b); queued {
+					rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", t.displayName(nodeID), line))
+				} else {
+					rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", t.displayName(nodeID), b.message()))
+				}
 			} else {
 				allowed = append(allowed, nodeID)
 			}
@@ -1162,8 +1189,12 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 	var rateLimited []string
 	if asAgent && t.rateLimiter != nil {
 		for _, nodeID := range allPeers {
-			if msg := t.rateLimiter.checkDM(selfID, nodeID, t.dmCooldown); msg != "" {
-				rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", t.displayName(nodeID), msg))
+			if b := t.rateLimiter.checkDMBlock(selfID, nodeID, t.dmCooldown); b.dimension != "" {
+				if queued, line := t.tryQueueBlockedDM(selfID, nodeID, content, asAgent, b); queued {
+					rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", t.displayName(nodeID), line))
+				} else {
+					rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", t.displayName(nodeID), b.message()))
+				}
 			} else {
 				allowed = append(allowed, nodeID)
 			}
@@ -1273,8 +1304,12 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 	var rateLimited []string
 	if asAgent && t.rateLimiter != nil {
 		for _, nodeID := range members {
-			if msg := t.rateLimiter.checkDM(selfNodeID, nodeID, t.dmCooldown); msg != "" {
-				rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", t.displayName(nodeID), msg))
+			if b := t.rateLimiter.checkDMBlock(selfNodeID, nodeID, t.dmCooldown); b.dimension != "" {
+				if queued, line := t.tryQueueBlockedDM(selfNodeID, nodeID, content, true, b); queued {
+					rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", t.displayName(nodeID), line))
+				} else {
+					rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", t.displayName(nodeID), b.message()))
+				}
 			} else {
 				allowed = append(allowed, nodeID)
 			}
