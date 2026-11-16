@@ -53,6 +53,14 @@ func newMCPElicitationHandler(registry *toolpkg.Registry) mcp.ElicitationHandler
 				Content: content,
 			}, nil
 		case toolpkg.AskUserStatusCancelled:
+			// #5699: Esc on an MCP input_required round defers the question
+			// into the client-side pending-answer queue instead of cancelling
+			// (which would fail the tool call). A cancelled context means the
+			// run itself is being torn down - keep the cancel action there.
+			if ctx.Err() == nil {
+				debug.Log("mcp-elicitation", "user deferred elicitation (Esc): pending answer will be queued")
+				return nil, mcp.ErrDeferInputRequest
+			}
 			return &mcp.ElicitationResult{
 				Action: mcp.ElicitationActionCancel,
 			}, nil

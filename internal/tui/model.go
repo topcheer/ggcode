@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/lanchat"
+	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -551,6 +553,10 @@ type mcpManager interface {
 	PendingOAuth() *plugin.MCPOAuthRequiredError
 	ClearPendingOAuth(name string)
 	Snapshot() []plugin.MCPServerInfo
+	// #5699 deferred-answer queue surface.
+	PendingInputAnswers() []mcp.PendingAnswer
+	AnswerPendingInput(ctx context.Context, id string, responses map[string]json.RawMessage) (*mcp.ResumedAnswer, error)
+	DiscardPendingInput(id string) bool
 }
 
 type styles struct {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -230,6 +231,21 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 		result, err = t.caller.CallTool(ctx, t.toolName, args)
 	}
 	if err != nil {
+		var paErr *PendingAnswerError
+		if errors.As(err, &paErr) {
+
+			if t.breaker != nil {
+				t.breaker.abandonProbe()
+			}
+			return tool.Result{
+				Content: fmt.Sprintf("input request deferred by user (Esc): %s\n"+
+					"- pending answer %s queued on server '%s' (expires in %s)\n"+
+					"- the tool call is suspended, not failed - do NOT retry it now\n"+
+					"- the user can list and answer it later via /mcp answers and /mcp answer %s <text>\n"+
+					"- once answered, the resumed result is delivered in a following turn",
+					err.Error(), paErr.PA.ID, t.srvName, formatDurationForNotice(paErr.PA.ExpiresIn(time.Now())), paErr.PA.ID),
+			}, nil
+		}
 
 		if t.breaker != nil {
 			if errors.Is(err, context.Canceled) {

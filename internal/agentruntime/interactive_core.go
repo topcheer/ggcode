@@ -203,6 +203,11 @@ func (c *InteractiveRuntimeCore) SetConfigAgent(ag *agent.Agent) {
 	if ag != nil {
 
 		c.samplingProvider = ag.Provider()
+		// #5699: give following turns the deferred-answer state (pending
+		// interactions + answered digests) from the shared MCP manager.
+		if c.MCPManager != nil {
+			ag.SetMCPInteractionStatus(c.MCPManager)
+		}
 	}
 }
 

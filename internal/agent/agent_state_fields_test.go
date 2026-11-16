@@ -62,6 +62,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"metadata":                  "dead field — no read/write sites outside declaration",
 		"invEngine":                 "r454 declarative invariants engine, built lazily by invariantEngineLazy once workingDir is known (guarded; nil = no invariants file, inert)",
 		"wfEngine":                  "r26 workflow-spec engine, built lazily by workflowEngineLazy once workingDir is known (guarded; nil = no workflow-spec.json, inert)",
+		"mcpStatus":                 "#5699 deferred-answer surface, injected via SetMCPInteractionStatus in SetConfigAgent; nil = no MCP wiring (headless default, notices disabled)",
 	}
 
 	v := reflect.ValueOf(a).Elem()

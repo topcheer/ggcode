@@ -465,7 +465,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/image":
 			return m.handleImageCommand(parts)
 		case "/mcp":
-			return m.handleMCPCommand()
+			return m.handleMCPCommand(parts)
 		case "/skills":
 			m.openSkillsPanel()
 			return nil

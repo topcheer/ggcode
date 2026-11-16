@@ -507,7 +507,18 @@ func (m *Model) handleInspectorCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-func (m *Model) handleMCPCommand() tea.Cmd {
+func (m *Model) handleMCPCommand(parts []string) tea.Cmd {
+	// #5699: /mcp answers|answer|discard manage the deferred-answer queue.
+	if len(parts) >= 2 {
+		switch parts[1] {
+		case "answers", "pending":
+			return m.handleMCPAnswersListCommand()
+		case "answer":
+			return m.handleMCPAnswerCommand(parts[2:])
+		case "discard", "cancel":
+			return m.handleMCPDiscardCommand(parts[2:])
+		}
+	}
 	if len(m.mcpServers) == 0 {
 		m.chatWriteSystem(nextSystemID(), m.t("mcp.none"))
 		return nil

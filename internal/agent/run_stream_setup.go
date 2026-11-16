@@ -146,6 +146,7 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 	a.maybeInjectAutopilotGoalCollection()
 	a.maybeInjectCorrectionFeedback()
 	a.maybeInjectSentimentFeedback(rsc.userPromptForStats)
+	a.maybeInjectPendingMCPAnswers()
 
 	if ambMsg := a.checkAmbiguityPoints(rsc.userPromptForStats); ambMsg != "" {
 		debug.Log("agent", "ambiguity point detector: injecting disambiguation guidance")

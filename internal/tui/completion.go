@@ -354,7 +354,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/twitch":          "Manage Twitch channel binding",
 	"/whatsapp":        "Manage WhatsApp channel binding",
 	"/wa":              "Alias for /whatsapp",
-	"/mcp":             "Show MCP servers",
+	"/mcp":             "Show MCP servers; /mcp answers lists Esc-deferred questions, /mcp answer <id> <text> answers one",
 	"/memory":          "Manage memory",
 	"/undo":            "Undo last file edit",
 	"/undo-run":        "Revert ALL file changes from the last agent run",

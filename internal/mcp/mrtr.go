@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -82,6 +83,13 @@ func (c *Client) mrtrLoop(ctx context.Context, method string, params mrtrRetryPa
 			if len(env.InputRequests) > 0 {
 				responses, err = c.resolveInputRequests(ctx, env.InputRequests)
 				if err != nil {
+					if errors.Is(err, ErrDeferInputRequest) {
+						pa, qerr := c.queuePendingAnswer(method, params, env)
+						if qerr != nil {
+							return fmt.Errorf("mcp[%s]: %s deferral refused: %w", c.name, method, qerr)
+						}
+						return &PendingAnswerError{PA: *pa}
+					}
 					return fmt.Errorf("mcp[%s]: %s MRTR input resolution: %w", c.name, method, err)
 				}
 			}
