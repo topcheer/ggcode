@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -58,8 +59,15 @@ func topSitesLimit() int {
 }
 
 type siteStat struct {
-	Site    string `json:"site"`       // innermost symbolized frame "pkg.Func"
-	Bytes   uint64 `json:"inuseBytes"` // in-use bytes allocated from this site
+	// Site is the aggregation key: the innermost frame, offset-stripped,
+	// plus its immediate caller when known ("pkg.Func <- pkg.Caller").
+	// #5710 widened attribution: the old key was the raw innermost symbol
+	// WITH its +0x PC offset, which split one function across several rows
+	// (addPostings+0x3cf vs +0x3a3) and carried no caller context.
+	Site    string `json:"site"`
+	Fn      string `json:"fn"`               // innermost frame, offsets stripped
+	Caller  string `json:"caller,omitempty"` // second frame, offsets stripped
+	Bytes   uint64 `json:"inuseBytes"`       // in-use bytes allocated from this site
 	Objects uint64 `json:"liveObjects"`
 }
 
@@ -127,65 +135,102 @@ func writeStatsLine(ms *runtime.MemStats, force bool) {
 //	#	0x1  pkg.Func+0x10  /path/file.go:42
 //	#	0x2  pkg.Caller+0x20  /path/other.go:7
 //
-// The innermost symbolized frame (first # line) identifies the site.
+// #5710 widening: the innermost symbolized frame (first # line) names the
+// site and the SECOND frame names its immediate caller. The pair is the
+// aggregation key, both with +0x PC offsets stripped, so one function
+// sampled at several PCs merges into a single row (the old key split
+// addPostings+0x3cf from +0x3a3) and workload paths stay distinguishable
+// (who called the allocator).
 func heapTopSites(n int) []siteStat {
 	var buf bytes.Buffer
 	if err := pprof.Lookup("heap").WriteTo(&buf, 1); err != nil {
 		return nil
 	}
+	return parseHeapTopSites(&buf, n)
+}
+
+// stripSymOff removes the trailing "+0x..." PC offset from a symbolized
+// profile frame ("pkg.Func+0x3cf" -> "pkg.Func").
+func stripSymOff(sym string) string {
+	if i := strings.LastIndex(sym, "+0x"); i > 0 {
+		return sym[:i]
+	}
+	return sym
+}
+
+// siteKey builds the aggregation key from the innermost frame and its
+// caller ("" when the block carried only one symbolized frame).
+func siteKey(fn, caller string) string {
+	if caller == "" {
+		return fn
+	}
+	return fn + " <- " + caller
+}
+
+// parseHeapTopSites walks the pprof debug=1 heap-profile text form and
+// aggregates blocks by (innermost frame, immediate caller), both
+// offset-stripped. Blocks with no symbolized frame are skipped. Split
+// from heapTopSites so the walk is testable on synthetic profiles.
+func parseHeapTopSites(r io.Reader, n int) []siteStat {
 	agg := map[string]*siteStat{}
-	flush := func(site string, objs, bts uint64) {
-		if site == "" {
+	flush := func(fn, caller string, objs, bts uint64) {
+		if fn == "" {
 			return // unsymbolized block
 		}
-		e := agg[site]
+		key := siteKey(fn, caller)
+		e := agg[key]
 		if e == nil {
-			e = &siteStat{Site: site}
-			agg[site] = e
+			e = &siteStat{Site: key, Fn: fn, Caller: caller}
+			agg[key] = e
 		}
 		e.Bytes += bts
 		e.Objects += objs
 	}
 
-	var curSite string
+	var curFn, curCaller string
 	var curObjs, curBytes uint64
 	haveBlock := false
-	sc := bufio.NewScanner(&buf)
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
 		switch {
-		case strings.HasPrefix(line, "#\t"):
-			if haveBlock && curSite == "" {
-				// first symbolized frame: "0xaddr  sym+off  file:line"
+		case strings.HasPrefix(line, "#	"):
+			if haveBlock {
+				// "0xaddr  sym+off  file:line": the first symbolized
+				// frame names the site, the second its caller.
 				if fields := strings.Fields(line[2:]); len(fields) >= 2 {
-					curSite = fields[1]
+					if sym := stripSymOff(fields[1]); curFn == "" {
+						curFn = sym
+					} else if curCaller == "" {
+						curCaller = sym
+					}
 				}
 			}
 		case strings.HasPrefix(line, "#"), line == "":
 			continue // MemStats dump or blank
 		default:
 			// new block header: "objs: bytes [cumobjs: cumbytes] @ ..."
-			flush(curSite, curObjs, curBytes)
+			flush(curFn, curCaller, curObjs, curBytes)
 			head := line
 			if i := strings.IndexByte(head, '['); i > 0 {
 				head = head[:i]
 			}
 			parts := strings.Split(strings.TrimSpace(head), ": ")
 			if len(parts) != 2 {
-				curSite, haveBlock = "", false
+				curFn, curCaller, haveBlock = "", "", false
 				continue
 			}
 			objs, err1 := strconv.ParseUint(parts[0], 10, 64)
 			bts, err2 := strconv.ParseUint(parts[1], 10, 64)
 			if err1 != nil || err2 != nil {
-				curSite, haveBlock = "", false
+				curFn, curCaller, haveBlock = "", "", false
 				continue
 			}
-			curSite, curObjs, curBytes, haveBlock = "", objs, bts, true
+			curFn, curCaller, curObjs, curBytes, haveBlock = "", "", objs, bts, true
 		}
 	}
-	flush(curSite, curObjs, curBytes)
+	flush(curFn, curCaller, curObjs, curBytes)
 
 	out := make([]siteStat, 0, len(agg))
 	for _, e := range agg {
