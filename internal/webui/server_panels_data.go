@@ -31,42 +31,62 @@ func (s *Server) handlePanelData(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// panelDataModel: 分组选择数据(vendor→endpoint→models)+当前值。
-// 与头部模型下拉同源(cfg.Vendors+ResolveActiveEndpoint),零新真值源。
+// panelDataModel: TUI 选型面语义(internal/tui openModelPanel 同源):
+// 只列当前 active vendor/endpoint 的模型(当前值不在列表时置顶),并附
+// vendor/endpoint/protocol 上下文。用户裁定缺陷修复:不再罗列全部
+// vendor×endpoint 的全量模型(那与 TUI /model 选型面语义不符)。
 func (s *Server) panelDataModel(w http.ResponseWriter) {
 	type opt struct {
-		ID      string `json:"id"`      // 回填值: "vendor/endpoint/model"
+		ID      string `json:"id"`      // 回填值: model 名(与 TUI /model <name> 同参)
 		Label   string `json:"label"`   // 显示名: model
-		Badge   string `json:"badge"`   // vendor/endpoint
 		Current bool   `json:"current"` // 当前选中
 	}
-	groups := []map[string]interface{}{}
+	opts := []opt{}
 	current := ""
+	ctx := map[string]string{}
 	if s.cfg != nil {
-		if resolved, err := s.cfg.ResolveActiveEndpoint(); err == nil {
-			current = resolved.Model
+		resolved, err := s.cfg.ResolveActiveEndpoint()
+		if err != nil {
+			// 无可用 active 端点:显式空态(前端展示 error,不再伪造全量列表)
+			writeJSON(w, map[string]interface{}{
+				"kind":    "select",
+				"grouped": false,
+				"options": []opt{},
+				"current": "",
+				"error":   err.Error(),
+				"submit":  map[string]string{"command": "/model", "argFrom": "label"},
+			})
+			return
 		}
-		for vname, v := range s.cfg.Vendors {
-			for ename, ep := range v.Endpoints {
-				opts := make([]opt, 0, len(ep.Models))
-				for _, m := range ep.Models {
-					id := vname + "/" + ename + "/" + m
-					opts = append(opts, opt{ID: id, Label: m, Badge: vname + "/" + ename, Current: m == current})
-				}
-				if len(opts) > 0 {
-					groups = append(groups, map[string]interface{}{
-						"label":   vname + " / " + ename,
-						"options": opts,
-					})
-				}
+		current = resolved.Model
+		seen := map[string]bool{}
+		models := make([]string, 0, len(resolved.Models))
+		if current != "" {
+			models = append(models, current)
+			seen[current] = true
+		}
+		for _, m := range resolved.Models {
+			if m == "" || seen[m] {
+				continue
 			}
+			seen[m] = true
+			models = append(models, m)
+		}
+		for _, m := range models {
+			opts = append(opts, opt{ID: m, Label: m, Current: m == current})
+		}
+		ctx = map[string]string{
+			"vendor":   resolved.VendorName,
+			"endpoint": resolved.EndpointName,
+			"protocol": resolved.Protocol,
 		}
 	}
 	writeJSON(w, map[string]interface{}{
 		"kind":    "select",
-		"grouped": true,
+		"grouped": false,
+		"options": opts,
 		"current": current,
-		"groups":  groups,
+		"context": ctx,
 		// 回填规约:前端取选项 label 拼 `/model <model>`(TUI /model 语义
 		// 按模型名切换;vendor/endpoint 上下文由配置层解析)。
 		"submit": map[string]string{"command": "/model", "argFrom": "label"},
