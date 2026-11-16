@@ -1,0 +1,43 @@
+# Stale-base guard (#5270): warns at PR create/update time when the PR
+# branch is far behind its base and/or carries commits already merged
+# upstream under different SHAs (patch-id equivalence), so review effort
+# is not burned decomposing a pseudo-delta before a rebase. Pure warning:
+# this job never blocks and never annotates - it maintains one comment.
+name: stale-base-guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: stale-base-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Stale-base warning
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The real PR head (not the merge ref): behind-count and patch-id
+          # equivalence must be computed against the branch as pushed.
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          # Full history: merge-base + both patch-id windows need it.
+          fetch-depth: 0
+      - name: Detect and warn
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BASE_REF: origin/${{ github.event.pull_request.base.ref }}
+          # Warn when the branch is more than this many commits behind base
+          # (escalates automatically when replayed commits are detected).
+          BEHIND_THRESHOLD: '3'
+        run: bash scripts/ci/stale-base-guard.sh

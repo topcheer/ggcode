@@ -116,3 +116,9 @@ or with different surrounding context, is NOT equivalent and stays `[delta]`.
 Merge commits on the PR branch are skipped; empty commits count as delta by
 convention (same as `git cherry`).
 
+**Create-time guard:** the `stale-base-guard` CI workflow applies the same
+patch-id check automatically when a PR is opened or updated, and comments a
+warning ("N commits appear already merged upstream; rebase recommended") when
+the branch is far behind its base or carries replayed commits (#5270) — so
+reviewers see the pseudo-delta risk before spending effort on it.
+
