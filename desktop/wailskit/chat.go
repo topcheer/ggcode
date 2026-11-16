@@ -24,6 +24,7 @@ import (
 	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/intentions"
 	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/metrics"
@@ -88,9 +89,12 @@ type ChatBridge struct {
 	pendingExclude []string
 
 	cronScheduler *cron.Scheduler
-	subAgentMgr   *subagent.Manager
-	acpClientMgr  *acpclient.ClientManager
-	swarmMgr      *swarm.Manager
+	// #5260: prospective intention layer state
+	intentionStore  *intentions.Store
+	intentionEngine *intentions.Engine
+	subAgentMgr     *subagent.Manager
+	acpClientMgr    *acpclient.ClientManager
+	swarmMgr        *swarm.Manager
 
 	metricCancel         context.CancelFunc
 	metricCollector      *metrics.Collector
@@ -1364,6 +1368,13 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		b.sendMessageData(tunnel.MessageData{Text: prompt}, "cron", "")
 	})
 	agentruntime.RegisterCronTools(b.registry, b.cronScheduler)
+
+	// #5260 prospective intention layer: workspace-level store, engine
+	// surfaces fired intentions through the same chat emit path as cron.
+	b.intentionStore = intentions.NewStore(intentions.DefaultStorePath(), "")
+	b.intentionEngine = intentions.NewEngine(b.intentionStore, b.workingDir, b.cronScheduler.Emit)
+	b.intentionEngine.Start()
+	agentruntime.RegisterIntentionTools(b.registry, b.intentionStore, b.intentionEngine)
 	mcpMgr := core.MCPManager
 	b.mcpManager = mcpMgr
 
@@ -3543,12 +3554,18 @@ func (b *ChatBridge) Close() {
 	b.mu.Lock()
 	subAgents := b.subAgentMgr
 	swarms := b.swarmMgr
+	intentionEngine := b.intentionEngine
 	b.mu.Unlock()
 	if subAgents != nil {
 		subAgents.CancelAll()
 	}
 	if swarms != nil {
 		swarms.CancelAll()
+	}
+	// #5260: stop the intention engine poll loop with the bridge (mirrors
+	// the deferred Stop in cmd/ggcode root/daemon wiring).
+	if intentionEngine != nil {
+		intentionEngine.Stop()
 	}
 
 	b.cleanupEphemeralSession()

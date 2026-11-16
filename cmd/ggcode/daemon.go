@@ -25,6 +25,7 @@ import (
 	"github.com/topcheer/ggcode/internal/daemon"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/intentions"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/mcp"
@@ -594,6 +595,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)
 	fileWatch.Start()
 	defer fileWatch.Stop()
+
+	// #5260 prospective intention layer: workspace-level store, engine
+	// surfaces fired intentions through the same session emit path as cron.
+	intentionStore := intentions.NewStore(intentions.DefaultStorePath(), "")
+	intentionEngine := intentions.NewEngine(intentionStore, workingDir, cronScheduler.Emit)
+	intentionEngine.Start()
+	defer intentionEngine.Stop()
+	agentruntime.RegisterIntentionTools(registry, intentionStore, intentionEngine)
 
 	idleMaint := agentruntime.ApplyIdleMaintenance(ag, cfg.Idle)
 

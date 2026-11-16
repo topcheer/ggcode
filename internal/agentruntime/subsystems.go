@@ -10,6 +10,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/intentions"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -98,6 +99,16 @@ func RegisterCronTools(registry *tool.Registry, scheduler *cron.Scheduler) {
 	_ = registry.Register(tool.CronPauseTool{Scheduler: scheduler})
 	_ = registry.Register(tool.CronResumeTool{Scheduler: scheduler})
 	_ = registry.Register(tool.CronGetTool{Scheduler: scheduler})
+}
+
+// RegisterIntentionTools registers the prospective intention layer (#5260)
+// tool. store may not be nil; engine may be nil (observe action degrades to
+// an error result rather than panicking).
+func RegisterIntentionTools(registry *tool.Registry, store *intentions.Store, engine *intentions.Engine) {
+	if registry == nil || store == nil {
+		return
+	}
+	_ = registry.Register(tool.IntentionTool{Store: store, Engine: engine})
 }
 
 func NewACPClientManager(
