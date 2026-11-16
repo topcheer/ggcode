@@ -69,3 +69,46 @@ registers as a new `CueFamily` case plus a poll hook — no schema change
 - Zero-config default behavior is unchanged: with no captured intentions the
   engine polls an empty store and emits nothing; wiring is additive at the
   three construction sites (root, daemon, wailskit).
+
+## Keyed layer landed shape (#5698)
+
+The keyed layer shipped as an agent-side store over **session storage**,
+fully inside the `session.instructions.*` namespace:
+
+- **Storage.** Every put/remove appends one immutable `instruction`
+  record to the session JSONL (actor provenance + timestamp on every
+  record — the append-only log doubles as the durable audit trail).
+  Loading folds records last-wins per key, independently of the
+  message/checkpoint replay paths, so entries survive revert, compaction
+  and restarts. Older binaries skip unknown `instruction` lines and
+  never rewrite existing lines, so mixed-version fleets are rewrite-safe
+  on unknown fields.
+- **Write gate.** `Agent.PutKeyedInstruction` /
+  `Agent.RemoveKeyedInstruction` accept only `user` and
+  `parent-agent` provenance; subagent-output, MCP-result,
+  tool-result and model provenance are rejected *before any storage
+  mutation* (persistent-injection-channel gate). Every attempt —
+  including no-ops and rejections — leaves an audit line (in-memory ring
+  + `debug.Log`; durable trail = record log).
+- **Render.** Entries render as sorted, stable keyed blocks appended to
+  the dynamic system prompt; only a changed entry's block rewrites, so
+  the prefix cache stays valid for untouched blocks. Put/remove prepend
+  exactly one delta line inside the changed entry's block at the next
+  system-prompt assembly (announce bit consumed on shipment) — no extra
+  model turn, no inbox wake.
+- **User surface.** TUI /instructions put|remove|list` is the
+  shipped user-path writer. The parent-agent writer is reserved for the
+  spawn/subagent configuration surface (follow-up); the gate already
+  accepts its provenance.
+
+## Merge path refinement (keyed as sugar layer)
+
+Per decision 4 above, storage-level merging stays rejected. The concrete
+post-#5260 merge shape, should a single "agent commitments" UX ever be
+wanted, is a **sugar layer**: the keyed-instruction *surface* (put/remove
+by key, keyed block rendering) can be re-targeted to emit standing
+intentions into the intention store, while the intention store gains an
+always-on cue family for them — a read-side join over the two namespaces.
+Each store keeps its own write path, lifecycle and provenance model; no
+storage migration happens in either direction. Until that day the two
+layers stay fully isolated as ruled above.

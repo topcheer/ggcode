@@ -1035,6 +1035,16 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 
 	if m.agent != nil {
 		m.agent.SetSessionID(ses.ID)
+		// #5698: hydrate the durable keyed-instruction layer and wire the
+		// persistence sink (render-only when the store cannot persist
+		// instruction events; writes are then refused loudly).
+		var instrSink agent.KeyedInstructionSink
+		if store != nil {
+			if is, ok := store.(session.InstructionStore); ok {
+				instrSink = is
+			}
+		}
+		m.agent.AttachKeyedInstructions(ses.ID, ses.KeyedInstructions, instrSink)
 	}
 
 	m.persistedMsgCount = len(ses.Messages)

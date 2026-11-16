@@ -63,6 +63,9 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"invEngine":                 "r454 declarative invariants engine, built lazily by invariantEngineLazy once workingDir is known (guarded; nil = no invariants file, inert)",
 		"wfEngine":                  "r26 workflow-spec engine, built lazily by workflowEngineLazy once workingDir is known (guarded; nil = no workflow-spec.json, inert)",
 		"mcpStatus":                 "#5699 deferred-answer surface, injected via SetMCPInteractionStatus in SetConfigAgent; nil = no MCP wiring (headless default, notices disabled)",
+		"keyedInstr":                "#5698 durable keyed instructions, hydrated via AttachKeyedInstructions on session attach; nil = no session attached (renders nothing, writes refused)",
+		"keyedInstrSink":            "#5698 persistence seam, wired in AttachKeyedInstructions from the session store; nil = render-only agent, writes refused loudly",
+		"keyedInstrAudit":           "#5698 audit ring, appended on first write attempt; nil = no write attempted yet",
 	}
 
 	v := reflect.ValueOf(a).Elem()
