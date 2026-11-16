@@ -64,7 +64,9 @@ var panelRegistry = map[string]panelSpec{
 	"whatsapp":   {Kind: "form", Title: "WhatsApp", DataURL: "/api/im/adapters/whatsapp", CmdPrefix: "/whatsapp", NoArg: true},
 	"wa":         {Kind: "form", Title: "WhatsApp", DataURL: "/api/im/adapters/whatsapp", CmdPrefix: "/whatsapp", NoArg: true},
 	"twitch":     {Kind: "form", Title: "Twitch", DataURL: "/api/im/adapters/twitch", CmdPrefix: "/twitch", NoArg: true},
-	"im":         {Kind: "form", Title: "IM Adapters", DataURL: "/api/im/adapters", CmdPrefix: "", NoArg: true},
+	// /im 总览:该端点返回 map[name]config(非单适配器平面 config),
+	// 用 list-detail 原型呈现适配器清单(各适配器编辑走 /qq /tg 等具体面板)。
+	"im": {Kind: "list-detail", Title: "IM Adapters", DataURL: "/api/im/adapters", CmdPrefix: "", NoArg: true},
 
 	// ── 原型 stats:只读仪表 ────────────────────────────────────
 	"stats": {Kind: "stats", Title: "Session Stats", DataURL: "/api/panel/stats", CmdPrefix: "", NoArg: true},

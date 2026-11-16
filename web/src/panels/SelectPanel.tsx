@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { PanelDirective, SelectData, SelectOption } from "./types";
 import { submitCommand } from "./types";
+import { adaptSelect } from "./adapters";
 
 /** SelectPanel:卡片选择器(分组/平铺),键盘 ↑↓+Enter,选中回填带参命令 */
 export default function SelectPanel({ panel, onClose }: { panel: PanelDirective; onClose: () => void }) {
@@ -12,9 +13,9 @@ export default function SelectPanel({ panel, onClose }: { panel: PanelDirective;
   useEffect(() => {
     fetch(panel.dataUrl)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`数据拉取失败 (${r.status})`))))
-      .then((d: SelectData) => setData(d))
+      .then((raw: unknown) => setData(adaptSelect(raw, panel.dataUrl, panel.command)))
       .catch((e: Error) => setErr(e.message || String(e)));
-  }, [panel.dataUrl]);
+  }, [panel.dataUrl, panel.command]);
 
   const flat: SelectOption[] = data?.grouped
     ? (data.groups ?? []).flatMap((g: { label: string; options: SelectOption[] }) => g.options)
@@ -31,10 +32,22 @@ export default function SelectPanel({ panel, onClose }: { panel: PanelDirective;
     const o = flat[idx];
     if (!o || busy) return;
     const argFrom = data?.submit?.argFrom === "id" ? o.id : o.label;
-    const cmd = `${data?.submit?.command ?? panel.cmdPrefix ?? panel.command} ${argFrom}`;
     setBusy(true);
     try {
-      await submitCommand(cmd);
+      const s = data?.submit;
+      if (s?.method && s.url) {
+        // HTTP 回写模式(如 impersonate PUT):选中值写入 bodyField
+        const r = await fetch(s.url, {
+          method: s.method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [s.bodyField ?? "value"]: argFrom }),
+        });
+        if (!r.ok) throw new Error((await r.text()) || `保存失败 (${r.status})`);
+      } else {
+        // 命令回填模式:拼参提交走 TUI 命令链(校验/反馈单源)
+        const cmd = `${s?.command ?? panel.cmdPrefix ?? panel.command} ${argFrom}`;
+        await submitCommand(cmd);
+      }
       onClose();
     } catch (e) {
       setErr((e as Error).message || String(e));
@@ -87,6 +100,12 @@ export default function SelectPanel({ panel, onClose }: { panel: PanelDirective;
       autoFocus
     >
       {err && <div className="rounded-xl bg-[var(--color-danger-surface)] p-3 text-ui-sm">{err}</div>}
+      {!err && data?.error && <div className="rounded-xl bg-[var(--color-danger-surface)] p-3 text-ui-sm">{data.error}</div>}
+      {data?.context && (data.context.vendor || data.context.endpoint) && (
+        <div className="text-ui-xs text-foreground-subtle">
+          {[data.context.vendor, data.context.endpoint, data.context.protocol].filter(Boolean).join(" · ")}
+        </div>
+      )}
       {!data && !err && <div className="p-4 text-ui-sm text-foreground-subtle">加载中…</div>}
       {data?.grouped
         ? data.groups?.map((g, idx) => (
