@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 
 type Controls = { model?: string; mode?: string; reasoning_effort?: string };
 
-const MODES = ["supervised", "bypass"] as const;
-const EFFORTS = ["low", "medium", "high"] as const;
+/** webui 控件域(mode/effort 可选值)——面板 adapters 复用同一份,避免双处漂移 */
+export const MODES = ["supervised", "bypass"] as const;
+export const EFFORTS = ["low", "medium", "high"] as const;
 // effort 低→高彩色渐进 chip:灰→蓝→橙(高消耗警示)
 const EFFORT_STYLES: Record<(typeof EFFORTS)[number], { idle: string; active: string }> = {
   low: { idle: "text-foreground-subtle", active: "bg-[var(--color-success-surface)] text-[var(--color-success-surface-fg)]" },

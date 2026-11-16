@@ -7,9 +7,52 @@
  * - /api/knight/skills       → {active:[],staging:[]}
  * - /api/mcp                 → 顶层 entries[](name/runtime.status 嵌套)
  */
-import type { FormData_, ListDetailData } from "./types";
+import type { FormData_, ListDetailData, SelectData, SelectOption } from "./types";
+import { MODES, EFFORTS } from "@/chat/ChatControls";
 
 type Field = NonNullable<FormData_["fields"]>[number];
+
+/**
+ * endpoint adapter: select 原型异形端点 → SelectData 归一。
+ * 形状契约源(后端 handler 实测):
+ * - /api/vendors       → 顶层数组 [{id,display_name,has_api_key,endpoint_ids}]
+ * - /api/impersonate   → {current:{preset},presets:[{id,display_name,default_version}]}
+ * - /api/chat/controls → 平面 map {mode,reasoning_effort,model}(选项域与头部控件同源 MODES/EFFORTS)
+ */
+export function adaptSelect(raw: unknown, dataUrl: string, command: string): SelectData {
+  if (dataUrl === "/api/vendors") {
+    const arr = Array.isArray(raw) ? (raw as RawItem[]) : [];
+    const options: SelectOption[] = arr.map((v) => ({
+      id: String(v.id ?? ""),
+      label: String(v.display_name ?? v.id ?? "?"),
+      badge: v.has_api_key ? "api key set" : "no api key",
+      description: (Array.isArray(v.endpoint_ids) ? v.endpoint_ids.length : 0) + " endpoints",
+    }));
+    return { kind: "select", grouped: false, options, submit: { command: "/provider", argFrom: "id" } };
+  }
+  if (dataUrl === "/api/impersonate") {
+    const o = (raw ?? {}) as { current?: { preset?: string }; presets?: RawItem[] };
+    const cur = o.current?.preset ?? "";
+    const options: SelectOption[] = (o.presets ?? []).map((p) => ({
+      id: String(p.id ?? ""),
+      label: String(p.display_name ?? p.id ?? "?"),
+      description: p.default_version ? String(p.default_version) : undefined,
+      current: cur !== "" && String(p.id ?? "") === cur,
+    }));
+    // TUI /impersonate 无带参形态(总是开面板),写路径走既有
+    // PUT /api/impersonate(与 TUI applyImpersonateSettings 同源:SetActiveImpersonation+SaveImpersonation)
+    return { kind: "select", grouped: false, options, submit: { method: "PUT", url: "/api/impersonate", argFrom: "id", bodyField: "preset" } };
+  }
+  if (dataUrl === "/api/chat/controls") {
+    const o = (raw ?? {}) as Record<string, unknown>;
+    const domain: readonly string[] = command === "/mode" ? MODES : command === "/effort" ? EFFORTS : [];
+    const currentKey = command === "/mode" ? "mode" : "reasoning_effort";
+    const cur = String(o[currentKey] ?? "");
+    const options: SelectOption[] = domain.map((m) => ({ id: m, label: m, current: m === cur }));
+    return { kind: "select", grouped: false, options, submit: { command, argFrom: "id" } };
+  }
+  return (raw ?? {}) as SelectData;
+}
 
 const IM_FIELD_ORDER: { key: string; label: string; type?: string; help?: string }[] = [
   { key: "enabled", label: "启用", type: "checkbox" },
@@ -81,6 +124,17 @@ export function imFormToConfig(vals: Record<string, string>, fieldDefs: Field[])
 
 type RawItem = Record<string, unknown>;
 
+type SessionSummary = {
+  id?: string;
+  title?: string;
+  updated_at?: string;
+  msg_count?: number;
+  model?: string;
+  locked_by_pid?: number;
+  locked_by_self?: boolean;
+};
+type SessionsPayload = { groups?: { short_name?: string; current?: boolean; sessions?: SessionSummary[] }[] };
+
 /** endpoint adapter: cron/skills/mcp 三异形 endpoint → ListDetailData items 归一 */
 export function adaptListDetail(raw: unknown, dataUrl: string): ListDetailData {
   const items: { id: string; title: string; subtitle?: string; badges?: string[] }[] = [];
@@ -113,6 +167,34 @@ export function adaptListDetail(raw: unknown, dataUrl: string): ListDetailData {
         title: String(s.name ?? s.id ?? "?"),
         subtitle: String(s.description ?? "").slice(0, 80),
         badges: staged ? ["staging"] : ["active"],
+      });
+    }
+  } else if (dataUrl === "/api/sessions") {
+    // 会话面板:{groups:[{short_name,sessions:[...]}]} → 扁平条目(工作区别拼 subtitle)
+    const o = (raw ?? {}) as SessionsPayload;
+    for (const g of o.groups ?? []) {
+      for (const s of g.sessions ?? []) {
+        const sub = [g.short_name, s.updated_at, typeof s.msg_count === "number" ? s.msg_count + " msgs" : "", s.model]
+          .filter(Boolean)
+          .join(" · ");
+        items.push({
+          id: String(s.id ?? ""),
+          title: String(s.title || s.id || "?"),
+          subtitle: sub,
+          badges: s.locked_by_pid && !s.locked_by_self ? ["locked"] : g.current ? ["current"] : [],
+        });
+      }
+    }
+  } else if (dataUrl === "/api/im/adapters") {
+    // /im 总览:map[name]adapterConfig → 适配器清单(编辑走各适配器面板)
+    const m = (raw ?? {}) as Record<string, RawItem>;
+    for (const name of Object.keys(m).sort()) {
+      const a = m[name] ?? {};
+      items.push({
+        id: name,
+        title: name,
+        subtitle: String(a.platform ?? a.transport ?? ""),
+        badges: a.enabled === true ? ["enabled"] : ["disabled"],
       });
     }
   } else {
