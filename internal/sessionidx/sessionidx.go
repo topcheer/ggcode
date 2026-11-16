@@ -64,14 +64,42 @@ type lineRec struct {
 
 // Index is the in-memory index for one session file. Safe for concurrent
 // use; the source JSONL is append-only so incremental tailing is sound.
+//
+// #5731 memory shape: postings are stored GROUPED, mirroring the v2 disk
+// format - line metadata (offset/length/role/ts) lives ONCE in lines, and
+// each posting is a 4-byte line id appended to the trigram's id list. The
+// pre-#5731 shape (map[string][]Posting) duplicated the 24-byte line
+// metadata per posting, which the heap profile flagged as a 212MB
+// single-site (addPostings, 1337 live backing arrays averaging ~159KB)
+// while the instance climbed 1675->2225MB inuse. 4B ids cut the resident
+// posting heap ~5x measured end to end (24.67 -> 4.92 B/posting on a
+// 284k-posting corpus; 6x per posting element) at identical recall and
+// identical budget arithmetic (Size keeps the 40B/posting counting unit,
+// so caps trip at the same posting counts as before).
 type Index struct {
-	mu       sync.RWMutex
-	Session  string
-	SrcPath  string
-	IdxPath  string
-	data     indexFile
-	lastMod  time.Time
-	loadedAt time.Time
+	mu      sync.RWMutex
+	Session string
+	SrcPath string
+	IdxPath string
+	// triID maps each distinct trigram to a dense id assigned in
+	// insertion order; the sorted dictionary exists only transiently at
+	// save time (groupedLocked).
+	triID map[string]uint32
+	// posts maps trigram id -> line ids holding that trigram, ascending by
+	// offset (lines are appended in source order during Refresh, and Load
+	// preserves the persisted Offset sort).
+	posts map[uint32][]uint32
+	// lines holds one record per INDEXED line (lines that produced at
+	// least one posting), offset-ascending. TriIDs is nil in memory; the
+	// line-major form is rebuilt transiently by groupedLocked at save.
+	lines []lineRec
+	// index build/tail state - the persisted fields of indexFile.
+	indexedTo   int64 // byte offset covered in the source jsonl
+	lineCount   int32 // all non-empty source lines seen (not just indexed)
+	sourceBytes int64 // size of jsonl at build time
+	builtAt     int64
+	lastMod     time.Time
+	loadedAt    time.Time
 	// rootDir is the sessions directory this index was loaded from; paths
 	// are rebuilt from it (never taken raw) when reading snippets.
 	rootDir string
@@ -97,14 +125,29 @@ type Index struct {
 const idxVersion = 2
 
 // Size returns the approximate memory footprint of loaded postings.
+// The 40B/posting basis is the BUDGET's counting unit, deliberately kept
+// stable across the #5731 grouped-shape change so cap behavior (posting
+// counts at which ingestion stops) is unchanged; the real resident cost
+// per posting is now ~4B.
 func (ix *Index) Size() int {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 	n := 0
-	for _, ps := range ix.data.Trigrams {
-		n += len(ps) * 40
+	for _, ls := range ix.posts {
+		n += len(ls) * 40
 	}
 	return n
+}
+
+// resetLocked clears all in-memory index state. Caller holds ix.mu.
+func (ix *Index) resetLocked() {
+	ix.triID = map[string]uint32{}
+	ix.posts = map[uint32][]uint32{}
+	ix.lines = nil
+	ix.indexedTo = 0
+	ix.lineCount = 0
+	ix.sourceBytes = 0
+	ix.builtAt = 0
 }
 
 // SetSelfBudget caps this index's postings memory (bytes, approximate).
@@ -117,7 +160,11 @@ func (ix *Index) SetSelfBudget(b int64) {
 		// idx) - drop the postings NOW; recall degrades to the bounded
 		// source scan. approxBytes stays above the cap so ingestion
 		// never resumes; IndexedTo is untouched so nothing re-decodes.
-		ix.data.Trigrams = map[string][]Posting{}
+		// #5731: the whole grouped store goes - triID, posts and lines
+		// are one unit (line ids are meaningless without lines).
+		ix.triID = map[string]uint32{}
+		ix.posts = map[uint32][]uint32{}
+		ix.lines = nil
 		ix.capped = true
 	}
 	ix.mu.Unlock()
@@ -190,9 +237,9 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 		SrcPath: src,
 		IdxPath: IdxPath(sessionsDir, sessionID),
 		rootDir: sessionsDir,
+		triID:   map[string]uint32{},
+		posts:   map[uint32][]uint32{},
 	}
-	idx.data.Version = idxVersion
-	idx.data.Trigrams = map[string][]Posting{}
 
 	// #5149 startup-spike guard: decoding a multi-hundred-MB gob spikes the
 	// heap to gigabytes before SetSelfBudget can drop it (RSS then sits at
@@ -242,23 +289,69 @@ func Load(sessionsDir, sessionID string) (*Index, error) {
 		return idx, nil
 	}
 	if d.Trigrams == nil {
-		// v2 grouped: rebuild the in-memory inverted map from the line
-		// records, then release the transient decode buffers.
-		m := make(map[string][]Posting, len(d.Dict))
-		for _, lr := range d.Lines {
-			p := Posting{Offset: lr.Offset, Length: lr.Length, Role: lr.Role, TsNano: lr.TsNano}
+		// v2 grouped: adopt the line records as the resident lines and
+		// rebuild the inverted trigram-id -> line-ids map (#5731: one 4B
+		// line id per posting instead of a 24B Posting duplicate of the
+		// line metadata). Each line's TriIDs are consumed here and the
+		// decode buffers released - keeping TriIDs resident would retain
+		// a second copy of the posting relation.
+		idx.triID = make(map[string]uint32, len(d.Dict))
+		for id, tg := range d.Dict {
+			idx.triID[tg] = uint32(id)
+		}
+		idx.posts = make(map[uint32][]uint32, len(d.Dict))
+		idx.lines = make([]lineRec, len(d.Lines))
+		for i, lr := range d.Lines {
+			idx.lines[i] = lineRec{Offset: lr.Offset, Length: lr.Length, Role: lr.Role, TsNano: lr.TsNano}
 			for _, id := range lr.TriIDs {
 				if int(id) < len(d.Dict) {
-					tg := d.Dict[id]
-					m[tg] = append(m[tg], p)
+					idx.posts[id] = append(idx.posts[id], uint32(i))
 				}
 			}
 		}
-		d.Trigrams = m
 		d.Dict = nil
 		d.Lines = nil
+	} else {
+		// Legacy payload carrying the v1 map (a Version==2 file written
+		// before the grouped in-memory shape): convert ONCE into the
+		// grouped resident form. Postings per trigram arrive in source
+		// (offset-ascending) order, so line ids are assigned by sorted
+		// offset and each trigram's list stays ascending.
+		meta := make(map[int64]lineRec)
+		for _, ps := range d.Trigrams {
+			for _, p := range ps {
+				meta[p.Offset] = lineRec{Offset: p.Offset, Length: p.Length, Role: p.Role, TsNano: p.TsNano}
+			}
+		}
+		offs := make([]int64, 0, len(meta))
+		for off := range meta {
+			offs = append(offs, off)
+		}
+		sort.Slice(offs, func(i, j int) bool { return offs[i] < offs[j] })
+		idx.lines = make([]lineRec, 0, len(offs))
+		lidOf := make(map[int64]uint32, len(offs))
+		for i, off := range offs {
+			idx.lines = append(idx.lines, meta[off])
+			lidOf[off] = uint32(i)
+		}
+		for tg, ps := range d.Trigrams {
+			id, ok := idx.triID[tg]
+			if !ok {
+				id = uint32(len(idx.triID))
+				idx.triID[tg] = id
+			}
+			for _, p := range ps {
+				if lid, ok := lidOf[p.Offset]; ok {
+					idx.posts[id] = append(idx.posts[id], lid)
+				}
+			}
+		}
+		d.Trigrams = nil
 	}
-	idx.data = d
+	idx.indexedTo = d.IndexedTo
+	idx.lineCount = d.LineCount
+	idx.sourceBytes = d.SourceBytes
+	idx.builtAt = d.BuiltAt
 	idx.approxBytes = int64(idx.Size())
 	idx.loadedAt = time.Now()
 	return idx, nil
@@ -284,11 +377,11 @@ func (ix *Index) Refresh() error {
 		}
 		return err
 	}
-	if st.Size() < ix.data.IndexedTo {
+	if st.Size() < ix.indexedTo {
 		// Source truncated: full rebuild.
-		ix.data = indexFile{Version: idxVersion, Trigrams: map[string][]Posting{}}
+		ix.resetLocked()
 	}
-	if st.Size() == ix.data.IndexedTo {
+	if st.Size() == ix.indexedTo {
 		if ix.selfBudget > 0 && ix.approxBytes > ix.selfBudget {
 			ix.capped = true // already-over-cap: flag even with no new tail
 		}
@@ -300,12 +393,12 @@ func (ix *Index) Refresh() error {
 		return err
 	}
 	defer f.Close()
-	if _, err := f.Seek(ix.data.IndexedTo, io.SeekStart); err != nil {
+	if _, err := f.Seek(ix.indexedTo, io.SeekStart); err != nil {
 		return err
 	}
 
 	br := bufio.NewReader(f)
-	offset := ix.data.IndexedTo
+	offset := ix.indexedTo
 	for {
 		line, rerr := br.ReadBytes('\n')
 		consumed := int64(len(line))
@@ -318,16 +411,16 @@ func (ix *Index) Refresh() error {
 			} else {
 				ix.indexLine(offset, int32(len(trimmed)), trimmed)
 			}
-			ix.data.LineCount++
+			ix.lineCount++
 		}
 		offset += consumed
 		if rerr != nil {
 			break // io.EOF (or error): stop at current progress
 		}
 	}
-	ix.data.IndexedTo = offset
-	ix.data.SourceBytes = st.Size()
-	ix.data.BuiltAt = time.Now().UnixNano()
+	ix.indexedTo = offset
+	ix.sourceBytes = st.Size()
+	ix.builtAt = time.Now().UnixNano()
 	// #5710: the per-line gate above only runs BEFORE each line, so a
 	// refresh whose LAST line (or only line) pushes approxBytes over the
 	// budget ends over-cap yet uncapped - the flag then waits for the
@@ -346,12 +439,15 @@ func (ix *Index) Refresh() error {
 		//
 		// #5710: drop the partial postings NOW too. A capped index serves
 		// no queries (Query returns nil; recall degrades to the bounded
-		// source scan), so the map accumulated before the cap tripped is
-		// dead weight that can approach the whole budget in heap - the
-		// SetLiveID path (fresh sessions) hit exactly this on its way to
-		// the 1-3.3GB heapInuse class. approxBytes stays above the cap so
-		// ingestion never resumes and nothing re-decodes.
-		ix.data.Trigrams = map[string][]Posting{}
+		// source scan), so the store accumulated before the cap tripped
+		// is dead weight that can approach the whole budget in heap -
+		// the SetLiveID path (fresh sessions) hit exactly this on its
+		// way to the 1-3.3GB heapInuse class. approxBytes stays above
+		// the cap so ingestion never resumes and nothing re-decodes.
+		// #5731: the grouped store (triID+posts+lines) goes as one unit.
+		ix.triID = map[string]uint32{}
+		ix.posts = map[uint32][]uint32{}
+		ix.lines = nil
 		return nil
 	}
 	return ix.saveLocked()
@@ -414,9 +510,15 @@ func (ix *Index) indexLine(offset int64, length int32, line []byte) {
 	// postings with the same offset, and Query's coverage arithmetic
 	// (score >= len(gr)-1) assumes each distinct trigram contributes at
 	// most one posting per line. One shared seen map keeps that contract.
+	//
+	// #5731: the line record is materialized lazily (on the FIRST posting)
+	// so lines whose blocks never yield a trigram still cost nothing, and
+	// every posting is the line's 4B id rather than a 24B Posting copy.
+	lr := lineRec{Offset: offset, Length: length, Role: roleByte, TsNano: rec.TsNano}
+	lid := int32(-1)
 	seen := map[string]struct{}{}
 	for _, txt := range rec.Texts {
-		addPostings(ix.data.Trigrams, seen, txt, offset, length, roleByte, rec.TsNano)
+		lid = ix.addPostings(seen, txt, lr, lid)
 		total += len(txt)
 	}
 	ix.approxBytes += int64(total) * approxBytesPerSourceByte
@@ -439,11 +541,20 @@ func roleToByte(role string) byte {
 // addPostings tokenizes text into rune trigrams and records one posting per
 // distinct trigram (deduped per line via the caller-owned seen map shared
 // across all text blocks of the record, #5201) pointing at the whole line.
-func addPostings(tg map[string][]Posting, seen map[string]struct{}, text string, offset int64, length int32, role byte, ts int64) {
+//
+// #5731: a posting is the line's id in ix.lines, not a Posting struct - the
+// line's Offset/Length/Role/TsNano live once in the line record, so each
+// posting costs 4 bytes of backing array instead of 24 plus append slack.
+// This is the site the #5731 heap profile flagged (212MB inuse, 1337 live
+// backing arrays ~159KB each) when it appended full Posting values.
+// lr/lid carry the pending line: the line record is appended on the first
+// posting of the line and the assigned id is returned so later blocks of
+// the same line reuse it (lid < 0 = not yet materialized).
+func (ix *Index) addPostings(seen map[string]struct{}, text string, lr lineRec, lid int32) int32 {
 	if len(text) < 3 {
-		return
+		return lid
 	}
-	rs := make([]rune, 0, 64)
+	rs := make([]rune, 0, 4)
 	for _, r := range text {
 		rs = append(rs, r)
 		if len(rs) > 3 {
@@ -455,9 +566,19 @@ func addPostings(tg map[string][]Posting, seen map[string]struct{}, text string,
 				continue
 			}
 			seen[g] = struct{}{}
-			tg[g] = append(tg[g], Posting{Offset: offset, Length: length, Role: role, TsNano: ts})
+			if lid < 0 {
+				lid = int32(len(ix.lines))
+				ix.lines = append(ix.lines, lr)
+			}
+			id, ok := ix.triID[g]
+			if !ok {
+				id = uint32(len(ix.triID))
+				ix.triID[g] = id
+			}
+			ix.posts[id] = append(ix.posts[id], uint32(lid))
 		}
 	}
+	return lid
 }
 
 // Query searches the index. Terms are ANDed; each term is matched if all of
@@ -486,7 +607,7 @@ func (ix *Index) Query(terms []string, limit int) []Hit {
 	}
 	// lineSet: offset → hit accumulator
 	type acc struct {
-		p     Posting
+		p     lineRec // #5731: metadata comes from the shared line record
 		bits  uint8
 		score int
 		got   map[string]struct{} // distinct trigrams of this term seen for the line
@@ -500,7 +621,12 @@ func (ix *Index) Query(terms []string, limit int) []Hit {
 		}
 		m := map[int64]*acc{}
 		for _, g := range gr {
-			for _, p := range ix.data.Trigrams[g] {
+			id, ok := ix.triID[g]
+			if !ok {
+				continue // trigram never indexed: contributes no postings
+			}
+			for _, lid := range ix.posts[id] {
+				p := ix.lines[lid]
 				a := m[p.Offset]
 				if a == nil {
 					a = &acc{p: p, got: map[string]struct{}{g: {}}}
@@ -666,11 +792,11 @@ type msgRec struct {
 	TsNano int64
 }
 
-// groupedLocked renders the in-memory inverted map as the v2 grouped
+// groupedLocked renders the in-memory grouped store as the v2 grouped
 // on-disk form (line records + trigram dictionary). Caller holds ix.mu.
 func (ix *Index) groupedLocked() *indexFile {
-	dict := make([]string, 0, len(ix.data.Trigrams))
-	for tg := range ix.data.Trigrams {
+	dict := make([]string, 0, len(ix.triID))
+	for tg := range ix.triID {
 		dict = append(dict, tg)
 	}
 	sort.Strings(dict)
@@ -678,30 +804,35 @@ func (ix *Index) groupedLocked() *indexFile {
 	for i, tg := range dict {
 		idOf[tg] = uint32(i)
 	}
-	lrs := make(map[int64]*lineRec)
-	for tg, ps := range ix.data.Trigrams {
-		id := idOf[tg]
-		for _, p := range ps {
-			lr := lrs[p.Offset]
-			if lr == nil {
-				lr = &lineRec{Offset: p.Offset, Length: p.Length, Role: p.Role, TsNano: p.TsNano}
-				lrs[p.Offset] = lr
-			}
-			lr.TriIDs = append(lr.TriIDs, id)
+	// In-memory trigram ids are insertion-ordered; remap them onto the
+	// sorted dictionary. The line-major TriIDs exist ONLY here, transiently
+	// at save time - keeping them resident would hold a second copy of the
+	// posting relation (the exact per-posting amplification #5731 removed).
+	strOf := make([]string, len(ix.triID))
+	for tg, id := range ix.triID {
+		strOf[id] = tg
+	}
+	lines := make([]lineRec, len(ix.lines))
+	copy(lines, ix.lines)
+	for oid, lids := range ix.posts {
+		nid := idOf[strOf[oid]]
+		for _, lid := range lids {
+			lines[lid].TriIDs = append(lines[lid].TriIDs, nid)
 		}
 	}
-	lines := make([]lineRec, 0, len(lrs))
-	for _, lr := range lrs {
-		sort.Slice(lr.TriIDs, func(i, j int) bool { return lr.TriIDs[i] < lr.TriIDs[j] })
-		lines = append(lines, *lr)
+	for i := range lines {
+		lr := &lines[i]
+		sort.Slice(lr.TriIDs, func(a, b int) bool { return lr.TriIDs[a] < lr.TriIDs[b] })
 	}
+	// lines is offset-ascending by construction; the sort is a stabilizer
+	// against future construction paths, not a correctness dependency.
 	sort.Slice(lines, func(i, j int) bool { return lines[i].Offset < lines[j].Offset })
 	return &indexFile{
 		Version:     idxVersion,
-		IndexedTo:   ix.data.IndexedTo,
-		LineCount:   ix.data.LineCount,
-		SourceBytes: ix.data.SourceBytes,
-		BuiltAt:     ix.data.BuiltAt,
+		IndexedTo:   ix.indexedTo,
+		LineCount:   ix.lineCount,
+		SourceBytes: ix.sourceBytes,
+		BuiltAt:     ix.builtAt,
 		Dict:        dict,
 		Lines:       lines,
 	}

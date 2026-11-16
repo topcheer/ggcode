@@ -57,10 +57,14 @@ func TestIssue5201CrossBlockSinglePosting(t *testing.T) {
 		t.Fatal(err)
 	}
 	ix.mu.RLock()
-	postings := ix.data.Trigrams["abc"]
+	id, ok := ix.triID["abc"]
+	nPost := 0
+	if ok {
+		nPost = len(ix.posts[id])
+	}
 	ix.mu.RUnlock()
-	if len(postings) != 1 {
-		t.Fatalf("trigram 'abc' from two blocks of one line must yield exactly 1 posting, got %d", len(postings))
+	if nPost != 1 {
+		t.Fatalf("trigram 'abc' from two blocks of one line must yield exactly 1 posting, got %d", nPost)
 	}
 }
 
@@ -84,14 +88,13 @@ func TestIssue5201QuerySideDedupRepairsLegacyIndex(t *testing.T) {
 	}
 	// Simulate the legacy shape directly: hand-craft the duplicate posting
 	// the pre-fix indexer would have written ("abc" twice for offset 0) and
-	// nothing for the required-but-absent "bcd".
+	// nothing for the required-but-absent "bcd". In the #5731 grouped store
+	// a legacy duplicate is the same line id appearing twice in the
+	// trigram's list (exactly what Load rebuilds from a v2 file whose
+	// lineRec.TriIDs carry the pre-#5201 duplicate).
 	ix.mu.Lock()
-	ix.data.Trigrams = map[string][]Posting{
-		"abc": {
-			{Offset: 0, Length: ix.data.Trigrams["abc"][0].Length, Role: 1},
-			{Offset: 0, Length: ix.data.Trigrams["abc"][0].Length, Role: 1},
-		},
-	}
+	id := ix.triID["abc"]
+	ix.posts[id] = append(ix.posts[id], ix.posts[id][len(ix.posts[id])-1])
 	ix.mu.Unlock()
 
 	if hits := ix.Query([]string{"abcd"}, 10); len(hits) != 0 {
@@ -152,10 +155,14 @@ func TestIssue5201PersistenceRoundtripSinglePosting(t *testing.T) {
 		t.Fatal(err)
 	}
 	ix2.mu.RLock()
-	postings := ix2.data.Trigrams["abc"]
+	id2, ok2 := ix2.triID["abc"]
+	nPost2 := 0
+	if ok2 {
+		nPost2 = len(ix2.posts[id2])
+	}
 	ix2.mu.RUnlock()
-	if len(postings) != 1 {
-		t.Fatalf("after save+Load roundtrip, trigram 'abc' must still have exactly 1 posting, got %d", len(postings))
+	if nPost2 != 1 {
+		t.Fatalf("after save+Load roundtrip, trigram 'abc' must still have exactly 1 posting, got %d", nPost2)
 	}
 	if hits := ix2.Query([]string{"abcd"}, 10); len(hits) != 0 {
 		t.Fatalf("BUG #5201 persisted: reloaded index still matches 'abcd' without 'bcd' (hits=%d)", len(hits))
@@ -166,24 +173,37 @@ func TestIssue5201PersistenceRoundtripSinglePosting(t *testing.T) {
 // behavior that already worked: a trigram repeated WITHIN one text block
 // yields one posting. Renaming/re-scoping addPostings must not lose it.
 func TestIssue5201WithinBlockDedupUnchanged(t *testing.T) {
-	tg := map[string][]Posting{}
+	// #5731: addPostings is a method on the grouped store now; the dedup
+	// contract (caller-owned seen map) is unchanged.
+	ix := &Index{triID: map[string]uint32{}, posts: map[uint32][]uint32{}}
+	lr := lineRec{Offset: 0, Length: 10, Role: 1}
 	seen := map[string]struct{}{}
-	addPostings(tg, seen, "abc abc abc", 0, 10, 1, 0)
-	if len(tg["abc"]) != 1 {
-		t.Fatalf("within-block dedup: expected 1 posting for 'abc', got %d", len(tg["abc"]))
+	lid := ix.addPostings(seen, "abc abc abc", lr, -1)
+	if n := len(ix.posts[ix.triID["abc"]]); n != 1 {
+		t.Fatalf("within-block dedup: expected 1 posting for 'abc', got %d", n)
 	}
 	// The caller-owned seen map must now carry the trigram: a second block
 	// with the same trigram must not add another posting.
-	addPostings(tg, seen, "zzabczz", 0, 10, 1, 0)
-	if len(tg["abc"]) != 1 {
-		t.Fatalf("line-level dedup across blocks: expected still 1 posting for 'abc', got %d", len(tg["abc"]))
+	lid = ix.addPostings(seen, "zzabczz", lr, lid)
+	if n := len(ix.posts[ix.triID["abc"]]); n != 1 {
+		t.Fatalf("line-level dedup across blocks: expected still 1 posting for 'abc', got %d", n)
+	}
+	if len(ix.lines) != 1 || ix.lines[0].Offset != 0 {
+		t.Fatalf("one materialized line at offset 0 expected, got %d lines", len(ix.lines))
 	}
 	// A DIFFERENT line gets its own caller-owned seen map in production
 	// (indexLine creates one per record), so its postings append normally.
 	seen2 := map[string]struct{}{}
-	addPostings(tg, seen2, "zzabczz", 50, 10, 1, 0)
-	if len(tg["abc"]) != 2 {
-		t.Fatalf("different line must add its own posting: expected 2, got %d", len(tg["abc"]))
+	lr2 := lineRec{Offset: 50, Length: 10, Role: 1}
+	lid2 := ix.addPostings(seen2, "zzabczz", lr2, -1)
+	if lid2 == lid {
+		t.Fatalf("different line must get a distinct line id (got %d for both)", lid2)
+	}
+	if n := len(ix.posts[ix.triID["abc"]]); n != 2 {
+		t.Fatalf("different line must add its own posting: expected 2, got %d", n)
+	}
+	if len(ix.lines) != 2 || ix.lines[1].Offset != 50 {
+		t.Fatalf("second materialized line at offset 50 expected, got %d lines", len(ix.lines))
 	}
 }
 
