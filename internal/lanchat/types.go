@@ -20,6 +20,17 @@ const (
 	StatusProcessing = "processing"
 	StatusCompleted  = "completed"
 	StatusRejected   = "rejected"
+
+	// #5727 sender-local delivery dispositions. These never travel on the
+	// wire: they record the sender's own view of a multi-recipient send at
+	// the moment the send returns, so a later receipt query can distinguish
+	// "handed to transport, no ACK yet" (sent), "parked in the local retry
+	// queue" (queued), "never attempted" (skipped) and "transport refused"
+	// (failed) from a real recipient ACK (delivered/approved/...).
+	StatusSent    = "sent"
+	StatusQueued  = "queued"
+	StatusSkipped = "skipped"
+	StatusFailed  = "failed"
 )
 
 type Participant struct {

@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,6 +65,16 @@ type Hub struct {
 
 	archive []ArchivedPeer
 
+	// #5727 Gap B: on-disk mirror of the archive ring. archiveDir is the
+	// stable base dir captured at NewHub time (SetSessionID re-points
+	// h.store into a per-session dir, but peer identity history is
+	// machine-scope and must survive both session switches and full
+	// restarts). archivePersistBlocked mirrors the trusted-peers policy:
+	// when the existing file cannot be parsed, saves are refused so a bad
+	// parse never erases the only historical record.
+	archiveDir            string
+	archivePersistBlocked bool
+
 	messages []Message
 
 	pendingApproval []PendingAgentMsg
@@ -76,6 +89,15 @@ type Hub struct {
 
 	receipts     map[string]Receipt
 	receiptOrder []string
+
+	// #5727: per-recipient delivery receipts, keyed message id ->
+	// recipient node id -> latest receipt/disposition for that recipient.
+	// The legacy receipts map above keeps its historical last-write-wins
+	// single-receipt-per-message shape (GetReceipt is unchanged); this index
+	// preserves every recipient of a multi-recipient send so the sender can
+	// query per-seat outcomes after the send returns.
+	deliveryReceipts map[string]map[string]Receipt
+	deliveryOrder    []string
 
 	store     *Store
 	sessionID string
@@ -166,6 +188,21 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		debug.Log("lanchat", "node identity key unavailable, messages will be unsigned: %v", keyErr)
 	}
 
+	// #5727 Gap B: seed the peer-identity archive from disk so a full
+	// restart of this seat keeps its own identity history. Without this,
+	// ids cached in a sender's session context lose the archive hop of the
+	// stale-id resolution chain (old node_id -> archive -> nick -> fresh
+	// holder) after the restart. A corrupt file blocks saving instead of
+	// being overwritten; a missing file is a normal first run.
+	archiveRing, archiveErr := LoadPeerArchive(store.dir)
+	archivePersistBlocked := archiveErr != nil
+	if archiveErr != nil {
+		debug.Log("lanchat", "peer archive in %s not loaded (refusing to overwrite on save): %v", store.dir, archiveErr)
+	}
+	if len(archiveRing) > maxArchiveEntries {
+		archiveRing = archiveRing[len(archiveRing)-maxArchiveEntries:]
+	}
+
 	return &Hub{
 		nodeID:                 nodeID,
 		humanNick:              nick,
@@ -183,6 +220,10 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		hasTests:               ws.HasTests,
 		peers:                  make(map[string]*Participant),
 		receipts:               make(map[string]Receipt),
+		deliveryReceipts:       make(map[string]map[string]Receipt),
+		archive:                archiveRing,
+		archiveDir:             store.dir,
+		archivePersistBlocked:  archivePersistBlocked,
 		store:                  store,
 		approvalPolicies:       policies,
 		approvalPoliciesLoaded: policiesLoaded,
@@ -228,6 +269,9 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 	h.mu.Lock()
 	h.sessionID = sessionID
 	h.store = NewStore(sessionDir)
+	// #5727: the peer-identity archive deliberately keeps pointing at the
+	// base dir captured in NewHub (h.archiveDir) - session switches re-point
+	// message persistence, not machine-scope identity history.
 
 	if persisted, err := LoadNick(h.store.dir); err == nil && persisted != "" {
 		h.humanNick = persisted
@@ -525,6 +569,17 @@ func (h *Hub) archivePeer(p *Participant) {
 	h.archive = append(h.archive, entry)
 	if len(h.archive) > maxArchiveEntries {
 		h.archive = h.archive[len(h.archive)-maxArchiveEntries:]
+	}
+	// #5727 Gap B: mirror the ring to disk. Synchronous write under h.mu
+	// (same policy as persistMessage): archivePeer runs on peer sweeps, not
+	// hot paths, and ordering matters - an async write could persist an
+	// older ring over a newer one. Skipped when no base dir was captured
+	// (bare &Hub{} in tests) or when the existing file failed to parse, so
+	// a corrupt archive is never silently replaced.
+	if h.archiveDir != "" && !h.archivePersistBlocked {
+		if err := SavePeerArchive(h.archiveDir, h.archive); err != nil {
+			debug.Log("lanchat", "persist peer archive: %v", err)
+		}
 	}
 	debug.Log("lanchat", "archived peer %s (%s)", p.NodeID, p.HumanNick)
 }
@@ -973,19 +1028,32 @@ func (h *Hub) SendBroadcast(ctx context.Context, content string, attachments []A
 }
 
 func (h *Hub) SendDirect(ctx context.Context, toNodeID, toRole, content string, attachments []Attachment) error {
+	_, err := h.SendDirectMsg(ctx, toNodeID, toRole, content, attachments)
+	return err
+}
+
+// SendDirectMsg is SendDirect plus the sent Message, so callers can name the
+// per-recipient delivery receipt record (#5727) in their send report.
+func (h *Hub) SendDirectMsg(ctx context.Context, toNodeID, toRole, content string, attachments []Attachment) (Message, error) {
 	h.mu.RLock()
 	nick := h.humanNick
 	h.mu.RUnlock()
 	msg := h.newMessage(RoleHuman, nick, toNodeID, toRole, content, attachments)
-	return h.deliverMessage(ctx, msg, false)
+	return msg, h.deliverMessage(ctx, msg, false)
 }
 
 func (h *Hub) SendAsAgent(ctx context.Context, toNodeID, toRole, content string) error {
+	_, err := h.SendAsAgentMsg(ctx, toNodeID, toRole, content)
+	return err
+}
+
+// SendAsAgentMsg is SendAsAgent plus the sent Message (#5727).
+func (h *Hub) SendAsAgentMsg(ctx context.Context, toNodeID, toRole, content string) (Message, error) {
 	h.mu.RLock()
 	nick := h.agentNick
 	h.mu.RUnlock()
 	msg := h.newMessage(RoleAgent, nick, toNodeID, toRole, content, nil)
-	return h.deliverMessage(ctx, msg, false)
+	return msg, h.deliverMessage(ctx, msg, false)
 }
 
 func (h *Hub) BroadcastAsAgent(ctx context.Context, content string) error {
@@ -1044,8 +1112,21 @@ func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) e
 		}
 		h.mu.RUnlock()
 
+		// #5727: record the send-time disposition for every targeted
+		// recipient synchronously, so a receipt query right after the send
+		// returns sees one entry per seat ("sent" = handed to transport,
+		// outcome unknown). Async transport failures upgrade the entry to
+		// "failed" when the retry loop gives up. This is sender-local
+		// bookkeeping only - no new wire traffic.
+		h.recordSendDispositions(msg, peers, StatusSent, "")
+
 		for _, peer := range peers {
-			safego.Go("lanchat.postToPeer", func() { h.postToPeerWithRetry(ctx, peer.NodeID, peer.Endpoint, msg, 1) })
+			safego.Go("lanchat.postToPeer", func() {
+				if err := h.postToPeerWithRetry(ctx, peer.NodeID, peer.Endpoint, msg, 1); err != nil {
+					st, reason := sendDispositionForErr(err)
+					h.recordSendDispositions(msg, []Participant{peer}, st, reason)
+				}
+			})
 		}
 		return nil
 	}
@@ -1060,11 +1141,49 @@ func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) e
 	if !ok {
 		return fmt.Errorf("unknown peer: %s", msg.ToNodeID)
 	}
-	return h.postToPeerWithRetry(ctx, peerCopy.NodeID, peerCopy.Endpoint, msg, 2)
+	err := h.postToPeerWithRetry(ctx, peerCopy.NodeID, peerCopy.Endpoint, msg, 2)
+	// #5727: the direct path knows its transport outcome at return time -
+	// record it so the receipt trail starts at the send and later recipient
+	// ACKs (delivered/approved/...) land on the same per-recipient record.
+	// Timeouts stay "sent" (unknown), matching the #4774 send-time wording.
+	st, reason := sendDispositionForErr(err)
+	h.recordSendDispositions(msg, []Participant{peerCopy}, st, reason)
+	return err
 }
 
 var PeerRetryDelayFn = func(attempt int) time.Duration {
 	return time.Duration(attempt) * time.Second
+}
+
+// isUnknownDeliveryErrHub mirrors the tool-layer #4774 classification: a
+// timeout is neither success nor failure. #5727 keeps the receipt
+// disposition vocabulary aligned with the send-time three-way reporting.
+func isUnknownDeliveryErrHub(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+	return false
+}
+
+// sendDispositionForErr maps a transport outcome to the sender-local
+// disposition status and reason (#5727): nil -> sent, timeout -> sent with
+// the transport's last word as the reason (outcome unknown), anything else
+// -> failed.
+func sendDispositionForErr(err error) (string, string) {
+	if err == nil {
+		return StatusSent, ""
+	}
+	if isUnknownDeliveryErrHub(err) {
+		return StatusSent, err.Error()
+	}
+	return StatusFailed, err.Error()
 }
 
 func (h *Hub) postToPeerWithRetry(ctx context.Context, nodeID, endpoint string, msg Message, maxRetries int) error {
@@ -1450,6 +1569,49 @@ func (h *Hub) GetReceipt(messageID string) (Receipt, bool) {
 	defer h.mu.RUnlock()
 	r, ok := h.receipts[messageID]
 	return r, ok
+}
+
+// DeliveryReceipts returns one receipt per recipient recorded for
+// messageID (#5727): send-time dispositions (sent/queued/skipped/failed)
+// plus any real ACKs that arrived since, one entry per seat, newest data
+// per seat, sorted by recipient node id for stable output. This is the
+// queryable per-recipient surface the sender consults after a
+// multi-recipient send returns; GetReceipt above keeps the legacy
+// single-receipt shape.
+func (h *Hub) DeliveryReceipts(messageID string) []Receipt {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	byRecipient := h.deliveryReceipts[messageID]
+	if len(byRecipient) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(byRecipient))
+	for id := range byRecipient {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]Receipt, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, byRecipient[id])
+	}
+	return out
+}
+
+// RecentDeliveryReceiptIDs lists message ids that have per-recipient
+// receipt records, newest first (#5727). It backs the no-argument form of
+// the receipt query so a sender can discover ids without copying them out
+// of an earlier send result.
+func (h *Hub) RecentDeliveryReceiptIDs(limit int) []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if limit <= 0 || limit > len(h.deliveryOrder) {
+		limit = len(h.deliveryOrder)
+	}
+	out := make([]string, 0, limit)
+	for i := len(h.deliveryOrder) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, h.deliveryOrder[i])
+	}
+	return out
 }
 
 func (h *Hub) sendReceipt(originalMsg Message, status, reason string) {
@@ -1930,6 +2092,55 @@ func (h *Hub) storeReceiptLocked(r Receipt) {
 		evict := h.receiptOrder[0]
 		h.receiptOrder = h.receiptOrder[1:]
 		delete(h.receipts, evict)
+	}
+	// #5727: index the receipt per recipient as well. Inbound receipts
+	// carry the acking seat in FromNodeID, so a multi-recipient send keeps
+	// one entry per recipient instead of the last-write-wins single
+	// receipt above (which GetReceipt preserves for compatibility).
+	if r.MessageID != "" && r.FromNodeID != "" {
+		h.storeDeliveryReceiptLocked(r.MessageID, r.FromNodeID, r)
+	}
+}
+
+// storeDeliveryReceiptLocked files one per-recipient receipt under
+// (messageID, recipientNodeID), creating and capping the message-id order.
+func (h *Hub) storeDeliveryReceiptLocked(messageID, recipientNodeID string, r Receipt) {
+	if h.deliveryReceipts == nil {
+		h.deliveryReceipts = make(map[string]map[string]Receipt)
+	}
+	if h.deliveryReceipts[messageID] == nil {
+		h.deliveryReceipts[messageID] = make(map[string]Receipt)
+		h.deliveryOrder = append(h.deliveryOrder, messageID)
+	}
+	h.deliveryReceipts[messageID][recipientNodeID] = r
+	if len(h.deliveryOrder) > receiptCap {
+		evict := h.deliveryOrder[0]
+		h.deliveryOrder = h.deliveryOrder[1:]
+		delete(h.deliveryReceipts, evict)
+	}
+}
+
+// recordSendDispositions writes the sender-local view of a send for each
+// targeted recipient (#5727). The disposition is a Receipt shaped like an
+// inbound one - FromNodeID names the seat the entry is about - but it never
+// leaves this process. A later real ACK for the same (messageID, recipient)
+// overwrites it.
+func (h *Hub) recordSendDispositions(msg Message, recipients []Participant, status, reason string) {
+	now := time.Now().UnixMilli()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, p := range recipients {
+		r := Receipt{
+			MessageID:  msg.ID,
+			Status:     status,
+			FromNodeID: p.NodeID,
+			FromNick:   p.HumanNick,
+			ToNodeID:   msg.FromNodeID,
+			ToRole:     msg.FromRole,
+			Timestamp:  now,
+			Reason:     reason,
+		}
+		h.storeDeliveryReceiptLocked(msg.ID, p.NodeID, r)
 	}
 }
 

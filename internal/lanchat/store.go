@@ -276,6 +276,69 @@ func SaveTrustedPeers(dir string, peers map[string]string) error {
 	return os.Rename(tmpPath, path)
 }
 
+// peerArchiveFile is the #5727 on-disk mirror of the in-memory peer
+// identity archive ring. It lives in the hub's stable base dir (the dir the
+// Store was created with, before any SetSessionID re-pointing), because peer
+// identity history is machine-scope state, not per-session chat state.
+const peerArchiveFile = "lanchat-archive.json"
+
+// LoadPeerArchive reads the persisted peer-identity archive ring (#5727 Gap
+// B). A missing file is not an error (first run / legacy install): it returns
+// a nil slice. A corrupt file IS an error so the caller can refuse to
+// overwrite the history it could not parse (same policy as trusted-peers).
+func LoadPeerArchive(dir string) ([]ArchivedPeer, error) {
+	data, err := os.ReadFile(filepath.Join(dir, peerArchiveFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var entries []ArchivedPeer
+	if err := json.Unmarshal(data, &entries); err != nil {
+		debug.Log("lanchat", "%s in %s is corrupt: %v", peerArchiveFile, dir, err)
+		return nil, err
+	}
+	return entries, nil
+}
+
+// SavePeerArchive atomically persists the peer-identity archive ring. The
+// caller passes the already-trimmed ring (same maxArchiveEntries cap as the
+// in-memory side), so disk and memory share one GC policy.
+func SavePeerArchive(dir string, entries []ArchivedPeer) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if entries == nil {
+		entries = []ArchivedPeer{}
+	}
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, peerArchiveFile)
+	tmpPath := path + ".tmp"
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
 func LoadApprovalPolicies(dir string) (map[string]string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "approval-policies.json"))
 	if err != nil {
