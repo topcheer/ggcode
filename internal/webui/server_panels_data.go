@@ -14,7 +14,7 @@ func (s *Server) handlePanelData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/panel/")
-	// 注入式数据面优先(root 装配闭包):stats/usage/memory/plugins/tags/lanchat。
+	// 注入式数据面优先(root 装配闭包):stats/usage/memory/plugins/tags。
 	if fn := s.panelDataFns[id]; fn != nil {
 		writeJSON(w, fn())
 		return
@@ -24,7 +24,7 @@ func (s *Server) handlePanelData(w http.ResponseWriter, r *http.Request) {
 		s.panelDataModel(w)
 	case "lang":
 		s.panelDataLang(w)
-	case "plugins", "memory", "tags", "stats", "usage", "lanchat":
+	case "plugins", "memory", "tags", "stats", "usage":
 		writeError(w, http.StatusNotImplemented, "panel data pending: "+id)
 	default:
 		writeError(w, http.StatusNotFound, "unknown panel: "+id)

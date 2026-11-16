@@ -51,5 +51,6 @@ export type FormData_ = {
 export type StatsData = {
   kind: "stats";
   sections?: { title: string; metrics: { label: string; value: string; trend?: string }[] }[];
+  emptyReason?: string;
   [k: string]: unknown;
 };

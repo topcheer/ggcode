@@ -49,6 +49,7 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tui"
 	"github.com/topcheer/ggcode/internal/update"
+	"github.com/topcheer/ggcode/internal/usage"
 	"github.com/topcheer/ggcode/internal/vcs"
 	"github.com/topcheer/ggcode/internal/version"
 	"github.com/topcheer/ggcode/internal/webui"
@@ -1712,8 +1713,61 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	// 聊天三能力(模型/effort/mode)注入:webui 复用 TUI slash 命令全链
 	webuiSrv.SetChatCommandFn(repl.SubmitCommand)
 	webuiSrv.SetChatControlsFn(repl.ChatControlsSnapshot)
-	// webui 面板注入式数据面(#5714):闭包直取 root 作用域数据源,
-	// 取数逻辑零复制(autoMem/sessionStore/statusFn 皆现成)。
+	// usage/plugins 数据面(#5714 收口):均不依赖 TUI 面板态——
+	// plugins=pluginMgr.Results() 即席读;usage=独立 usage.Service 即席探测
+	// (只探有 key 的 vendor,5s 超时;零 vendor 可探时返回显式空态)。
+	webuiSrv.SetPanelDataFn("plugins", func() any {
+		results := pluginMgr.Results()
+		items := make([]map[string]any, 0, len(results))
+		for _, r := range results {
+			status := "loaded"
+			if !r.Success {
+				status = "failed"
+			}
+			items = append(items, map[string]any{
+				"id": r.Name, "title": r.Name,
+				"subtitle": fmt.Sprintf("%s (%d tools)", status, len(r.Tools)),
+				"badges":   []string{status},
+			})
+		}
+		return map[string]any{"kind": "list-detail", "items": items}
+	})
+	webuiSrv.SetPanelDataFn("usage", func() any {
+		svc := usage.NewService()
+		type target struct{ vendor, baseURL, key string }
+		targets := make([]target, 0, len(cfg.Vendors))
+		for vname, v := range cfg.Vendors {
+			for ename, ep := range v.Endpoints {
+				if ep.BaseURL == "" || ep.APIKey == "" {
+					continue
+				}
+				targets = append(targets, target{vname, ep.BaseURL, ep.APIKey})
+				_ = ename
+			}
+		}
+		if len(targets) == 0 {
+			return map[string]any{"kind": "stats", "sections": []any{}, "emptyReason": "no vendor with API key configured"}
+		}
+		metrics := make([]map[string]string, 0, len(targets))
+		for _, tg := range targets {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			info, err := svc.Get(ctx, tg.vendor, tg.baseURL, tg.key)
+			cancel()
+			if err != nil || info == nil {
+				metrics = append(metrics, map[string]string{"label": tg.vendor, "value": "unavailable"})
+				continue
+			}
+			val := "n/a"
+			if info.Balance != nil {
+				val = fmt.Sprintf("%.2f", *info.Balance)
+			}
+			metrics = append(metrics, map[string]string{"label": tg.vendor, "value": val})
+		}
+		return map[string]any{
+			"kind":     "stats",
+			"sections": []map[string]any{{"title": "Vendor Usage", "metrics": metrics}},
+		}
+	})
 	webuiSrv.SetPanelDataFn("memory", func() any {
 		entries, err := core.AutoMemory.ListDetailed()
 		if err != nil {
