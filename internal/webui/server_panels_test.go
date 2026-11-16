@@ -8,42 +8,23 @@ import (
 	"testing"
 )
 
-// TestPanelDirectiveFor 钉面板命令分流判定表:面板类无参→面板指令;
-// 带参→直通(nil);非面板命令→直通。
+// TestPanelDirectiveFor 钉面板分流判定:panelsDisabled 总闸生效期间,
+// 一切命令(含无参面板形态)一律直通(ok=false)——禁用态行为契约。
+// 翻回总闸后可恢复原判定表(见 git 历史本测试前版)。
 func TestPanelDirectiveFor(t *testing.T) {
-	cases := []struct {
-		text   string
-		wantOK bool
-		base   string
-	}{
-		{"/model", true, "model"},
-		{"/model glm-5.3", false, ""},   // 带参直通命令链
-		{"/qq", true, "qq"},             // NoArg 面板
-		{"/sessions", true, "sessions"}, // NoArg
-		{"/resume abc123", false, ""},   // /resume 带参=直通 resumeSession
-		{"/help", false, ""},            // 非面板文本命令
-		{"/effort", true, "effort"},
-		{"/effort high", false, ""},
-		{"hello", false, ""}, // 非 slash
-	}
-	for _, c := range cases {
-		spec, base, ok := panelDirectiveFor(c.text)
-		if ok != c.wantOK {
-			t.Errorf("panelDirectiveFor(%q) ok=%v, want %v", c.text, ok, c.wantOK)
-			continue
-		}
-		if ok && (base != c.base || spec.Kind == "") {
-			t.Errorf("panelDirectiveFor(%q) base=%q kind=%q, want base=%q with kind", c.text, base, spec.Kind, c.base)
+	for _, text := range []string{"/model", "/qq", "/sessions", "/effort", "/resume abc123", "/help", "hello"} {
+		if _, _, ok := panelDirectiveFor(text); ok {
+			t.Errorf("panelsDisabled 生效中: panelDirectiveFor(%q) ok=true, want false(直通)", text)
 		}
 	}
 }
 
-// TestHandleChatCommandPanelDirective 钉端点行为:无参面板命令返回
-// status=panel 指令且 chatCommandFn 不被调用(TUI 不弹面板)。
+// TestHandleChatCommandPanelDirective 禁用态:无参命令也不进面板,
+// 直通命令链(chatCommandFn 收到原文)。
 func TestHandleChatCommandPanelDirective(t *testing.T) {
-	called := false
+	got := ""
 	s := &Server{chatCommandFn: func(text string) error {
-		called = true
+		got = text
 		return nil
 	}}
 	rec := httptest.NewRecorder()
@@ -51,19 +32,13 @@ func TestHandleChatCommandPanelDirective(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if called {
-		t.Error("chatCommandFn called for no-arg panel command; TUI panel must NOT open from webui")
+	if got != "/model" {
+		t.Errorf("panelsDisabled 生效中: chatCommandFn got %q, want /model 直通", got)
 	}
-	var resp struct {
-		Status  string `json:"status"`
-		Kind    string `json:"kind"`
-		DataURL string `json:"dataUrl"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp.Status != "panel" || resp.Kind != "select" || resp.DataURL != "/api/panel/model" {
-		t.Errorf("panel directive = %+v, want status=panel kind=select url=/api/panel/model", resp)
+	var resp map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["status"] != "submitted" {
+		t.Errorf("status = %q, want submitted(直通)", resp["status"])
 	}
 }
 

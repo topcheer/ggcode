@@ -75,9 +75,17 @@ var panelRegistry = map[string]panelSpec{
 	// webui 用户经 WS 系统消息获知)。webui 原生 LAN 聊天界面属独立特性。
 }
 
+// panelsDisabled:webui 面板指令分流总闸。用户裁定面板未达可用态
+// (/model 全量模型列表语义与 TUI 选型面不符等),禁用期间 slash 命令一律
+// 纯文本直通;面板组件与端点代码保留在树,翻回 false 即可重新启用。
+const panelsDisabled = true
+
 // panelDirectiveFor 判定一条 slash 命令是否应走面板指令而非直通:
 // 命中注册表且(NoArg 或无参形态)→ 返回 spec;否则 nil(带参直通)。
 func panelDirectiveFor(text string) (panelSpec, string, bool) {
+	if panelsDisabled {
+		return panelSpec{}, "", false
+	}
 	t := strings.TrimSpace(text)
 	if !strings.HasPrefix(t, "/") {
 		return panelSpec{}, "", false
