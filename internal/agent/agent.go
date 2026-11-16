@@ -194,16 +194,20 @@ type Agent struct {
 	workingDir               string
 	sessionID                string
 	checkpoints              *checkpoint.Manager
-	codeIndex                *tool.CodeIndexManager
-	diffConfirm              DiffConfirmFunc
-	onInterrupt              interruptionHandler
-	subagentCompletionFeed   func() []SubagentCompletion
-	mailboxFeed              MailboxFeed
-	subagentNotified         map[string]bool
-	subagentNotifiedMu       sync.Mutex
-	projectMemory            map[string]struct{}
-	supportsVision           bool
-	lastTool                 string
+
+	// mcpStatus carries the #5699 deferred-answer state (nil = no MCP
+	// interaction notices).
+	mcpStatus              MCPInteractionStatus
+	codeIndex              *tool.CodeIndexManager
+	diffConfirm            DiffConfirmFunc
+	onInterrupt            interruptionHandler
+	subagentCompletionFeed func() []SubagentCompletion
+	mailboxFeed            MailboxFeed
+	subagentNotified       map[string]bool
+	subagentNotifiedMu     sync.Mutex
+	projectMemory          map[string]struct{}
+	supportsVision         bool
+	lastTool               string
 	// #5635 P2: live introspection truth sources (status/inflight
 	// faces) - see agent_runtime_stats.go.
 	runtimeStats                 runtimeStats

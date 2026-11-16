@@ -107,6 +107,13 @@ type Client struct {
 	subs           map[string]*Subscription
 	modernSub      *Subscription
 	subListenState atomic.Int32
+
+	// #5699 deferred-answer queue state (pending_answers.go).
+	pendingMu          sync.Mutex
+	pendingByID        map[string]*PendingAnswer
+	pendingOrder       []string
+	pendingSeq         int
+	pendingTTLOverride time.Duration
 }
 
 func (c *Client) negotiatedState() (string, ServerCaps) {

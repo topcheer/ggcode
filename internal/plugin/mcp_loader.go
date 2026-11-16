@@ -810,6 +810,10 @@ type MCPManager struct {
 	urlOpener          func(string) error
 	samplingHandler    mcp.SamplingHandler
 	elicitationHandler mcp.ElicitationHandler
+
+	// #5699 answered-pending digests (mcp_pending.go).
+	answeredMu sync.Mutex
+	answered   []answeredPending
 }
 
 func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry, scope string) *MCPManager {
