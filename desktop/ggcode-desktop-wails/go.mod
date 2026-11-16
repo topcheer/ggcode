@@ -12,7 +12,7 @@ replace github.com/topcheer/ggcode => ../../
 
 require (
 	charm.land/glamour/v2 v2.0.1 // indirect
-	charm.land/lipgloss/v2 v2.0.6 // indirect
+	charm.land/lipgloss/v2 v2.1.1 // indirect
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.24.2 // indirect
 	cloud.google.com/go/compute/metadata v0.10.0 // indirect
@@ -41,8 +41,8 @@ require (
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
-	github.com/chromedp/cdproto v0.159.2 // indirect
-	github.com/chromedp/chromedp v0.23.0 // indirect
+	github.com/chromedp/cdproto v0.160.3 // indirect
+	github.com/chromedp/chromedp v0.23.1 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cloudwego/base64x v0.1.7 // indirect
@@ -51,7 +51,7 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/dgrr/quickxml v0.0.0-20201022091424-4977de546d6c // indirect
 	github.com/dlclark/regexp2/v2 v2.12.0 // indirect
-	github.com/dop251/goja v0.0.0-20261108153707-d8dfb4d8b999 // indirect
+	github.com/dop251/goja v0.0.0-20261110204830-f493a2b600d6 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/eekstunt/telegramify-markdown-go v0.2.0 // indirect
 	github.com/elliotchance/orderedmap/v3 v3.1.1 // indirect
@@ -134,7 +134,7 @@ require (
 	github.com/rs/zerolog v1.35.1 // indirect
 	github.com/samber/lo v1.53.0 // indirect
 	github.com/sashabaranov/go-openai v1.43.0 // indirect
-	github.com/saucelabs/forwarder v1.6.4 // indirect
+	github.com/saucelabs/forwarder v1.6.5 // indirect
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
 	github.com/tidwall/gjson v1.20.0 // indirect
@@ -142,7 +142,7 @@ require (
 	github.com/tidwall/pretty v1.2.2 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tkrajina/go-reflector v0.5.8 // indirect
-	github.com/topcheer/etunnel v1.6.8 // indirect
+	github.com/topcheer/etunnel v1.7.6 // indirect
 	github.com/topcheer/ggcode-acp-go v0.1.6 // indirect
 	github.com/topcheer/mdns v1.3.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
@@ -158,7 +158,7 @@ require (
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	go.mau.fi/libsignal v0.2.2 // indirect
 	go.mau.fi/util v0.11.0 // indirect
-	go.mau.fi/whatsmeow v0.0.0-20261107160454-79dc2a8c33df // indirect
+	go.mau.fi/whatsmeow v0.0.0-20261113220833-ecc39170bc14 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect
@@ -170,8 +170,8 @@ require (
 	golang.org/x/arch v0.32.0 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
-	golang.org/x/image v0.47.0 // indirect
-	golang.org/x/mod v0.42.0 // indirect
+	golang.org/x/image v0.48.0 // indirect
+	golang.org/x/mod v0.43.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
