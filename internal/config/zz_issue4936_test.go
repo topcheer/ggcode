@@ -68,3 +68,41 @@ func TestRouterAliasCapsMirrorOfficial(t *testing.T) {
 		}
 	}
 }
+
+// TestWeeklyCalibrationW47 pins the W47 (2026-11-16) calibration set so a
+// models.dev regen cannot silently revert them:
+//   - Claude 4.6+ dotted aliases are 1M/128K per
+//     https://platform.claude.com/docs/en/models/overview (were stale 200K rows)
+//   - Claude Mythos 5.1/5.2 added (1M/128K, vision)
+//   - google/gemini-4-* context is 1048576 (models.dev + OpenRouter agree);
+//     output aligned to the committed 65536 family convention
+//   - qwen4-max-preview: 1M context / 393216 shared output budget
+//     https://help.aliyun.com/zh/model-studio/qwen4-max-preview
+//   - gpt-6.1-sol-pro / gpt-6.1-terra-pro mirror the 6.1 family (1.05M/128K)
+func TestWeeklyCalibrationW47(t *testing.T) {
+	pins := map[string]modelCapability{
+		"claude-opus-4.7":          {1000000, 128000, true},
+		"claude-opus-4.8":          {1000000, 128000, true},
+		"claude-sonnet-4.6":        {1000000, 128000, true},
+		"claude-mythos-5.1":        {1000000, 128000, true},
+		"claude-mythos-5.2":        {1000000, 128000, true},
+		"google/gemini-4-argon":    {1048576, 65536, true},
+		"google/gemini-4-carbon":   {1048576, 65536, true},
+		"google/gemini-4-hydrogen": {1048576, 65536, true},
+		"gpt-6.1-sol-pro":          {1050000, 128000, true},
+		"gpt-6.1-terra-pro":        {1050000, 128000, true},
+		"openai/gpt-6.1-sol-pro":   {1050000, 128000, true},
+		"openai/gpt-6.1-terra-pro": {1050000, 128000, true},
+		"qwen4-max-preview":        {1000000, 393216, true},
+	}
+	for model, want := range pins {
+		got, ok := lookupModelCapability(model)
+		if !ok {
+			t.Errorf("lookupModelCapability(%q): no table entry (W47 calibration row lost)", model)
+			continue
+		}
+		if got != want {
+			t.Errorf("knownModelCapabilities[%q] = %+v, want %+v (W47)", model, got, want)
+		}
+	}
+}
