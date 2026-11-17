@@ -203,7 +203,9 @@ func TestCronListTool_Execute(t *testing.T) {
 
 	createTool := CronCreateTool{Scheduler: s}
 	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"check every 5","recurring":true}`))
-	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"0 9 * * *","prompt":"morning report","recurring":false}`))
+	// #5743: after 09:00 local this time-only one-shot's target has
+	// passed and the next-day rollover needs the explicit ack to create.
+	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"0 9 * * *","prompt":"morning report","recurring":false,"tomorrow":true}`))
 
 	result, err = tool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
