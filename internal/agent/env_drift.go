@@ -150,11 +150,13 @@ func parseEnvContent(content string) map[string]bool {
 			continue
 		}
 		name := strings.TrimSpace(line[:idx])
-		value := strings.TrimSpace(line[idx+1:])
 
-		if value != "" {
-			result[name] = true
-		}
+		// #5759: a key present with an empty value ("FOO=") counts as set,
+		// mirroring the os.Environ() branch which only checks the '=' position.
+		// The previous value!="" gate made .env files and process env disagree
+		// on "FOO= is set" - the example side (parseEnvContentTyped) treats
+		// "FOO=" as required-no-default, so the two sources must agree.
+		result[name] = true
 	}
 	return result
 }
