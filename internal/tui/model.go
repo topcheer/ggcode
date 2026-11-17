@@ -250,6 +250,7 @@ type Model struct {
 	// time, continuously active turns (autonomous/cron loops) starve the
 	// restart forever while the arm announcement already claimed success.
 	restartArmedAt         time.Time
+	restartDeferWarnAt     time.Time
 	lastTurnActivityAt     time.Time
 	updatePrepared         *update.PreparedUpdate
 	tmuxExecRequested      bool
