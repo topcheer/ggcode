@@ -109,23 +109,36 @@ func TestCronCreateOneShotNearFutureUnaffected(t *testing.T) {
 
 	// Near-future one-shot (both one_shot=true and the legacy
 	// recurring=false spelling) must keep working without the far flag.
-	for _, input := range []string{
-		`{"cron": "*/5 * * * *", "prompt": "near", "one_shot": true}`,
-		`{"cron": "0 9 * * *", "prompt": "tomorrow morning", "recurring": false}`,
-	} {
-		result, err := tool.Execute(context.Background(), json.RawMessage(input))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if result.IsError {
-			t.Errorf("near-future one-shot must succeed without far=true: %s", result.Content)
-		}
-		if strings.Contains(result.Content, "WARNING") {
-			t.Errorf("near-future one-shot must not warn, got: %s", result.Content)
-		}
+	// #5743 note: the legacy time-only "tomorrow morning" fixture now
+	// needs tomorrow=true - after 09:00 local its target time has passed
+	// and the unacknowledged next-day rollover is rejected. The
+	// deterministic always-rolled form "0 0 * * *" replaces it (today
+	// 00:00 has passed at any wall clock), pinning the acked path.
+	near, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"cron": "*/5 * * * *", "prompt": "near", "one_shot": true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if near.IsError {
+		t.Errorf("near-future one-shot must succeed without far=true: %s", near.Content)
+	}
+	if strings.Contains(near.Content, "WARNING") {
+		t.Errorf("near-future one-shot must not warn, got: %s", near.Content)
+	}
+
+	legacy, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"cron": "0 0 * * *", "prompt": "tomorrow morning", "recurring": false, "tomorrow": true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.IsError {
+		t.Errorf("acked next-day one-shot must succeed: %s", legacy.Content)
+	}
+	if !strings.Contains(legacy.Content, "WARNING: same-day overshoot accepted via tomorrow=true") {
+		t.Errorf("acked next-day one-shot must carry the #5743 rollover warning, got: %s", legacy.Content)
 	}
 	if jobs := s.List(); len(jobs) != 2 {
-		t.Fatalf("expected 2 near-future one-shot jobs, got %d", len(jobs))
+		t.Fatalf("expected 2 one-shot jobs, got %d", len(jobs))
 	}
 }
 

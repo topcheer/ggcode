@@ -22,6 +22,8 @@ func (t CronCreateTool) Description() string {
 		"Set recurring=false for one-shot reminders (in-memory only, not persisted). " +
 		"One-shot jobs whose computed next fire is more than 90 days away are rejected unless far=true - " +
 		"far-future one-shot schedules are almost always a cron field parsing slip. " +
+		"A time-only one-shot whose target time has already passed today rolls the fire to tomorrow (+~24h) and is rejected unless tomorrow=true; " +
+		"every one-shot result echoes the computed next fire with its delta from now so schedule mismatches are visible at build time. " +
 		"queue_if_busy=false (default) skips if agent is busy; true queues the prompt for later."
 }
 func (t CronCreateTool) Parameters() json.RawMessage {
@@ -42,11 +44,15 @@ func (t CronCreateTool) Parameters() json.RawMessage {
 		},
 		"one_shot": {
 			"type": "boolean",
-			"description": "Create a self-deleting one-shot reminder: fires once at the next cron match, then removes itself. Preferred over recurring=false for deferred follow-ups. Guarded: the computed next fire must be within 90 days unless far=true."
+			"description": "Create a self-deleting one-shot reminder: fires once at the next cron match, then removes itself. Preferred over recurring=false for deferred follow-ups. Guarded: the computed next fire must be within 90 days unless far=true, and must not be a silent next-day rollover (target time already passed today) unless tomorrow=true. The result echoes the computed next fire and its delta from now."
 		},
 		"far": {
 			"type": "boolean",
 			"description": "Explicitly accept a far-future one-shot: required when the computed next fire is more than 90 days away and that is intentional. The result output carries a loud far-future warning when set."
+		},
+		"tomorrow": {
+			"type": "boolean",
+			"description": "Explicitly accept the next-day rollover: required when a time-only one-shot's target time has already passed today, so the computed next fire is tomorrow (+~24h). The result output carries a loud rollover warning when set."
 		},
 		"queue_if_busy": {
 			"type": "boolean",
@@ -78,6 +84,7 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		Recurring   *bool  `json:"recurring"`
 		OneShot     *bool  `json:"one_shot"`
 		Far         *bool  `json:"far"`
+		Tomorrow    *bool  `json:"tomorrow"`
 		QueueIfBusy *bool  `json:"queue_if_busy"`
 		FarAck      *bool  `json:"far_horizon_ack"`
 	}
@@ -122,6 +129,16 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	// never silently lose the acknowledgement.
 	far := (args.Far != nil && *args.Far) || (args.FarAck != nil && *args.FarAck)
 	farFutureDays := -1
+	// #5743 same-day overshoot state: a time-only one-shot scheduled for
+	// "later today" whose target time has already passed resolves its next
+	// match to tomorrow (+~24h) - under the 90-day far horizon, so no guard
+	// fired and the create result never surfaced the delta (techwriter
+	// R4-5: two evening builds silently deferred a full day, withdrawn and
+	// rebuilt twice). Like far=, the next-day rollover now requires an
+	// explicit "tomorrow": true acknowledgement; the accepted create
+	// carries a loud warning instead of staying silent.
+	rolloverAck := false
+	rolloverTarget := time.Time{}
 	if !recurring {
 		// #5594: a stale-date one-shot (system prompt embeds yesterday's
 		// date) rolls forward ~1 year - cron.NextTime finds the next
@@ -133,6 +150,17 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		// bypass a past-date rejection (#5594 DoD 2).
 		if msg, past := oneShotPastDateRejection(args.Cron, time.Now()); past {
 			return Result{IsError: true, Content: msg}, nil
+		}
+		// #5743: reject the unacknowledged same-day overshoot BEFORE the
+		// far gate (a +24h rollover is never a far-horizon question, and
+		// far=true must not double as its acknowledgement - same
+		// precedence rule as the #5594 past-date rejection).
+		if target, next, rolled := oneShotDayRollover(args.Cron, time.Now()); rolled {
+			if args.Tomorrow == nil || !*args.Tomorrow {
+				return Result{IsError: true, Content: oneShotDayRolloverRejection(target, next, time.Now())}, nil
+			}
+			rolloverAck = true
+			rolloverTarget = target
 		}
 		if next, err := cron.NextTime(args.Cron, time.Now()); err == nil {
 			if days := int(time.Until(next).Hours() / 24); days > oneShotFarFutureDays {
@@ -158,11 +186,103 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	suffix := ""
 	if !recurring {
 		suffix = "\n(one-shot: fires once and is removed automatically; not persisted across restarts)"
+		// #5743 ask 1: echo the computed next fire (local time plus delta
+		// vs now) on every one-shot create so an intent mismatch is
+		// visible at build time instead of surfacing a day late as a
+		// silently missed fire.
+		if !job.NextFire.IsZero() {
+			suffix += fmt.Sprintf("\nnext fire: %s (%s from now)", job.NextFire.Format("2006-01-02 15:04"), humanDelta(time.Until(job.NextFire)))
+		}
+		if rolloverAck {
+			suffix += fmt.Sprintf("\nWARNING: same-day overshoot accepted via tomorrow=true - target time %s already passed today, so the fire rolls to tomorrow %s. Verify the next-day fire is intended before relying on it.", rolloverTarget.Format("15:04"), job.NextFire.Format("2006-01-02 15:04"))
+		}
 		if farFutureDays > 0 {
 			suffix += fmt.Sprintf("\nWARNING: far-future one-shot accepted via far=true - next fire is %d days away. Far-future one-shots are usually cron field slips (minute hour day-of-month month day-of-week); verify the expression before relying on it.", farFutureDays)
 		}
 	}
 	return Result{Content: string(out) + suffix + "\n"}, nil
+}
+
+// #5743 oneShotDayRollover detects the same-day overshoot: a time-only
+// one-shot expression (explicit minute and hour fields; day-of-month,
+// month and day-of-week all unrestricted) whose candidate times today
+// have all already passed, so cron.NextTime resolves the fire to
+// tomorrow's earliest candidate (+~24h, "later today" silently becoming
+// "tomorrow"). It returns today's latest (already passed) target time and
+// the computed next fire. The current minute counts as passed, matching
+// NextTime's search start (now truncated to the minute, plus one minute).
+// Dated forms (#5594 scope: explicit day+month) and weekday-restricted
+// forms are out of scope: their rollovers are not the deterministic +24h
+// same-day class. Stepped or wildcard time fields are also out of scope:
+// they always leave a near match, so no day-long deferral is possible.
+func oneShotDayRollover(expr string, now time.Time) (targetToday, next time.Time, rolled bool) {
+	fields := strings.Fields(expr)
+	if len(fields) != 5 {
+		return time.Time{}, time.Time{}, false
+	}
+	for _, f := range []string{fields[2], fields[3], fields[4]} {
+		if f != "*" && f != "?" {
+			return time.Time{}, time.Time{}, false
+		}
+	}
+	minutes, minOK := parseSimpleField(fields[0])
+	hours, hourOK := parseSimpleField(fields[1])
+	if !minOK || !hourOK || len(minutes) == 0 || len(hours) == 0 {
+		return time.Time{}, time.Time{}, false
+	}
+	minH, maxH := fieldBounds(hours)
+	minMi, maxM := fieldBounds(minutes)
+	latestToday := time.Date(now.Year(), now.Month(), now.Day(), maxH, maxM, 0, 0, now.Location())
+	if latestToday.After(now.Truncate(time.Minute)) {
+		return time.Time{}, time.Time{}, false // a slot is still reachable today
+	}
+	tomorrow := now.AddDate(0, 0, 1)
+	next = time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), minH, minMi, 0, 0, now.Location())
+	return latestToday, next, true
+}
+
+// fieldBounds returns the min and max value of an explicit cron field set
+// (parseSimpleField output). The set is never empty on the ok path.
+func fieldBounds(values map[int]bool) (int, int) {
+	min, max := -1, -1
+	for v := range values {
+		if min < 0 || v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+	}
+	return min, max
+}
+
+func oneShotDayRolloverRejection(target, next, now time.Time) string {
+	return fmt.Sprintf(
+		"one-shot cron rejected: the target time %s has already passed today (now %s), so the next fire would silently roll to tomorrow %s (%s from now). "+
+			"Same-day overshoots are how \"later today\" reminders turn into day-long deferrals with zero warning. "+
+			"If the next-day fire is intentional, retry with \"tomorrow\": true; otherwise recompute the expression for a time still ahead today (or spell out the full date). "+
+			"far=true does not acknowledge a same-day overshoot.",
+		target.Format("15:04"), now.Format("15:04"), next.Format("2006-01-02 15:04"), humanDelta(next.Sub(now)),
+	)
+}
+
+// humanDelta renders a duration as a compact +HhMMm / +MMm string for
+// result echoes (#5743), rounded to the minute.
+func humanDelta(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	d = d.Round(time.Minute)
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	switch {
+	case h == 0:
+		return fmt.Sprintf("+%dm", m)
+	case m == 0:
+		return fmt.Sprintf("+%dh", h)
+	default:
+		return fmt.Sprintf("+%dh%02dm", h, m)
+	}
 }
 
 const oneShotFarFutureDays = 90
@@ -415,6 +535,10 @@ func (t CronUpdateTool) Parameters() json.RawMessage {
 			"type": "boolean",
 			"description": "Explicitly accept a far-future schedule: required when the new cron expression moves a one-shot job's next fire more than 90 days out and that is intentional."
 		},
+		"tomorrow": {
+			"type": "boolean",
+			"description": "Explicitly accept the next-day rollover: required when the new cron expression is time-only and its target time has already passed today, moving a one-shot job's next fire to tomorrow (+~24h)."
+		},
 			"description": {
 				"type": "string",
 				"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
@@ -436,6 +560,7 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		Prompt      *string `json:"prompt"`
 		QueueIfBusy *bool   `json:"queue_if_busy"`
 		Far         *bool   `json:"far"`
+		Tomorrow    *bool   `json:"tomorrow"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -454,11 +579,25 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	// the schedule of an existing one-shot can introduce the same >1 year
 	// NextFire slip. Guard only one-shot targets; recurring jobs legitimately
 	// have distant first fires only when the expression is legitimately rare.
-	if args.Cron != nil && strings.TrimSpace(*args.Cron) != "" && (args.Far == nil || !*args.Far) {
+	// #5743: the same-day overshoot guard applies on reschedule too -
+	// re-pointing an existing one-shot at a time-only expression whose
+	// target time has passed silently defers the fire a full day. Like the
+	// create path, it needs "tomorrow": true and far=true does not
+	// acknowledge it.
+	rolloverAck := false
+	if args.Cron != nil && strings.TrimSpace(*args.Cron) != "" {
 		if job, ok := t.Scheduler.Get(args.JobID); ok && !job.Recurring {
-			if next, err := cron.NextTime(*args.Cron, time.Now()); err == nil {
-				if days := int(time.Until(next).Hours() / 24); days > oneShotFarFutureDays {
-					return Result{IsError: true, Content: oneShotFarFutureRejection(next, days)}, nil
+			if target, next, rolled := oneShotDayRollover(*args.Cron, time.Now()); rolled {
+				if args.Tomorrow == nil || !*args.Tomorrow {
+					return Result{IsError: true, Content: oneShotDayRolloverRejection(target, next, time.Now())}, nil
+				}
+				rolloverAck = true
+			}
+			if args.Far == nil || !*args.Far {
+				if next, err := cron.NextTime(*args.Cron, time.Now()); err == nil {
+					if days := int(time.Until(next).Hours() / 24); days > oneShotFarFutureDays {
+						return Result{IsError: true, Content: oneShotFarFutureRejection(next, days)}, nil
+					}
 				}
 			}
 		}
@@ -482,9 +621,12 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		sb.WriteString("  Status: active\n")
 	}
 	if !job.NextFire.IsZero() {
-		sb.WriteString(fmt.Sprintf("  Next fire: %s\n", job.NextFire.Format("2006-01-02 15:04 MST")))
+		sb.WriteString(fmt.Sprintf("  Next fire: %s (%s from now)\n", job.NextFire.Format("2006-01-02 15:04 MST"), humanDelta(time.Until(job.NextFire))))
 		if farAccepted && !job.Recurring && time.Until(job.NextFire).Hours()/24 > oneShotFarFutureDays {
 			sb.WriteString(fmt.Sprintf("  WARNING: far-future one-shot accepted via far=true - next fire is %d days away; verify the expression before relying on it.\n", int(time.Until(job.NextFire).Hours()/24)))
+		}
+		if rolloverAck {
+			sb.WriteString("  WARNING: same-day overshoot accepted via tomorrow=true - the target time has already passed today, so the fire rolls to tomorrow; verify the next-day fire is intended.\n")
 		}
 	}
 	if preview := cronPromptPreviewLine(job.Prompt); preview != "" {
