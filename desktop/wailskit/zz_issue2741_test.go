@@ -49,8 +49,9 @@ func issue2741CurrentSessionID(b *ChatBridge) string {
 }
 
 func TestIssue2741_LoadSessionRefusesWhenRunStartsDuringIO(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	// #5750: family fixture - late-writer-tolerant HOME teardown instead of
+	// t.TempDir's single RemoveAll shot (CI-single-shot race, see #5483).
+	tmp := issue5750TempHome(t)
 	dir := filepath.Join(tmp, ".ggcode", "sessions")
 	issue2741WriteSession(t, dir, "sess2741a", "Session A")
 	issue2741WriteSession(t, dir, "sess2741b", "Session B")
@@ -128,8 +129,10 @@ func TestIssue2741_LoadSessionRefusesWhenRunStartsDuringIO(t *testing.T) {
 }
 
 func TestIssue2741_LoadSessionBumpsGenerationOnInstall(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	// #5750: the CI-single-shot TempDir teardown race hit exactly this test
+	// (run 43854925211 attempt 1) - grace-window teardown instead of
+	// per-instance re-triage; see zz_issue5750_test.go.
+	tmp := issue5750TempHome(t)
 	dir := filepath.Join(tmp, ".ggcode", "sessions")
 	issue2741WriteSession(t, dir, "sess2741c", "Session C")
 
