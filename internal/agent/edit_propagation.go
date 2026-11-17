@@ -66,6 +66,10 @@ func (s *editPropagationState) recordGreenBuild() {
 		debug.Log("agent", "edit propagation reset: %d distinct files cleared on green build", n)
 	}
 	s.distinctFiles = make(map[string]bool)
+	// #5758: warning budget follows the green-build window boundary, matching the
+	// window semantics of distinctFiles; otherwise the detector stays silent for
+	// every risk window after the first within a turn.
+	s.warningsIssued = 0
 }
 
 func (s *editPropagationState) maybeWarn(iteration int) string {
