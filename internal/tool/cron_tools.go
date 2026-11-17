@@ -182,25 +182,32 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	out, _ := json.Marshal(job)
-	suffix := ""
+	// #5748 leading-JSON contract: the human-facing one-shot notes ride as a
+	// "note" field inside the job JSON instead of a raw text suffix - the
+	// suffix-append shape broke 4 whole-content Unmarshal callers in the
+	// #5745 cycle before the #5746 rework.
+	note := ""
 	if !recurring {
-		suffix = "\n(one-shot: fires once and is removed automatically; not persisted across restarts)"
+		note = "(one-shot: fires once and is removed automatically; not persisted across restarts)"
 		// #5743 ask 1: echo the computed next fire (local time plus delta
 		// vs now) on every one-shot create so an intent mismatch is
 		// visible at build time instead of surfacing a day late as a
 		// silently missed fire.
 		if !job.NextFire.IsZero() {
-			suffix += fmt.Sprintf("\nnext fire: %s (%s from now)", job.NextFire.Format("2006-01-02 15:04"), humanDelta(time.Until(job.NextFire)))
+			note += fmt.Sprintf("\nnext fire: %s (%s from now)", job.NextFire.Format("2006-01-02 15:04"), humanDelta(time.Until(job.NextFire)))
 		}
 		if rolloverAck {
-			suffix += fmt.Sprintf("\nWARNING: same-day overshoot accepted via tomorrow=true - target time %s already passed today, so the fire rolls to tomorrow %s. Verify the next-day fire is intended before relying on it.", rolloverTarget.Format("15:04"), job.NextFire.Format("2006-01-02 15:04"))
+			note += fmt.Sprintf("\nWARNING: same-day overshoot accepted via tomorrow=true - target time %s already passed today, so the fire rolls to tomorrow %s. Verify the next-day fire is intended before relying on it.", rolloverTarget.Format("15:04"), job.NextFire.Format("2006-01-02 15:04"))
 		}
 		if farFutureDays > 0 {
-			suffix += fmt.Sprintf("\nWARNING: far-future one-shot accepted via far=true - next fire is %d days away. Far-future one-shots are usually cron field slips (minute hour day-of-month month day-of-week); verify the expression before relying on it.", farFutureDays)
+			note += fmt.Sprintf("\nWARNING: far-future one-shot accepted via far=true - next fire is %d days away. Far-future one-shots are usually cron field slips (minute hour day-of-month month day-of-week); verify the expression before relying on it.", farFutureDays)
 		}
 	}
-	return Result{Content: string(out) + suffix + "\n"}, nil
+	content, err := jsonContentWithNote(job, note)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("cron_create: %v", err)}, nil
+	}
+	return Result{Content: content}, nil
 }
 
 // #5743 oneShotDayRollover detects the same-day overshoot: a time-only

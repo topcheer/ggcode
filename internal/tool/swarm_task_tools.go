@@ -122,8 +122,13 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 		})
 		if err != nil {
 
-			out, _ := json.Marshal(created)
-			return Result{Content: string(out) + fmt.Sprintf("\nWarning: could not deliver to %q: %v (task stays on board for polling)\n", args.Assignee, err)}, nil
+			// #5748: delivery warning rides as a "note" field, not a raw
+			// suffix after the task JSON.
+			content, cErr := jsonContentWithNote(created, fmt.Sprintf("Warning: could not deliver to %q: %v (task stays on board for polling)", args.Assignee, err))
+			if cErr != nil {
+				return Result{IsError: true, Content: fmt.Sprintf("swarm_task_create: %v", cErr)}, nil
+			}
+			return Result{Content: content}, nil
 		}
 	}
 
@@ -131,8 +136,13 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 		t.Manager.NotifyIdleRunners(args.TeamID)
 	}
 	if unmet := unmetDependencies(tm, created.ID); len(unmet) > 0 {
-		out, _ := json.Marshal(created)
-		return Result{Content: string(out) + fmt.Sprintf("\nNote: task is blocked by uncompleted dependencies %v; it stays on the board and cannot be claimed or delivered until they complete.\n", unmet)}, nil
+		// #5748: blocked-state note rides as a "note" field, not a raw
+		// suffix after the task JSON.
+		content, cErr := jsonContentWithNote(created, fmt.Sprintf("Note: task is blocked by uncompleted dependencies %v; it stays on the board and cannot be claimed or delivered until they complete.", unmet))
+		if cErr != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("swarm_task_create: %v", cErr)}, nil
+		}
+		return Result{Content: content}, nil
 	}
 
 	out, _ := json.Marshal(created)

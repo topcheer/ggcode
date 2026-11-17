@@ -535,6 +535,15 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	})
 	toolDur := time.Since(toolStart)
 
+	// #5748 leading-JSON contract: tool-produced Content that leads with a
+	// JSON value must remain exactly that value plus whitespace (downstream
+	// consumers Unmarshal it whole or by first line). Surface raw-suffix
+	// appends loudly at the seam instead of letting them silently break
+	// parsers; enforcement tests live in internal/tool (zz_issue5748_test.go).
+	if viol := tool.LeadingJSONViolation(result.Content); viol != "" {
+		debug.Log("agent", "[content-contract] WARN %s on %s: %s", viol, t.Name(), truncateString(result.Content, 120))
+	}
+
 	result = a.annotateMutatingOutcome(t.Name(), tc.Arguments, result, prevMutAmbiguous)
 
 	if shellPre != nil && !result.IsError {
