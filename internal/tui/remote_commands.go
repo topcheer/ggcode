@@ -25,6 +25,10 @@ const (
 	// continuously active turns. Without it, autonomous/cron loops starve the
 	// restart forever while the arm announcement already claimed success.
 	restartArmHardCap = 5 * time.Minute
+
+	// restartDeferWarnEvery throttles the #5753 defer-visibility warning so a
+	// continuously active turn doesn't spam a restart-defer line every 30s.
+	restartDeferWarnEvery = 2 * time.Minute
 )
 
 type armRestartMsg struct {

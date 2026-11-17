@@ -42,6 +42,14 @@ func (m *Model) handleRestartFallbackMsg(msg restartFallbackMsg) (Model, tea.Cmd
 			m.chatWriteSystem("restart-warn", fmt.Sprintf("Restart armed %s ago never went idle (turn kept running); firing hard cap now. In-flight turn work may be interrupted.", restartArmHardCap))
 			return *m, firePendingRestartCmd()
 		}
+		// #5753: the defer-rearm loop was silent (debug-only), so an armed
+		// restart behind an active turn looked like "OK: restart armed"
+		// while the exec never fired. Make the deferral visible, throttled.
+		if m.restartDeferWarnAt.IsZero() || time.Since(m.restartDeferWarnAt) >= restartDeferWarnEvery {
+			m.restartDeferWarnAt = time.Now()
+			waited := time.Since(m.restartArmedAt).Round(time.Second)
+			m.chatWriteSystem("restart-defer", fmt.Sprintf("Restart armed %s ago is waiting for the active turn to go idle; exec deferred (fires at turn end, hard cap %s).", waited, restartArmHardCap))
+		}
 		debug.Log("restart", "restart fallback fired but turn is active; re-arming")
 		return *m, armRestartFallbackCmd()
 	}
