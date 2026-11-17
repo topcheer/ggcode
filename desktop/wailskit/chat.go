@@ -1359,6 +1359,13 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		}
 	}
 
+	// #5750: InitAgent rebinds a fresh scheduler per (re)init; without
+	// draining the previous one here, every rebind leaks that scheduler's
+	// patrol goroutine and armed timers - the async-component-outlives-
+	// cleanup shape behind the #5483/#5750 teardown family.
+	if prev := b.cronScheduler; prev != nil {
+		prev.Shutdown()
+	}
 	b.cronScheduler = agentruntime.NewSessionCronScheduler("", b.workingDir, func(prompt string, queueIfBusy bool) {
 		if !queueIfBusy && b.IsWorking() {
 			log.Printf("[cron] skipping prompt (agent busy, queue_if_busy=false): %s", prompt)
@@ -3555,6 +3562,7 @@ func (b *ChatBridge) Close() {
 	subAgents := b.subAgentMgr
 	swarms := b.swarmMgr
 	intentionEngine := b.intentionEngine
+	cronSched := b.cronScheduler
 	b.mu.Unlock()
 	if subAgents != nil {
 		subAgents.CancelAll()
@@ -3566,6 +3574,13 @@ func (b *ChatBridge) Close() {
 	// the deferred Stop in cmd/ggcode root/daemon wiring).
 	if intentionEngine != nil {
 		intentionEngine.Stop()
+	}
+	// #5750 (family #5483): drain the session cron scheduler - its patrol
+	// goroutine and any armed one-shot timers otherwise outlive Close and
+	// can fire prompts into (and write under $HOME/.ggcode from) a bridge
+	// the caller believes is gone. Mirrors the #5260 engine lifecycle.
+	if cronSched != nil {
+		cronSched.Shutdown()
 	}
 
 	b.cleanupEphemeralSession()
