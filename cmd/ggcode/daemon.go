@@ -159,9 +159,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// #5367: post-exec self-check, daemon side. If this process was started
 	// by a restart exec, verify the running image matches the recorded intent
 	// and report the actually-running revision (loud banner on mismatch).
-	if notice, _ := restart.StartupVerifyNotice(); notice != "" {
+	if notice, matched := restart.StartupVerifyNotice(); notice != "" {
 		fmt.Fprintln(os.Stderr, notice)
+		restart.NoteStartupIntent(matched)
 		restart.ConsumeIntent()
+	} else if stale, _ := restart.StaleArmStartupNotice(time.Now()); stale != "" {
+		// #5753: an armed restart whose exec never landed (this process
+		// started without the restart intent) - alarm instead of silence.
+		fmt.Fprintln(os.Stderr, stale)
 	}
 
 	prov, resolved, err := ResolveProvider(cfg)

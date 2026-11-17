@@ -530,9 +530,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	// #5367: post-exec self-check. If this process was started by a restart
 	// exec, verify the running image matches the recorded intent and surface
 	// the actually-running revision (loud banner on mismatch).
-	if notice, _ := restart.StartupVerifyNotice(); notice != "" {
+	if notice, matched := restart.StartupVerifyNotice(); notice != "" {
 		startupNotices = append(startupNotices, notice)
+		restart.NoteStartupIntent(matched)
 		restart.ConsumeIntent()
+	} else if stale, _ := restart.StaleArmStartupNotice(time.Now()); stale != "" {
+		// #5753: an armed restart whose exec never landed, and this process
+		// started without the restart intent - say so at startup instead of
+		// letting the stale arm masquerade as a completed rollout.
+		startupNotices = append(startupNotices, stale)
 	}
 	autoFiles := startupAssets.AutoFiles
 	commandMgr := startupAssets.CommandManager

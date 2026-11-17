@@ -1032,7 +1032,17 @@ func (rr *replRestartRequester) RequestRestart(reason string, debugMode bool) {
 	}
 
 	go safego.Run("tui.restart.arm", func() {
-		rr.repl.sendProgramMsgs(armRestartMsg{debug: debugMode, reason: reason})
+		// #5753: the arm receipt was already delivered as OK. Dropping the
+		// arm message here (no live program to receive it) used to leave
+		// ZERO footprint - the process kept serving the old image while the
+		// resume nudge still fired and presented as a successful restart.
+		// Record the delivery failure so the nudge-time handshake alarms
+		// ARMED-BUT-NOT-EXECUTED instead of staying silent.
+		if !rr.repl.trySendProgramMsg(armRestartMsg{debug: debugMode, reason: reason}) {
+			derr := fmt.Errorf("armRestartMsg undeliverable: no live TUI program (program and programSend are both nil); the armed restart will NOT fire")
+			debug.Log("restart", "ARM DELIVERY FAILED (#5753): %v", derr)
+			restart.RecordExecFailure("arm-delivery", derr)
+		}
 	})
 }
 
@@ -1138,16 +1148,24 @@ func (r *REPL) sendProgramMsgs(msgs ...tea.Msg) {
 	if len(msgs) == 0 {
 		return
 	}
+	for _, msg := range msgs {
+		r.trySendProgramMsg(msg)
+	}
+}
+
+// trySendProgramMsg delivers msg to the bubbletea program and reports whether
+// a live program received it. #5753: a silent drop here disarmed the restart
+// arm while its OK receipt was already out, with zero exec footprint.
+func (r *REPL) trySendProgramMsg(msg tea.Msg) bool {
 	send := r.programSend
 	if send == nil {
 		if r.program == nil {
-			return
+			return false
 		}
 		send = r.program.Send
 	}
-	for _, msg := range msgs {
-		send(msg)
-	}
+	send(msg)
+	return true
 }
 
 type replModeSwitcher struct {
@@ -1872,12 +1890,16 @@ func (r *REPL) execRestart() error {
 	if r.model.updatePrepared != nil && r.model.updateSvc != nil {
 		debug.Log("restart", "applying binary update")
 		if err := r.model.updateSvc.ApplyBinary(*r.model.updatePrepared); err != nil {
+			// #5753: this process stays alive serving the old image; the
+			// failed exec attempt must be visible to the handshake.
+			restart.RecordExecFailure("apply-binary", err)
 			return fmt.Errorf("restart: apply binary: %w", err)
 		}
 	}
 
 	binary, err := restart.ResolveBinary()
 	if err != nil {
+		restart.RecordExecFailure("resolve-binary", err)
 		return fmt.Errorf("restart: resolve binary: %w", err)
 	}
 

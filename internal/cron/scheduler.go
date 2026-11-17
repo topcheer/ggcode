@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/restart"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 	runtimedebug "runtime/debug"
@@ -480,6 +481,10 @@ func (s *Scheduler) CreateOneShotAt(fireAt time.Time, prompt string, queueIfBusy
 	}
 	s.jobs[id] = job
 	s.knownIDs[id] = true
+	// Snapshot under the lock: scheduleJob (below) arms a timer whose fire
+	// path mutates job fields concurrently — a post-unlock Snapshot() read
+	// raced it (surfaced by the #5753 nudge test under -race).
+	snap := job.Snapshot()
 	s.mu.Unlock()
 
 	s.scheduleJob(job)
@@ -496,7 +501,7 @@ func (s *Scheduler) CreateOneShotAt(fireAt time.Time, prompt string, queueIfBusy
 	}
 
 	debug.Log("cron", "CreateOneShotAt: added durable one-shot %s (fires %s)", id, fireAt.Format(time.RFC3339))
-	return job.Snapshot(), nil
+	return snap, nil
 }
 
 // restartResumeNudgeID is the stable ID the restart tool arms its durable
@@ -549,6 +554,7 @@ func (s *Scheduler) CreateOneShotWithID(id string, fireAt time.Time, prompt stri
 		s.jobs[id] = job
 		s.knownIDs[id] = true
 	}
+	snap := job.Snapshot() // under lock; see CreateOneShotAt
 	s.mu.Unlock()
 
 	s.scheduleJob(job)
@@ -571,7 +577,7 @@ func (s *Scheduler) CreateOneShotWithID(id string, fireAt time.Time, prompt stri
 	} else {
 		debug.Log("cron", "CreateOneShotWithID: added durable one-shot %s (fires %s)", id, fireAt.Format(time.RFC3339))
 	}
-	return job.Snapshot(), nil
+	return snap, nil
 }
 
 // CreateAcknowledgedFar behaves like Create but lets the caller explicitly
@@ -614,6 +620,7 @@ func (s *Scheduler) CreateAcknowledgedFar(cronExpr, prompt string, recurring, qu
 	}
 	s.jobs[id] = job
 	s.knownIDs[id] = true
+	snap := job.Snapshot() // under lock; see CreateOneShotAt
 	s.mu.Unlock()
 
 	s.scheduleJob(job)
@@ -630,7 +637,7 @@ func (s *Scheduler) CreateAcknowledgedFar(cronExpr, prompt string, recurring, qu
 	}
 
 	debug.Log("cron", "Create: added job %s (expr=%s recurring=%t)", id, cronExpr, recurring)
-	return job.Snapshot(), nil
+	return snap, nil
 }
 
 func (s *Scheduler) Delete(id string) bool {
@@ -941,6 +948,19 @@ func (s *Scheduler) fireJob(job *Job, gen uint64) {
 	job.LastFire = now
 	job.FireCount++
 	s.mu.Unlock()
+
+	// #5753: the restart resume nudge is the handshake's delivery moment.
+	// It fires in whatever process is alive 10-30s after the arm: in the new
+	// image the outcome check confirms the swap; in the OLD image (exec
+	// silently never happened) it must carry a loud ARMED-BUT-NOT-EXECUTED
+	// alarm instead of presenting as a successful restart-plus-resume.
+	// Evaluated lock-free (disk read) but before enqueue so the notice leads
+	// the delivered prompt. job.ID is immutable per job object.
+	if job.ID == RestartResumeNudgeID {
+		if note, _ := restart.ArmOutcomeNotice(now); note != "" {
+			prompt = note + "\n" + prompt
+		}
+	}
 
 	s.enqueue(prompt, queueIfBusy)
 
