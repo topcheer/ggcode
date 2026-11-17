@@ -154,15 +154,56 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	out, _ := json.Marshal(job)
-	suffix := ""
+	// #5743: the create result must surface the computed next-fire time so a
+	// mismatch between intent ("later today") and reality (+24h roll) is
+	// visible at build time instead of surfacing as a silent day-long delay.
+	return Result{Content: cronCreateSuffix(job, recurring, farFutureDays) + "\n"}, nil
+}
+
+// cronCreateSuffix assembles the informational content appended to the
+// cron_create result: the JSON job payload with the #5743 next-fire echo
+// field, then the one-shot note and far-future warning (#5353). The JSON
+// payload stays parseable on its own (callers json.Unmarshal the Content),
+// so all human-readable additions ride inside the payload or after it.
+func cronCreateSuffix(job cron.Job, recurring bool, farFutureDays int) string {
+	// #5743: echo the computed next-fire time as a payload field so a
+	// mismatch between intent ("later today") and reality (+24h roll) is
+	// visible at build time; warn on same-day overshoot (the #5594 past-date
+	// rejection only covers explicit day+month forms, so wildcard slips like
+	// "40 22 * * *" made at 22:52 slipped silently).
+	echo := map[string]any(nil)
+	if !job.NextFire.IsZero() {
+		echo = map[string]any{
+			"nextFire":     job.NextFire.Format("2006-01-02 15:04"),
+			"nextFireRfc":  job.NextFire.Format(time.RFC3339),
+			"sameDayDelay": sameDayBeyondTwelveHours(job.NextFire, time.Now()),
+		}
+	}
+	payload, _ := json.Marshal(struct {
+		cron.Job
+		Echo map[string]any `json:"nextFireEcho,omitempty"`
+	}{job, echo})
+	suffix := string(payload)
 	if !recurring {
-		suffix = "\n(one-shot: fires once and is removed automatically; not persisted across restarts)"
+		suffix += "\n(one-shot: fires once and is removed automatically; not persisted across restarts)"
 		if farFutureDays > 0 {
 			suffix += fmt.Sprintf("\nWARNING: far-future one-shot accepted via far=true - next fire is %d days away. Far-future one-shots are usually cron field slips (minute hour day-of-month month day-of-week); verify the expression before relying on it.", farFutureDays)
 		}
 	}
-	return Result{Content: string(out) + suffix + "\n"}, nil
+	if sameDayBeyondTwelveHours(job.NextFire, time.Now()) {
+		suffix += fmt.Sprintf("\nWARNING: next fire (%s) is over 12h from now - if you meant \"later today\", the target moment has already passed and this fires tomorrow instead. Verify the minute/hour fields.", job.NextFire.Format("15:04"))
+	}
+	return suffix
+}
+
+// sameDayBeyondTwelveHours reports whether next lands later on the same
+// calendar day as now, more than 12 hours out - the #5743 same-day overshoot
+// signature (a one-shot target moment that already passed rolls +24h).
+func sameDayBeyondTwelveHours(next, now time.Time) bool {
+	if next.Before(now.Add(12 * time.Hour)) {
+		return false
+	}
+	return next.Year() == now.Year() && next.Month() == now.Month() && next.Day() == now.Day() && next.After(now)
 }
 
 const oneShotFarFutureDays = 90
