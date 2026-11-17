@@ -163,6 +163,15 @@ func (a *Agent) annotateMutatingOutcome(toolName string, args []byte, result too
 	if result.IsError {
 		switch cls := classifyMutatingFailure(toolName, result.Content); cls {
 		case outcomeAmbiguous:
+			// #5744: a timed-out run_command whose command line static
+			// analysis proves read-only can never have applied a side
+			// effect, so the UNKNOWN reconciliation ritual is needless:
+			// say safe-to-re-run and keep the ledger clean.
+			if toolName == "run_command" && runCommandArgsProvenReadOnly(args) {
+				a.appendGuidance(&result, nonAtomicReadOnlyTimeoutNote())
+				debug.Log("agent", "non-atomic: run_command timed out; static write-surface analysis classifies it READ-ONLY (safe to re-run)")
+				return result
+			}
 			a.mutateLedger.recordAmbiguous(toolName, args)
 			a.appendGuidance(&result, nonAtomicAmbiguousNote(toolName, prevAmbiguous+1))
 			debug.Log("agent", "non-atomic: %s ended AMBIGUOUS (attempt %d this run), ledger updated", toolName, prevAmbiguous+1)
@@ -190,6 +199,10 @@ func (a *Agent) annotateMutatingOutcome(toolName string, args []byte, result too
 func nonAtomicAmbiguousNote(toolName string, attempt int) string {
 	return fmt.Sprintf("%s The %s call was interrupted mid-execution (attempt %d this run). Its side effects are UNKNOWN -- it may have partially or fully applied. Do NOT blindly re-issue the same call: first verify actual state (git log/status for commits, read the files for edits), then reconcile only what is missing. (Research: arXiv:2608.02645, non-atomic tool failures)",
 		nonAtomicResultTag, toolName, attempt)
+}
+
+func nonAtomicReadOnlyTimeoutNote() string {
+	return "[non-atomic] The run_command call timed out, but static write-surface analysis classified the command as READ-ONLY (allowlisted read programs only, no file-writing redirection, no state-changing subcommands). It is safe to re-run the same command directly -- a re-run cannot double-apply anything and no state reconciliation is needed."
 }
 
 func nonAtomicDoubleApplyNote(toolName string, attempts int) string {
