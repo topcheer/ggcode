@@ -33,6 +33,9 @@ func TestIssue4506_ZeroClearsPersistedLimit(t *testing.T) {
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("save: %v", err)
 	}
+	// Since #5779 the main file never carries the external sections: the
+	// endpoint data lives in vendors.yaml, so the regression assertions
+	// target the persisted vendor data there.
 	out, err := os.ReadFile(cfgPath)
 	if err != nil {
 		t.Fatalf("reread: %v", err)
@@ -40,9 +43,19 @@ func TestIssue4506_ZeroClearsPersistedLimit(t *testing.T) {
 	if strings.Contains(string(out), "context_window") {
 		t.Fatalf("#4506 regression: context_window survived a 0 clear:\n%s", out)
 	}
+	if strings.Contains(string(out), "vendors") {
+		t.Fatalf("#5779 regression: vendors section still in main config:\n%s", out)
+	}
 
-	if !strings.Contains(string(out), "protocol: openai") {
-		t.Fatalf("protocol was collateral damage:\n%s", out)
+	vendorsOut, err := os.ReadFile(filepath.Join(dir, "vendors.yaml"))
+	if err != nil {
+		t.Fatalf("reread vendors.yaml: %v", err)
+	}
+	if strings.Contains(string(vendorsOut), "context_window") {
+		t.Fatalf("#4506 regression: context_window survived a 0 clear in vendors.yaml:\n%s", vendorsOut)
+	}
+	if !strings.Contains(string(vendorsOut), "protocol: openai") {
+		t.Fatalf("protocol was collateral damage in vendors.yaml:\n%s", vendorsOut)
 	}
 }
 

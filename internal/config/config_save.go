@@ -83,6 +83,17 @@ func (c *Config) Save() error {
 		existingRaw := map[string]interface{}{}
 		if yamlErr := yaml.Unmarshal(existingData, &existingRaw); yamlErr == nil {
 			deepMergeYAMLMaps(existingRaw, currentRaw)
+			// #5779: vendors/im/mcp_servers live in their own external files.
+			// A stale section left in the main file (failed external migration,
+			// restored backup, hand edit, downgrade write-back) has no
+			// self-heal path: Load prefers main-file values over the external
+			// files and the merge above never removes dst-only keys, so the
+			// residue was rewritten verbatim on every Save. Drop the sections
+			// so each Save converges the main file back to the external-file
+			// layout.
+			delete(existingRaw, "vendors")
+			delete(existingRaw, "im")
+			delete(existingRaw, "mcp_servers")
 
 			applyClearedTombstones(existingRaw, c.diskStrSnap, clearedInMemory)
 
@@ -163,6 +174,19 @@ func deepMergeYAMLMaps(dst, src map[string]interface{}) {
 	}
 }
 
+// tombstonePathSep encodes multi-segment YAML paths as flat map keys for
+// the disk string snapshot. It must never occur inside a real key segment:
+// YAML mapping keys cannot contain NUL bytes, so unlike "." - which endpoint
+// names such as "github.com" legitimately contain - it cannot shatter a
+// path (#5779).
+const tombstonePathSep = "\x00"
+
+func tombstoneKey(parts []string) string {
+	return strings.Join(parts, tombstonePathSep)
+}
+
+// snapshotDiskStringKeys records the non-empty string leaves of the on-disk
+// main config, keyed by tombstoneKey-encoded path segments.
 func snapshotDiskStringKeys(m map[string]interface{}) map[string]string {
 	out := map[string]string{}
 	var walk func(prefix []string, cur map[string]interface{})
@@ -171,8 +195,7 @@ func snapshotDiskStringKeys(m map[string]interface{}) map[string]string {
 			switch val := v.(type) {
 			case string:
 				if val != "" {
-					path := strings.Join(append(append([]string{}, prefix...), k), ".")
-					out[path] = val
+					out[tombstoneKey(append(append([]string{}, prefix...), k))] = val
 				}
 			case map[string]interface{}:
 				walk(append(append([]string{}, prefix...), k), val)
@@ -183,42 +206,47 @@ func snapshotDiskStringKeys(m map[string]interface{}) map[string]string {
 	return out
 }
 
-func endpointZeroClearPaths(c *Config) map[string]bool {
-	out := map[string]bool{}
+// endpointZeroClearPaths returns the paths of endpoint fields that are 0
+// in memory and therefore must be cleared from the on-disk main config
+// (#4506: "A value of 0 means 'unset' and will clear the field"). Paths are
+// segment lists, not dot-joined strings: endpoint names may contain dots
+// (e.g. "github.com") and a dot-joined path cannot be split back
+// unambiguously (#5779).
+func endpointZeroClearPaths(c *Config) [][]string {
+	out := [][]string{}
 	if c == nil {
 		return out
 	}
 	for vName, vc := range c.Vendors {
 		for eName, ep := range vc.Endpoints {
 			if ep.ContextWindow == 0 {
-				out["vendors."+vName+".endpoints."+eName+".context_window"] = true
+				out = append(out, []string{"vendors", vName, "endpoints", eName, "context_window"})
 			}
 			if ep.MaxTokens == 0 {
-				out["vendors."+vName+".endpoints."+eName+".max_tokens"] = true
+				out = append(out, []string{"vendors", vName, "endpoints", eName, "max_tokens"})
 			}
 		}
 	}
 	return out
 }
 
-func applyZeroNumberClears(existingRaw map[string]interface{}, zeros map[string]bool) {
-	for path := range zeros {
-		if _, exists := yamlPathLookup(existingRaw, path); exists {
-			yamlPathDelete(existingRaw, strings.Split(path, "."))
+func applyZeroNumberClears(existingRaw map[string]interface{}, zeros [][]string) {
+	for _, segs := range zeros {
+		if _, exists := yamlPathLookup(existingRaw, segs); exists {
+			yamlPathDelete(existingRaw, segs)
 		}
 	}
 }
 
-func collectEmptyStringPaths(m map[string]interface{}) map[string]bool {
-	out := map[string]bool{}
+func collectEmptyStringPaths(m map[string]interface{}) [][]string {
+	out := [][]string{}
 	var walk func(prefix []string, cur map[string]interface{})
 	walk = func(prefix []string, cur map[string]interface{}) {
 		for k, v := range cur {
 			switch val := v.(type) {
 			case string:
 				if val == "" {
-					path := strings.Join(append(append([]string{}, prefix...), k), ".")
-					out[path] = true
+					out = append(out, append(append([]string{}, prefix...), k))
 				}
 			case map[string]interface{}:
 				walk(append(append([]string{}, prefix...), k), val)
@@ -229,16 +257,16 @@ func collectEmptyStringPaths(m map[string]interface{}) map[string]bool {
 	return out
 }
 
-func applyClearedTombstones(existingRaw map[string]interface{}, snap map[string]string, cleared map[string]bool) {
+func applyClearedTombstones(existingRaw map[string]interface{}, snap map[string]string, cleared [][]string) {
 	if len(snap) == 0 || len(cleared) == 0 {
 		return
 	}
-	for path := range cleared {
-		loadedVal, wasOnDisk := snap[path]
+	for _, segs := range cleared {
+		loadedVal, wasOnDisk := snap[tombstoneKey(segs)]
 		if !wasOnDisk || strings.Contains(loadedVal, "${") {
 			continue
 		}
-		curVal, exists := yamlPathLookup(existingRaw, path)
+		curVal, exists := yamlPathLookup(existingRaw, segs)
 		if !exists {
 			continue
 		}
@@ -246,12 +274,15 @@ func applyClearedTombstones(existingRaw map[string]interface{}, snap map[string]
 		if !isStr || curStr != loadedVal {
 			continue
 		}
-		yamlPathDelete(existingRaw, strings.Split(path, "."))
+		yamlPathDelete(existingRaw, segs)
 	}
 }
 
-func yamlPathLookup(m map[string]interface{}, path string) (interface{}, bool) {
-	parts := strings.Split(path, ".")
+// yamlPathLookup walks m along the given path segments. Segments must
+// come from structured knowledge of the map layout, never from splitting a
+// joined string on ".": mapping keys such as endpoint names may themselves
+// contain dots (#5779).
+func yamlPathLookup(m map[string]interface{}, parts []string) (interface{}, bool) {
 	var cur interface{} = m
 	for _, p := range parts {
 		cm, ok := cur.(map[string]interface{})
