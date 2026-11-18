@@ -70,10 +70,14 @@ func TestIssue5753ArmRecordRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("LoadArmRecord after write: not found")
 	}
-	// Compare field-wise: ArmedAt loses its monotonic reading across JSON.
+	// Compare field-wise: time.Time fields lose monotonic readings across
+	// JSON while remaining Equal; normalize every time field on both sides
+	// so only wall-clock content is compared (zero ExecFailedAt included).
 	loaded.ArmedAt = loaded.ArmedAt.Round(0)
+	loaded.ExecFailedAt = loaded.ExecFailedAt.Round(0)
 	want := rec
 	want.ArmedAt = want.ArmedAt.Round(0)
+	want.ExecFailedAt = want.ExecFailedAt.Round(0)
 	if loaded != want {
 		t.Errorf("round-trip mismatch: %+v vs %+v", loaded, want)
 	}
