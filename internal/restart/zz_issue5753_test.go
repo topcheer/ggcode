@@ -70,12 +70,31 @@ func TestIssue5753ArmRecordRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("LoadArmRecord after write: not found")
 	}
-	// Compare field-wise: ArmedAt loses its monotonic reading across JSON.
+	// Compare field-wise: time.Time fields lose monotonic readings across
+	// JSON while remaining Equal; normalize every time field on both sides
+	// so only wall-clock content is compared (zero ExecFailedAt included).
 	loaded.ArmedAt = loaded.ArmedAt.Round(0)
+	loaded.ExecFailedAt = loaded.ExecFailedAt.Round(0)
 	want := rec
 	want.ArmedAt = want.ArmedAt.Round(0)
-	if loaded != want {
-		t.Errorf("round-trip mismatch: %+v vs %+v", loaded, want)
+	want.ExecFailedAt = want.ExecFailedAt.Round(0)
+	// Compare explicitly: struct != compares time.Time bitwise, and the
+	// internal *Location differs between a fresh time.Now() (Local) and a
+	// JSON-unmarshaled instant (UTC) even when the instants are identical.
+	// That makes != fail whenever Local is not the UTC location (CI runners
+	// with TZ set) while passing on UTC-default hosts. Compare instants via
+	// .Equal and primitives via ==.
+	if !loaded.ArmedAt.Equal(want.ArmedAt) {
+		t.Errorf("ArmedAt: got %v want %v", loaded.ArmedAt, want.ArmedAt)
+	}
+	if !loaded.ExecFailedAt.Equal(want.ExecFailedAt) {
+		t.Errorf("ExecFailedAt: got %v want %v", loaded.ExecFailedAt, want.ExecFailedAt)
+	}
+	if loaded.TargetPath != want.TargetPath || loaded.Revision != want.Revision ||
+		loaded.SHA256 != want.SHA256 || loaded.Size != want.Size ||
+		loaded.PID != want.PID || loaded.Reason != want.Reason ||
+		loaded.ExecStage != want.ExecStage || loaded.ExecError != want.ExecError {
+		t.Errorf("round-trip mismatch: got %+v want %+v", loaded, want)
 	}
 
 	ClearArmRecord("test")
