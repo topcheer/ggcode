@@ -106,9 +106,13 @@ func scanPrematureAbstraction(text string) []prematureAbstrHit {
 			// producing invalid UTF-8. Expand to rune boundaries first.
 			excerptStart = runeBoundaryFloor(text, excerptStart)
 			excerptEnd = runeBoundaryCeil(text, excerptEnd)
-			excerpt := truncateRunesSafe(strings.TrimSpace(text[excerptStart:excerptEnd]), 80)
-			if len([]rune(excerpt)) >= 80 {
-				excerpt = excerpt[:80] + "..."
+			// #5776 residual: the second cut excerpt[:80]+"..." was still a
+			// byte slice (a rune-safe 80-CJK-rune excerpt is ~240 bytes, so
+			// excerpt[:80] cut mid-rune again). Keep the whole chain rune-safe.
+			trimmed := strings.TrimSpace(text[excerptStart:excerptEnd])
+			excerpt := trimmed
+			if len([]rune(trimmed)) > 80 {
+				excerpt = truncateRunesSafe(trimmed, 77) + "..."
 			}
 
 			key := ap.category + ":" + excerpt
