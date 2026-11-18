@@ -68,6 +68,9 @@ type MemoryCurator struct {
 	timeout    time.Duration
 	maxActions int // per-pass cap; batches loop until settled
 
+	// #5764: sweep and loop goroutines both run curateBatchLoop, so the
+	// breaker fields are cross-goroutine state — every access holds breakerMu.
+	breakerMu    sync.Mutex
 	failStreak   int       // consecutive failed passes
 	breakerUntil time.Time // loop/sweep quiesce until this instant when tripped
 	disableSweep bool      // tests: skip the startup sweep goroutine
@@ -161,6 +164,36 @@ func (c *MemoryCurator) Stop() {
 	debug.Log("memory", "curator stopped")
 }
 
+// breakerWait reports how long the circuit breaker remains open (0 when
+// closed). #5764: called from both the loop and sweep goroutines.
+func (c *MemoryCurator) breakerWait() time.Duration {
+	c.breakerMu.Lock()
+	defer c.breakerMu.Unlock()
+	if d := time.Until(c.breakerUntil); d > 0 {
+		return d
+	}
+	return 0
+}
+
+// noteFailedPass increments the failure streak under breakerMu and opens the
+// breaker once the threshold is hit; returns (tripped, streak).
+func (c *MemoryCurator) noteFailedPass() (bool, int) {
+	c.breakerMu.Lock()
+	defer c.breakerMu.Unlock()
+	c.failStreak++
+	if c.failStreak >= memoryCuratorBreakerAfter {
+		c.breakerUntil = time.Now().Add(memoryCuratorBreakerCooloff)
+		return true, c.failStreak
+	}
+	return false, c.failStreak
+}
+
+func (c *MemoryCurator) resetFailStreak() {
+	c.breakerMu.Lock()
+	defer c.breakerMu.Unlock()
+	c.failStreak = 0
+}
+
 // loop aggregates events into batches: every event (re)arms the debounce
 // timer; when the window expires with no new events, the accumulated batch
 // is curated in one headless pass. Events sourced from the curator itself
@@ -210,9 +243,9 @@ func (c *MemoryCurator) loop(ctx context.Context, stopCh <-chan struct{}) {
 			if len(pending) == 0 {
 				continue
 			}
-			if until := time.Now(); until.Before(c.breakerUntil) {
+			if d := c.breakerWait(); d > 0 {
 				// breaker open: hold the batch until the cooloff expires
-				if !sleepUntilCtx(ctx, stopCh, c.breakerUntil.Sub(until)) {
+				if !sleepUntilCtx(ctx, stopCh, d) {
 					return
 				}
 			}
@@ -265,15 +298,14 @@ func (c *MemoryCurator) curateBatchLoop(ctx context.Context, batch []memory.Chan
 		applied, remaining, failed := c.curatePass(ctx, pending)
 		totalApplied += applied
 		if failed {
-			c.failStreak++
-			if c.failStreak >= memoryCuratorBreakerAfter {
-				c.breakerUntil = time.Now().Add(memoryCuratorBreakerCooloff)
-				debug.Log("memory", "curator breaker OPEN for %s after %d consecutive failures", memoryCuratorBreakerCooloff, c.failStreak)
+			tripped, streak := c.noteFailedPass()
+			if tripped {
+				debug.Log("memory", "curator breaker OPEN for %s after %d consecutive failures", memoryCuratorBreakerCooloff, streak)
 			}
 			debug.Log("memory", "curator pass failed, %d key(s) deferred: %v", len(pending), "see above")
 			return
 		}
-		c.failStreak = 0
+		c.resetFailStreak()
 		if applied == 0 {
 			// LLM chose to act on nothing: respect the judgement, defer
 			// the rest rather than re-asking forever.
@@ -507,8 +539,8 @@ func (c *MemoryCurator) startupSweep(ctx context.Context, stopCh <-chan struct{}
 			return
 		default:
 		}
-		if until := time.Now(); until.Before(c.breakerUntil) {
-			if !sleepUntilCtx(ctx, stopCh, c.breakerUntil.Sub(until)) {
+		if d := c.breakerWait(); d > 0 {
+			if !sleepUntilCtx(ctx, stopCh, d) {
 				return
 			}
 			deadline = time.Now().Add(memoryCuratorSweepBudget)
