@@ -611,9 +611,14 @@ func ghApiArgsAreReadOnly(args []string) bool {
 			if m != "GET" && m != "HEAD" {
 				mutating = true
 			}
-		case "-f", "--field", "-F", "--field-file", "--input", "--slurp":
+		case "-f", "--raw-field", "-F", "--field", "--field-file", "--input", "--slurp":
 			// conservative: field/body flags imply a write
-			// payload even without -X (values inline or next token)
+			// payload even without -X (values inline or next token).
+			// #5773: --raw-field is -f's long form (gh 2.x flag pairs
+			// are -f/--raw-field and -F/--field); it was missing here
+			// while the kubectl-style --field-file phantom stayed, so
+			// long-form field payloads implied POST yet passed as
+			// read-only (tier None, no grounding).
 			mutating = true
 		default:
 			// glued shorthand values: -XDELETE, -Fk=v, -fk=v
