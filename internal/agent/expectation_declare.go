@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -48,6 +49,22 @@ func expectCheckPositive(check string) bool {
 	return false
 }
 
+// parseAppliedCount extracts the "applied changes" counter from a structured
+// edit-tool result (batch_replace / multi_file_edit JSON: files_changed,
+// total_matches). ok=false when the content is not parseable structured JSON,
+// in which case the caller falls back to the error-bit-only verdict.
+func parseAppliedCount(content string) (int, bool) {
+	var payload struct {
+		FilesChanged  int `json:"files_changed"`
+		TotalMatches  int `json:"total_matches"`
+		FilesReplaced int `json:"files_replaced"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &payload); err != nil {
+		return 0, false
+	}
+	return payload.FilesChanged + payload.TotalMatches + payload.FilesReplaced, true
+}
+
 func evaluateExpectCheck(check, resultContent string, isError bool) (passed bool, detail string) {
 	// Failure signal comes from the structured isError flag plus the bounded
 	// status envelope only (#5023): searching file contents for "panic:"-like
@@ -77,6 +94,13 @@ func evaluateExpectCheck(check, resultContent string, isError bool) (passed bool
 	case "applied>=1":
 		if isError {
 			return false, "declared applied>=1 but the edit reported an error"
+		}
+		// #5765: batch_replace expresses failure via IsError=FilesError>0, so an
+		// all-skipped run (zero matches in every target file) returns success
+		// with files_changed:0. "Applied at least one" must be checked against
+		// the structured counters, not just the error bit.
+		if applied, ok := parseAppliedCount(resultContent); ok && applied < 1 {
+			return false, "declared applied>=1 but the result reports zero applied changes (all targets skipped or no matches)"
 		}
 		return true, ""
 	case "success":
