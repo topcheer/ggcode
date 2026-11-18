@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +80,22 @@ func TestIssue5753ArmRecordRoundTrip(t *testing.T) {
 	want.ArmedAt = want.ArmedAt.Round(0)
 	want.ExecFailedAt = want.ExecFailedAt.Round(0)
 	if loaded != want {
+		// Field-by-field diagnosis: %+v hides unexported field deltas.
+		lv, wv := reflect.ValueOf(loaded), reflect.ValueOf(want)
+		typ := lv.Type()
+		for i := 0; i < typ.NumField(); i++ {
+			f := typ.Field(i)
+			lf, wf := lv.Field(i), wv.Field(i)
+			if lf.Kind() == reflect.Struct && lf.Type() == reflect.TypeOf(time.Time{}) {
+				if !lf.Interface().(time.Time).Equal(wf.Interface().(time.Time)) {
+					t.Errorf("field %s: got %v want %v", f.Name, lf, wf)
+				}
+				continue
+			}
+			if lf.CanInterface() && lf.Interface() != wf.Interface() {
+				t.Errorf("field %s: got %v want %v", f.Name, lf, wf)
+			}
+		}
 		t.Errorf("round-trip mismatch: %+v vs %+v", loaded, want)
 	}
 
