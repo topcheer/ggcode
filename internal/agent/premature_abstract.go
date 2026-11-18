@@ -102,8 +102,12 @@ func scanPrematureAbstraction(text string) []prematureAbstrHit {
 			if excerptEnd > len(text) {
 				excerptEnd = len(text)
 			}
-			excerpt := strings.TrimSpace(text[excerptStart:excerptEnd])
-			if len(excerpt) > 80 {
+			// #5776: byte-offset windows can land mid-rune in CJK runs,
+			// producing invalid UTF-8. Expand to rune boundaries first.
+			excerptStart = runeBoundaryFloor(text, excerptStart)
+			excerptEnd = runeBoundaryCeil(text, excerptEnd)
+			excerpt := truncateRunesSafe(strings.TrimSpace(text[excerptStart:excerptEnd]), 80)
+			if len([]rune(excerpt)) >= 80 {
 				excerpt = excerpt[:80] + "..."
 			}
 

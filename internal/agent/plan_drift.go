@@ -299,10 +299,13 @@ func buildPlanWorkCorpus(runStats *RunStats) string {
 }
 
 func truncatePlanItem(s string, max int) string {
-	if len(s) <= max {
+	// #5775: byte-slice truncation produced invalid UTF-8 on CJK-mixed plan
+	// items; reuse the shared rune-safe helper (same as #1506) and account
+	// for the ellipsis suffix within the rune budget.
+	if len([]rune(s)) <= max {
 		return s
 	}
-	return s[:max-3] + "..."
+	return truncateRunesSafe(s, max-3) + "..."
 }
 
 func extractPlanFromArgs(args json.RawMessage) string {
