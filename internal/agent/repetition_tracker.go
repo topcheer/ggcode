@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -196,6 +197,24 @@ func truncateRunesSafe(s string, max int) string {
 		return s
 	}
 	return string(r[:max])
+}
+
+// runeBoundaryFloor returns the largest index <= i that is a rune start
+// boundary in s. #5776: byte-offset windows must not slice mid-rune.
+func runeBoundaryFloor(s string, i int) int {
+	for i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return i
+}
+
+// runeBoundaryCeil returns the smallest index >= i that is a rune start
+// boundary (or len(s)). #5776 companion to runeBoundaryFloor.
+func runeBoundaryCeil(s string, i int) int {
+	for i < len(s) && !utf8.RuneStart(s[i]) {
+		i++
+	}
+	return i
 }
 
 func repetitionFileKey(path string) string {

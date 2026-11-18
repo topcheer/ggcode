@@ -26,8 +26,10 @@ var planStepRunVerbRe = regexp.MustCompile(`(?i)\b(?:run(?:s|ning)?|ra\b|ran\b|t
 
 func planStepExcerpt(line string) string {
 	line = strings.TrimSpace(line)
-	if len(line) > 60 {
-		return line[:60] + "..."
+	// #5775: byte-slice truncation produced invalid UTF-8 on CJK-mixed steps;
+	// use the shared rune-safe helper with the ellipsis within the budget.
+	if len([]rune(line)) > 60 {
+		return truncateRunesSafe(line, 57) + "..."
 	}
 	return line
 }
