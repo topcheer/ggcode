@@ -183,42 +183,46 @@ func snapshotDiskStringKeys(m map[string]interface{}) map[string]string {
 	return out
 }
 
-func endpointZeroClearPaths(c *Config) map[string]bool {
-	out := map[string]bool{}
+func endpointZeroClearPaths(c *Config) [][]string {
+	var zeroPaths [][]string
 	if c == nil {
-		return out
+		return zeroPaths
 	}
 	for vName, vc := range c.Vendors {
 		for eName, ep := range vc.Endpoints {
+			// #5779: paths are []string segments so endpoint names containing
+			// dots (e.g. "github.com") survive without being mis-split.
+			base := []string{"vendors", vName, "endpoints", eName}
 			if ep.ContextWindow == 0 {
-				out["vendors."+vName+".endpoints."+eName+".context_window"] = true
+				zeroPaths = append(zeroPaths, append(append([]string{}, base...), "context_window"))
 			}
 			if ep.MaxTokens == 0 {
-				out["vendors."+vName+".endpoints."+eName+".max_tokens"] = true
+				zeroPaths = append(zeroPaths, append(append([]string{}, base...), "max_tokens"))
 			}
 		}
 	}
-	return out
+	return zeroPaths
 }
 
-func applyZeroNumberClears(existingRaw map[string]interface{}, zeros map[string]bool) {
-	for path := range zeros {
+func applyZeroNumberClears(existingRaw map[string]interface{}, zeros [][]string) {
+	for _, path := range zeros {
 		if _, exists := yamlPathLookup(existingRaw, path); exists {
-			yamlPathDelete(existingRaw, strings.Split(path, "."))
+			yamlPathDelete(existingRaw, path)
 		}
 	}
 }
 
-func collectEmptyStringPaths(m map[string]interface{}) map[string]bool {
-	out := map[string]bool{}
+func collectEmptyStringPaths(m map[string]interface{}) [][]string {
+	var out [][]string
 	var walk func(prefix []string, cur map[string]interface{})
 	walk = func(prefix []string, cur map[string]interface{}) {
 		for k, v := range cur {
 			switch val := v.(type) {
 			case string:
 				if val == "" {
-					path := strings.Join(append(append([]string{}, prefix...), k), ".")
-					out[path] = true
+					// #5779: keep segments unjoined so keys containing dots
+					// (e.g. endpoint names like "github.com") survive.
+					out = append(out, append(append([]string{}, prefix...), k))
 				}
 			case map[string]interface{}:
 				walk(append(append([]string{}, prefix...), k), val)
@@ -229,12 +233,13 @@ func collectEmptyStringPaths(m map[string]interface{}) map[string]bool {
 	return out
 }
 
-func applyClearedTombstones(existingRaw map[string]interface{}, snap map[string]string, cleared map[string]bool) {
+func applyClearedTombstones(existingRaw map[string]interface{}, snap map[string]string, cleared [][]string) {
 	if len(snap) == 0 || len(cleared) == 0 {
 		return
 	}
-	for path := range cleared {
-		loadedVal, wasOnDisk := snap[path]
+	for _, path := range cleared {
+		key := strings.Join(path, ".")
+		loadedVal, wasOnDisk := snap[key]
 		if !wasOnDisk || strings.Contains(loadedVal, "${") {
 			continue
 		}
@@ -246,14 +251,13 @@ func applyClearedTombstones(existingRaw map[string]interface{}, snap map[string]
 		if !isStr || curStr != loadedVal {
 			continue
 		}
-		yamlPathDelete(existingRaw, strings.Split(path, "."))
+		yamlPathDelete(existingRaw, path)
 	}
 }
 
-func yamlPathLookup(m map[string]interface{}, path string) (interface{}, bool) {
-	parts := strings.Split(path, ".")
+func yamlPathLookup(m map[string]interface{}, path []string) (interface{}, bool) {
 	var cur interface{} = m
-	for _, p := range parts {
+	for _, p := range path {
 		cm, ok := cur.(map[string]interface{})
 		if !ok {
 			return nil, false

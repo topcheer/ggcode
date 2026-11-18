@@ -151,7 +151,7 @@ func TestIssue610EnvRefNotTombstoned(t *testing.T) {
 	snap := map[string]string{
 		"extra_prompt": "${GGCODE_ISSUE610_PROMPT}",
 	}
-	cleared := map[string]bool{"extra_prompt": true}
+	cleared := [][]string{{"extra_prompt"}}
 
 	applyClearedTombstones(existing, snap, cleared)
 
