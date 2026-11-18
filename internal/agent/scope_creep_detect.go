@@ -72,9 +72,18 @@ func scanScopeCreep(text string) []scopeCreepHit {
 			if excerptEnd > len(text) {
 				excerptEnd = len(text)
 			}
-			excerpt := strings.TrimSpace(text[excerptStart:excerptEnd])
-			if len(excerpt) > 80 {
-				excerpt = excerpt[:80] + "..."
+			// #5793: byte-offset windows can land mid-rune in CJK runs,
+			// producing invalid UTF-8 injected into the provider stream, and
+			// the corrupted byte strings poison the dedup key below (same
+			// family as #5775/#5776). Expand to rune boundaries first.
+			excerptStart = runeBoundaryFloor(text, excerptStart)
+			excerptEnd = runeBoundaryCeil(text, excerptEnd)
+			// #5793 second cut: len>80 + excerpt[:80] was also a byte slice;
+			// keep the whole chain rune-safe like premature_abstract #5776.
+			trimmed := strings.TrimSpace(text[excerptStart:excerptEnd])
+			excerpt := trimmed
+			if len([]rune(trimmed)) > 80 {
+				excerpt = truncateRunesSafe(trimmed, 77) + "..."
 			}
 
 			key := sp.category + ":" + excerpt
