@@ -52,8 +52,26 @@ func ExecRestart(binary string, args []string, env []string) error {
 		env = append(env, IntentEnvKey+"="+intent)
 	}
 
+	// #5753: ensure a durable arm record exists before the exec attempt so
+	// a failed execve leaves a trace the nudge-time/startup handshake can
+	// alarm on. The tool arm path normally wrote it already; this covers
+	// slash-command and programmatic exec restarts.
+	if _, ok := LoadArmRecord(); !ok {
+		if _, werr := WriteArmRecord(binary, ""); werr != nil {
+			debug.Log("restart", "exec-time arm record write failed: %v", werr)
+		}
+	}
+
 	debug.Log("restart", "exec: %s %v", binary, args)
-	return ExecSelf(binary, args, env)
+	err := ExecSelf(binary, args, env)
+	if err != nil {
+		// The process is still alive on a failed execve: annotate the arm
+		// record so the resume nudge (which will fire in THIS process)
+		// reports ARMED-BUT-NOT-EXECUTED with the errno instead of
+		// presenting as a successful restart (#5753).
+		RecordExecFailure("exec", err)
+	}
+	return err
 }
 
 func ResolveBinary() (string, error) {

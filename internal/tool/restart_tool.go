@@ -3,7 +3,6 @@ package tool
 import (
 	"bytes"
 	"context"
-	"debug/buildinfo"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/restart"
 )
 
 // The resume nudge fires arm-time + rand(10s..30s) (#5520). The previous
@@ -140,6 +140,36 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 		}
 	}
 
+	// #5753: stamp the durable arm record BEFORE the nudge is armed and the
+	// restart requester is invoked, so every later failure mode (arm message
+	// dropped with no live program, execve error swallowed, rollback before
+	// the image swap) happens with the handshake anchor already on disk. The
+	// resume nudge and the next startup compare the running image against
+	// this record and alarm ARMED-BUT-NOT-EXECUTED when the exec never
+	// landed — without it, an armed receipt that silently does not exec is
+	// indistinguishable from a successful rollout.
+	handshakeNote := ""
+	if execPath := t.Requester.ExecTargetPath(); execPath != "" {
+		rec, werr := restart.WriteArmRecord(execPath, args.Reason)
+		if werr != nil {
+			debug.Log("restart", "arm record write failed: %v", werr)
+			handshakeNote = " NOTE (#5753): outcome verification is DEGRADED - the durable arm record could not be written, so a silently failed exec cannot be auto-detected; verify the running revision manually after the restart."
+		} else {
+			rev := rec.Revision
+			if rev == "" {
+				rev = "unknown"
+			}
+			sha := rec.SHA256
+			if len(sha) > 12 {
+				sha = sha[:12]
+			}
+			if sha == "" {
+				sha = "unavailable"
+			}
+			handshakeNote = fmt.Sprintf(" Outcome handshake (#5753): the armed target (revision %s, sha256 %s) is recorded durably; the resume nudge and the next startup verify the running image against it and raise a loud ARMED-BUT-NOT-EXECUTED alarm if the exec never lands. This OK certifies the ARMING - the outcome is certified by that verification, not by this receipt.", rev, sha)
+		}
+	}
+
 	nudgeNote := ""
 	if t.Nudger != nil {
 		delay := restartNudgeJitter()
@@ -164,23 +194,14 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 		// and the target side was previously path-only.
 		okNote += fmt.Sprintf(" Exec target: %s (current revision %s, target revision %s). After restart the startup banner verifies the running image.", p, t.Requester.ExecTargetRevision(), fileRevision(execPath))
 	}
-	return Result{Content: okNote + nudgeNote, HaltAgent: true}, nil
+	return Result{Content: okNote + handshakeNote + nudgeNote, HaltAgent: true}, nil
 }
 
 // fileRevision extracts the embedded vcs.revision from a binary file
 // ("unknown" when absent, e.g. unstamped builds).
 func fileRevision(path string) string {
-	bi, err := buildinfo.ReadFile(path)
-	if err != nil {
-		return "unknown"
-	}
-	for _, kv := range bi.Settings {
-		if kv.Key == "vcs.revision" && kv.Value != "" {
-			if len(kv.Value) > 12 {
-				return kv.Value[:12]
-			}
-			return kv.Value
-		}
+	if rev := restart.FileRevision(path); rev != "" {
+		return rev
 	}
 	return "unknown"
 }
