@@ -17,6 +17,16 @@ const (
 	staleHashThreshold = 50
 )
 
+// hashMismatchConcurrentWriteHint is appended to both mismatch branches
+// (#4797 / S-28). When the anchor came from an adjacent read, a mismatch
+// is usually a benign concurrent rewrite — gofmt, lint --fix, or another
+// seat in a shared worktree touching the file between the read and this
+// edit — not a stale context. Naming the likely cause keeps the warning
+// actionable instead of training users to ignore it; the conservative
+// re-read guidance stays in place (pass/anchor-relaxation remains a
+// product decision per the 2026-11-13 patrol ruling).
+const hashMismatchConcurrentWriteHint = "A concurrent formatter or editor write after your read (gofmt, lint --fix, or another seat in a shared worktree) is a likely cause - the file changed, not your context."
+
 type readHashTracker struct {
 	hashes map[string]uint64
 
@@ -146,14 +156,15 @@ func (t *readHashTracker) validateContentAtEdit(path string, oldTextLen int) str
 	debug.Log("agent", "read-validity: content hash mismatch for %s (stored=%d current=%d)", n, storedHash, currentHash)
 
 	if oldTextLen > 0 && oldTextLen < staleHashThreshold {
-
 		return "Note: file content changed since your last read (content hash mismatch). " +
-			"For this small edit it may still work, but if it fails, re-read the file first."
+			"For this small edit it may still work, but if it fails, re-read the file first. " +
+			hashMismatchConcurrentWriteHint
 	}
 
 	return "Warning: file content has changed since your last read (content hash mismatch detected). " +
 		"Your old_text anchor may not match the current file. " +
-		"Re-read the file with read_file before retrying this edit."
+		"Re-read the file with read_file before retrying this edit. " +
+		hashMismatchConcurrentWriteHint
 }
 
 func hashFilePrefix(path string) uint64 {
