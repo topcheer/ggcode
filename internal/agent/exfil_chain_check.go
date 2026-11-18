@@ -26,6 +26,90 @@ var exfilSensitivePathMarkers = []string{
 	"~/.ssh", ".ssh/", ".pem", ".env", "credentials",
 }
 
+// exfilPlaceholderNamePrefixes (#5769) is the placeholder vocabulary: a
+// sensitive token living inside an identifier that carries one of these
+// case-insensitive prefixes is a test-fixture / doc-example name, not a
+// credential. Test placeholder names (TEST_API_KEY=, ISSUE_5759_KEY, ...)
+// must not feed the outbound chain alarm.
+var exfilPlaceholderNamePrefixes = []string{
+	"test", "example", "fake", "dummy", "sample", "mock", "stub",
+	"placeholder", "fixture",
+}
+
+// exfilIssueNameRe matches tracker-prefixed identifiers such as
+// ISSUE_5759_KEY or ISSUE-5759-API-KEY (regression-test naming convention).
+var exfilIssueNameRe = regexp.MustCompile("(?i)^issue[_-]?[0-9]+[_-]")
+
+// exfilPlaceholderName reports whether id is a placeholder-style identifier.
+func exfilPlaceholderName(id string) bool {
+	if id == "" {
+		return false
+	}
+	lower := strings.ToLower(id)
+	if exfilIssueNameRe.MatchString(lower) {
+		return true
+	}
+	for _, p := range exfilPlaceholderNamePrefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// exfilIdentChar reports whether b can appear inside an identifier-ish token.
+func exfilIdentChar(b byte) bool {
+	return b == '_' || b == '-' ||
+		(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+// exfilIdentifierBefore returns the identifier-looking token that ends
+// immediately before content[idx], where idx is the start of a pattern match.
+// Sensitive keywords match mid-identifier (TEST_API_KEY contains API_KEY),
+// so the surrounding identifier is the naming context to classify.
+func exfilIdentifierBefore(content string, idx int) string {
+	start := idx
+	for start > 0 && exfilIdentChar(content[start-1]) {
+		start--
+	}
+	return content[start:idx]
+}
+
+// exfilPlaceholderShapedValue reports whether an assignment value looks like
+// an identifier or word-like placeholder rather than a credential
+// (#5769 mitigation 2). Credential-shaped values mix letter cases or carry
+// non-identifier specials (sk-ant-..., AKIA.../+, base64 =+); single-case
+// identifier-ish tokens (ISSUE_5759_KEY_PINS_THE_FIX, dummy_value_1234567890,
+// bare names picked up across a newline) are placeholders.
+func exfilPlaceholderShapedValue(val string) bool {
+	if len(val) < 16 {
+		return true
+	}
+	var hasLower, hasUpper, hasSpecial bool
+	for i := 0; i < len(val); i++ {
+		switch c := val[i]; {
+		case c >= 'a' && c <= 'z':
+			hasLower = true
+		case c >= 'A' && c <= 'Z':
+			hasUpper = true
+		case c >= '0' && c <= '9':
+			// digit: class-neutral
+		case c == '_':
+			// identifier glue, not a credential special
+		default:
+			hasSpecial = true
+		}
+	}
+	if hasSpecial {
+		return false
+	}
+	return !(hasLower && hasUpper)
+}
+
+// exfilIdentifierValueRe matches values that are themselves identifier-shaped
+// (no separators/specials), used for the placeholder-prefix value check.
+var exfilIdentifierValueRe = regexp.MustCompile("^[A-Za-z][A-Za-z0-9_-]*$")
+
 const (
 	maxExfilFingerprints      = 6
 	maxDirectExfilWarnings    = 3
@@ -113,9 +197,23 @@ func extractExfilSecretSnippets(content string) []string {
 	var out []string
 	seen := make(map[string]bool)
 	for _, sp := range secretPatterns {
-		m := sp.pattern.FindStringSubmatch(content)
-		if len(m) == 0 {
+		loc := sp.pattern.FindStringSubmatchIndex(content)
+		if loc == nil || len(loc) < 2 || loc[0] < 0 {
 			continue
+		}
+		// #5769 mitigation 1: context/prefix whitelist. A sensitive token
+		// inside a test-fixture or doc-example identifier is a placeholder
+		// name; suppress the chain fingerprint so it can trigger neither the
+		// direct nor the proximity alarm.
+		if exfilPlaceholderName(exfilIdentifierBefore(content, loc[0])) {
+			debug.Log("exfil-chain", "suppressed placeholder-named match: pattern=%s", sp.name)
+			continue
+		}
+		m := make([]string, len(loc)/2)
+		for i := range m {
+			if loc[i*2] >= 0 {
+				m[i] = content[loc[i*2]:loc[i*2+1]]
+			}
 		}
 		val := m[len(m)-1]
 		if val == "" {
@@ -124,6 +222,23 @@ func extractExfilSecretSnippets(content string) []string {
 		val = strings.TrimSpace(val)
 		if len(val) < exfilMinSnippetLen {
 			continue
+		}
+		// #5769 mitigation 2: value-shape threshold. A generic scalar name
+		// (API_KEY=, SECRET=) followed by nothing, a short placeholder, or an
+		// identifier-ish word token differs materially from a real
+		// credential value; only credential-shaped assignments feed the
+		// chain alarm. Value-anchored patterns (sk-..., AKIA..., ghp_...,
+		// JWTs, PEM blocks) are exempt: real keys keep recording regardless
+		// of the variable name they sit under.
+		if sp.name == "assignment_secret" {
+			if exfilPlaceholderShapedValue(val) {
+				debug.Log("exfil-chain", "suppressed placeholder-shaped assignment value: pattern=%s", sp.name)
+				continue
+			}
+			if exfilIdentifierValueRe.MatchString(val) && exfilPlaceholderName(val) {
+				debug.Log("exfil-chain", "suppressed placeholder-prefixed assignment value: pattern=%s", sp.name)
+				continue
+			}
 		}
 		key := strings.ToLower(val)
 		if seen[key] {
