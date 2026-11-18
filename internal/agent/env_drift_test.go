@@ -181,8 +181,8 @@ INVALID==double
 `
 	result := parseEnvContent(content)
 
-	if len(result) != 4 {
-		t.Errorf("expected 4 set vars, got %d: %v", len(result), result)
+	if len(result) != 5 {
+		t.Errorf("expected 5 set vars, got %d: %v", len(result), result)
 	}
 	if !result["FOO"] {
 		t.Error("FOO should be set")
@@ -193,8 +193,8 @@ INVALID==double
 	if !result["EXPORTED"] {
 		t.Error("EXPORTED should be set")
 	}
-	if result["EMPTY"] {
-		t.Error("EMPTY should not be counted as set")
+	if !result["EMPTY"] {
+		t.Error("EMPTY should be counted as set: FOO= is an assignment with an empty value (#5759)")
 	}
 }
 

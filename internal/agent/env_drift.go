@@ -150,11 +150,12 @@ func parseEnvContent(content string) map[string]bool {
 			continue
 		}
 		name := strings.TrimSpace(line[:idx])
-		value := strings.TrimSpace(line[idx+1:])
 
-		if value != "" {
-			result[name] = true
-		}
+		// FOO= is an assignment with an empty value: the variable is set.
+		// This matches the os.Environ branch of collectActualEnvVars, which
+		// counts an exported FOO= as set, and the godotenv/POSIX/
+		// docker-compose convention (#5759).
+		result[name] = true
 	}
 	return result
 }
