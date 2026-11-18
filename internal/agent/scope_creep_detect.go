@@ -72,9 +72,16 @@ func scanScopeCreep(text string) []scopeCreepHit {
 			if excerptEnd > len(text) {
 				excerptEnd = len(text)
 			}
-			excerpt := strings.TrimSpace(text[excerptStart:excerptEnd])
-			if len(excerpt) > 80 {
-				excerpt = excerpt[:80] + "..."
+			// #5793: byte-offset windows can land mid-rune in CJK runs,
+			// producing invalid UTF-8 (same family as #5775/#5776). Snap to
+			// rune boundaries before slicing, and keep the second cut
+			// rune-safe with the ellipsis in budget.
+			excerptStart = runeBoundaryFloor(text, excerptStart)
+			excerptEnd = runeBoundaryCeil(text, excerptEnd)
+			trimmed := strings.TrimSpace(text[excerptStart:excerptEnd])
+			excerpt := trimmed
+			if len([]rune(trimmed)) > 80 {
+				excerpt = truncateRunesSafe(trimmed, 77) + "..."
 			}
 
 			key := sp.category + ":" + excerpt
