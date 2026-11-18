@@ -122,7 +122,7 @@ func (s *selfModState) checkSelfModification(toolName string, args json.RawMessa
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !sourceMutatingTools[toolName] {
+	if !mutatingSourceEdit(toolName) { // #5795: was bare sourceMutatingTools - apply_patch edits of protected files silently bypassed
 		return ""
 	}
 
@@ -198,11 +198,12 @@ func matchSelfModTarget(path string) *selfModTarget {
 	return nil
 }
 
-func extractSelfModPaths(args json.RawMessage, _ string) []string {
+func extractSelfModPaths(args json.RawMessage, toolName string) []string {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(args, &raw); err != nil {
 		return nil
 	}
+	raw = normalizeApplyPatchArgs(toolName, raw) // #5795/#5321: nested {"operation":{...}} must lift its path like the tool itself does
 
 	paths := []string{}
 	seen := make(map[string]bool)

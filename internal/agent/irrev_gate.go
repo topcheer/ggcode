@@ -65,7 +65,8 @@ func irrevClassifyTool(toolName, args string) int {
 		return irrevTierNone
 
 	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit",
-		"multi_file_write", "notebook_edit":
+		"multi_file_write", "notebook_edit",
+		"apply_patch": // #5795: explicit edit tier instead of the incidental default branch
 		return irrevTierLow
 	case "undo_edit":
 		return irrevTierLow

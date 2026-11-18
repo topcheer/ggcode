@@ -46,7 +46,9 @@ func isFileWriteTool(toolName string) bool {
 	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit",
 		"multi_file_write", "batch_replace", "notebook_edit",
 
-		"lsp_rename":
+		"lsp_rename",
+
+		"apply_patch": // #5795: create_file/update_file sections write diff content verbatim
 		return true
 	default:
 		return false
