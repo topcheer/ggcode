@@ -151,6 +151,9 @@ func TestNonAtomicTagIsCritical(t *testing.T) {
 	if !criticalHintTags["non-atomic"] {
 		t.Fatal("[non-atomic] must be registered in criticalHintTags to bypass the per-turn guidance cap")
 	}
+	if !criticalHintTags["read-only"] {
+		t.Fatal("[read-only] must be registered in criticalHintTags to bypass the per-turn guidance cap (#5744 downgrade note)")
+	}
 }
 
 func TestMutatingLedgerNilSafe(t *testing.T) {
