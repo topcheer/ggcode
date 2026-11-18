@@ -30,6 +30,13 @@ go vet -tags goolm ./...
 CGO_ENABLED=0 go build -tags goolm ./...
 ```
 
+**Git hooks bash-3.2 contract** (#5767): scripts in `.githooks/` run with
+`#!/usr/bin/env bash`, which is stock bash 3.2 on macOS hosts without a
+Homebrew bash on PATH. They must not use bash>=4-only constructs (`mapfile`,
+`readarray`, `declare -A`, `${var,,}`, `&>>`, `coproc`) - use a portable
+`while IFS= read -r` loop instead. `internal/agent/zz_issue5767_test.go`
+pins this contract.
+
 **Deadcode/unreachable caveat** (#5204): the maintenance-sweep analyzer
 is the external `golang.org/x/tools/cmd/deadcode` CLI; it resolves
 interface dispatch (struct in an interface field, `Register(x Interface)`,

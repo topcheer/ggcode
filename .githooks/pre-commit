@@ -8,7 +8,12 @@ fi
 repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}"
 
-mapfile -t staged_go_files < <(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+# bash 3.2 (stock macOS /bin/bash) has no mapfile (a bash>=4 builtin) - use a
+# portable read loop so the hook never deterministically fails on darwin (#5767).
+staged_go_files=()
+while IFS= read -r f; do
+  [[ -n "${f}" ]] && staged_go_files+=("${f}")
+done < <(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
 if ((${#staged_go_files[@]} > 0)); then
   echo "[pre-commit] formatting staged Go files (go.mod-pinned toolchain)"
   "${repo_root}/scripts/dev/gofmt-pinned.sh" -w "${staged_go_files[@]}"
