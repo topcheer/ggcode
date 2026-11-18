@@ -163,6 +163,16 @@ func (a *Agent) annotateMutatingOutcome(toolName string, args []byte, result too
 	if result.IsError {
 		switch cls := classifyMutatingFailure(toolName, result.Content); cls {
 		case outcomeAmbiguous:
+			// #5744: a shell tool whose command line classifies as read-only
+			// (empty write surface) cannot double-apply anything -- downgrade the
+			// UNKNOWN advisory to a safe-to-re-run note and keep the ledger clean.
+			if shellSideEffectTools[toolName] {
+				if cmd := shellCommandFromArgs(args); cmd != "" && classifyShellReadOnly(cmd) {
+					a.appendGuidance(&result, nonAtomicReadOnlyNote(toolName))
+					debug.Log("agent", "non-atomic: %s timed out but command is read-only (safe to re-run), no ledger entry", toolName)
+					return result
+				}
+			}
 			a.mutateLedger.recordAmbiguous(toolName, args)
 			a.appendGuidance(&result, nonAtomicAmbiguousNote(toolName, prevAmbiguous+1))
 			debug.Log("agent", "non-atomic: %s ended AMBIGUOUS (attempt %d this run), ledger updated", toolName, prevAmbiguous+1)
@@ -199,4 +209,8 @@ func nonAtomicDoubleApplyNote(toolName string, attempts int) string {
 
 func nonAtomicPreExecNote() string {
 	return "[no-side-effect] This call failed BEFORE any change could be applied (validation/permission/declined). Safe to fix the arguments and retry without re-verifying workspace state."
+}
+
+func nonAtomicReadOnlyNote(toolName string) string {
+	return fmt.Sprintf("[read-only] The %s call was interrupted (timeout/cancel), but its command line classifies as read-only (empty write surface). Safe to re-run directly -- no state reconciliation needed.", toolName)
 }

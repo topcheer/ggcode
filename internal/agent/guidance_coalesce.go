@@ -30,6 +30,7 @@ var criticalHintTags = map[string]bool{
 	"path-traversal":        true,
 	"git-destructive":       true,
 	"non-atomic":            true,
+	"read-only":             true,
 }
 
 func extractHintTag(hint string) string {
