@@ -171,7 +171,7 @@ func snapshotDiskStringKeys(m map[string]interface{}) map[string]string {
 			switch val := v.(type) {
 			case string:
 				if val != "" {
-					path := strings.Join(append(append([]string{}, prefix...), k), ".")
+					path := strings.Join(append(append([]string{}, prefix...), k), tombstonePathSep)
 					out[path] = val
 				}
 			case map[string]interface{}:
@@ -183,6 +183,12 @@ func snapshotDiskStringKeys(m map[string]interface{}) map[string]string {
 	return out
 }
 
+// tombstonePathSep separates path segments for Save() tombstone lookups.
+// It cannot occur in YAML map keys (vendor/endpoint names like "github.com"),
+// so join/split is bijective - the previous "." separator shattered paths
+// whose key segments themselves contain dots (#5779).
+const tombstonePathSep = "\x00"
+
 func endpointZeroClearPaths(c *Config) map[string]bool {
 	out := map[string]bool{}
 	if c == nil {
@@ -191,10 +197,10 @@ func endpointZeroClearPaths(c *Config) map[string]bool {
 	for vName, vc := range c.Vendors {
 		for eName, ep := range vc.Endpoints {
 			if ep.ContextWindow == 0 {
-				out["vendors."+vName+".endpoints."+eName+".context_window"] = true
+				out[strings.Join([]string{"vendors", vName, "endpoints", eName, "context_window"}, tombstonePathSep)] = true
 			}
 			if ep.MaxTokens == 0 {
-				out["vendors."+vName+".endpoints."+eName+".max_tokens"] = true
+				out[strings.Join([]string{"vendors", vName, "endpoints", eName, "max_tokens"}, tombstonePathSep)] = true
 			}
 		}
 	}
@@ -204,7 +210,7 @@ func endpointZeroClearPaths(c *Config) map[string]bool {
 func applyZeroNumberClears(existingRaw map[string]interface{}, zeros map[string]bool) {
 	for path := range zeros {
 		if _, exists := yamlPathLookup(existingRaw, path); exists {
-			yamlPathDelete(existingRaw, strings.Split(path, "."))
+			yamlPathDelete(existingRaw, strings.Split(path, tombstonePathSep))
 		}
 	}
 }
@@ -217,7 +223,7 @@ func collectEmptyStringPaths(m map[string]interface{}) map[string]bool {
 			switch val := v.(type) {
 			case string:
 				if val == "" {
-					path := strings.Join(append(append([]string{}, prefix...), k), ".")
+					path := strings.Join(append(append([]string{}, prefix...), k), tombstonePathSep)
 					out[path] = true
 				}
 			case map[string]interface{}:
@@ -246,12 +252,12 @@ func applyClearedTombstones(existingRaw map[string]interface{}, snap map[string]
 		if !isStr || curStr != loadedVal {
 			continue
 		}
-		yamlPathDelete(existingRaw, strings.Split(path, "."))
+		yamlPathDelete(existingRaw, strings.Split(path, tombstonePathSep))
 	}
 }
 
 func yamlPathLookup(m map[string]interface{}, path string) (interface{}, bool) {
-	parts := strings.Split(path, ".")
+	parts := strings.Split(path, tombstonePathSep)
 	var cur interface{} = m
 	for _, p := range parts {
 		cm, ok := cur.(map[string]interface{})
