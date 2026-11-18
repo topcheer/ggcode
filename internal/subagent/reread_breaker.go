@@ -46,6 +46,13 @@ var rereadBreakerEditTools = map[string]bool{
 	"edit_file": true, "multi_edit_file": true, "write_file": true,
 	"multi_file_edit": true, "multi_file_write": true, "file_ops": true,
 	"batch_replace": true, "notebook_edit": true,
+	// #5790: apply_patch is the OpenAI Responses-native patch executor
+	// (internal/tool/apply_patch.go). It mutates source exactly like the
+	// tools above, so it must reset the same-path reread window - without
+	// it, a Responses-native run's read -> apply_patch -> verify-read
+	// workflow tripped the breaker on the 4th read of the file.
+	// internal/agent already counts it via mutatingSourceEdit (#5254).
+	"apply_patch": true,
 }
 
 // RereadPolicy selects the #5013 same-file reread breaker calibration for a
