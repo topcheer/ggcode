@@ -611,9 +611,16 @@ func ghApiArgsAreReadOnly(args []string) bool {
 			if m != "GET" && m != "HEAD" {
 				mutating = true
 			}
-		case "-f", "--field", "-F", "--field-file", "--input", "--slurp":
+		case "-f", "--raw-field", "-F", "--field", "--field-file", "--input", "--slurp":
 			// conservative: field/body flags imply a write
-			// payload even without -X (values inline or next token)
+			// payload even without -X (values inline or next token).
+			// gh api's real flag pairs are -f/--raw-field and
+			// -F/--field; --raw-field was previously missing, letting
+			// long-form field params - which flip the method to
+			// POST-by-default - escape the gate as read-only.
+			// (--field-file is not a real gh flag but stays listed:
+			// gating an unknown field-like token is the safe,
+			// false-positive direction for this classifier.)
 			mutating = true
 		default:
 			// glued shorthand values: -XDELETE, -Fk=v, -fk=v
