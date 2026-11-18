@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -79,24 +78,23 @@ func TestIssue5753ArmRecordRoundTrip(t *testing.T) {
 	want := rec
 	want.ArmedAt = want.ArmedAt.Round(0)
 	want.ExecFailedAt = want.ExecFailedAt.Round(0)
-	if loaded != want {
-		// Field-by-field diagnosis: %+v hides unexported field deltas.
-		lv, wv := reflect.ValueOf(loaded), reflect.ValueOf(want)
-		typ := lv.Type()
-		for i := 0; i < typ.NumField(); i++ {
-			f := typ.Field(i)
-			lf, wf := lv.Field(i), wv.Field(i)
-			if lf.Kind() == reflect.Struct && lf.Type() == reflect.TypeOf(time.Time{}) {
-				if !lf.Interface().(time.Time).Equal(wf.Interface().(time.Time)) {
-					t.Errorf("field %s: got %v want %v", f.Name, lf, wf)
-				}
-				continue
-			}
-			if lf.CanInterface() && lf.Interface() != wf.Interface() {
-				t.Errorf("field %s: got %v want %v", f.Name, lf, wf)
-			}
-		}
-		t.Errorf("round-trip mismatch: %+v vs %+v", loaded, want)
+	// Compare explicitly: struct != compares time.Time bitwise, and the
+	// internal *Location differs between a fresh time.Now() (Local) and a
+	// JSON-unmarshaled instant (UTC) even when the instants are identical.
+	// That makes != fail whenever Local is not the UTC location (CI runners
+	// with TZ set) while passing on UTC-default hosts. Compare instants via
+	// .Equal and primitives via ==.
+	if !loaded.ArmedAt.Equal(want.ArmedAt) {
+		t.Errorf("ArmedAt: got %v want %v", loaded.ArmedAt, want.ArmedAt)
+	}
+	if !loaded.ExecFailedAt.Equal(want.ExecFailedAt) {
+		t.Errorf("ExecFailedAt: got %v want %v", loaded.ExecFailedAt, want.ExecFailedAt)
+	}
+	if loaded.TargetPath != want.TargetPath || loaded.Revision != want.Revision ||
+		loaded.SHA256 != want.SHA256 || loaded.Size != want.Size ||
+		loaded.PID != want.PID || loaded.Reason != want.Reason ||
+		loaded.ExecStage != want.ExecStage || loaded.ExecError != want.ExecError {
+		t.Errorf("round-trip mismatch: got %+v want %+v", loaded, want)
 	}
 
 	ClearArmRecord("test")
