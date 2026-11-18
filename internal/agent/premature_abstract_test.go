@@ -3,7 +3,38 @@ package agent
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
+
+// Regression (same family as #5775): bilingual CJK+English text must yield
+// rune-safe excerpts. Byte-sliced windows (loc[0]-20, loc[1]+40, [:80])
+// previously landed mid-rune and produced invalid UTF-8 that was injected
+// into the LLM message stream.
+func TestScanPrematureAbstraction_CJKExcerptsAreValidUTF8(t *testing.T) {
+	text := "为了便于替换实现我先做如下设计说明：" +
+		"I created a Factory pattern for this. " +
+		"后续补充文字内容补充内容如下所示：" +
+		"I've defined an interface so that we can swap implementations later."
+
+	hits := scanPrematureAbstraction(text)
+	if len(hits) < prematureAbstrWarnThreshold {
+		t.Fatalf("expected >= %d hits for bilingual text, got %d", prematureAbstrWarnThreshold, len(hits))
+	}
+	for i, h := range hits {
+		if !utf8.ValidString(h.excerpt) {
+			t.Errorf("hit[%d] excerpt is not valid UTF-8: %q", i, h.excerpt)
+		}
+	}
+
+	a := &Agent{prematureAbstr: newPrematureAbstrState()}
+	hint := a.maybeWarnPrematureAbstraction(text)
+	if hint == "" {
+		t.Fatal("expected warning at threshold")
+	}
+	if !utf8.ValidString(hint) {
+		t.Error("full warning message is not valid UTF-8")
+	}
+}
 
 func TestScanPrematureAbstraction_Empty(t *testing.T) {
 	hits := scanPrematureAbstraction("")

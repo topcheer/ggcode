@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -93,18 +95,11 @@ func scanPrematureAbstraction(text string) []prematureAbstrHit {
 	for _, ap := range prematureAbstrPatterns {
 		locs := ap.pattern.FindAllStringIndex(text, -1)
 		for _, loc := range locs {
-			start := loc[0]
-			excerptStart := start - 20
-			if excerptStart < 0 {
-				excerptStart = 0
-			}
-			excerptEnd := loc[1] + 40
-			if excerptEnd > len(text) {
-				excerptEnd = len(text)
-			}
+			excerptStart := util.SnapToRuneStart(text, loc[0]-20)
+			excerptEnd := util.SnapToRuneStart(text, loc[1]+40)
 			excerpt := strings.TrimSpace(text[excerptStart:excerptEnd])
 			if len(excerpt) > 80 {
-				excerpt = excerpt[:80] + "..."
+				excerpt = util.Truncate(excerpt, 80)
 			}
 
 			key := ap.category + ":" + excerpt
