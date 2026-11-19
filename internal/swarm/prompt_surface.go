@@ -8,8 +8,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Prompt-facing discoverability for persistent teams (#5829 follow-up).
@@ -30,13 +30,15 @@ type PersistedTeamInfo struct {
 	LastActive time.Time
 }
 
-// SummarizePersistedTeams scans <home>/.ggcode/swarm/teams/*/manifest.json
+// SummarizePersistedTeams scans <configDir>/swarm/teams/*/manifest.json
 // and returns one summary per persisted team, newest activity first.
-// Pure disk read — no Manager instance required (called from prompt
-// building, where the manager may not exist yet).
+// Uses util.ConfigDir() (the default Manager boardRoot) so the scan lands
+// on the same directory the Manager persists to. Note: an explicit
+// Manager.BoardRoot override is not visible here (prompt building has no
+// Manager); default-layout deployments are fully covered.
+// Pure disk read — no Manager instance required.
 func SummarizePersistedTeams() []PersistedTeamInfo {
-	home := config.HomeDir()
-	teamsDir := filepath.Join(home, ".ggcode", "swarm", "teams")
+	teamsDir := filepath.Join(util.ConfigDir(), "swarm", "teams")
 	entries, err := os.ReadDir(teamsDir)
 	if err != nil {
 		return nil // no teams dir yet — nothing to surface
