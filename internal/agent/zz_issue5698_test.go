@@ -100,7 +100,7 @@ func TestIssue5698AnnounceAtStepBoundaryExactlyOnce(t *testing.T) {
 
 	// Step boundary #1: system prompt assembly ships with exactly one
 	// announce line inside the changed entry's block.
-	a.maybeInjectDynamicSystemPrompt("first turn")
+	a.maybeInjectStableSystemHead()
 	sysText := systemText5698(cm.Messages())
 	if countAnnounce5698(sysText) != 1 {
 		t.Fatalf("exactly one announce line per change expected, got %d in %q", countAnnounce5698(sysText), sysText)
@@ -119,7 +119,7 @@ func TestIssue5698AnnounceAtStepBoundaryExactlyOnce(t *testing.T) {
 	}
 
 	// Step boundary #2: announce consumed; block remains, no announce line.
-	a.maybeInjectDynamicSystemPrompt("second turn")
+	a.maybeInjectStableSystemHead()
 	sysText2 := systemText5698(cm.Messages())
 	if countAnnounce5698(sysText2) != 0 {
 		t.Fatalf("announce must fire exactly once (idempotent), found again: %q", sysText2)
@@ -130,7 +130,7 @@ func TestIssue5698AnnounceAtStepBoundaryExactlyOnce(t *testing.T) {
 
 	// Step boundary #3: unchanged state renders the identical prompt (early
 	// return on lastInjectedSystemPrompt — cache-friendly no-op).
-	a.maybeInjectDynamicSystemPrompt("third turn")
+	a.maybeInjectStableSystemHead()
 	if got := a.lastInjectedSystemPrompt; got == "" || countAnnounce5698(got) != 0 {
 		t.Errorf("stable prompt must remain announce-free: %q", got)
 	}

@@ -5,33 +5,41 @@ import (
 	"testing"
 )
 
+// #4917 pinned that late-converging injector text still lands in the prompt.
+// #5807 relocated the injector output from the system head into the volatile
+// turn context (per-prompt segments must not rewrite messages[0]); the
+// landing guarantee now applies to the turn-context render.
 func TestSystemPromptInjectorLateTextStillLands(t *testing.T) {
 	a := newAutopilotTestAgent()
 
 	a.baseSystemPrompt = "BASE PROMPT"
 	a.SetSystemPromptInjector(func() string { return "" })
 
-	a.maybeInjectDynamicSystemPrompt("hi")
-	firstSys := firstSystemText(t, a)
-	if !strings.Contains(firstSys, "BASE PROMPT") {
-		t.Fatal("base prompt must be present after first pass")
-	}
-	if strings.Contains(firstSys, "SHARED WORKSPACE") {
-		t.Fatal("empty injector must not inject alert text")
+	if got := a.renderVolatileTurnContext("hi"); got != "" {
+		t.Fatalf("empty injector must yield no volatile turn context, got:\n%s", got)
 	}
 
 	a.SetSystemPromptInjector(func() string {
 		return "## SHARED WORKSPACE — CONCURRENT AGENTS ACTIVE\npeer-x is here"
 	})
-	a.maybeInjectDynamicSystemPrompt("continue")
-	if got := firstSystemText(t, a); !strings.Contains(got, "SHARED WORKSPACE") || !strings.Contains(got, "peer-x") {
-		t.Fatalf("late-converging injector text must reach the system prompt, got:\n%.400s", got)
+	vol := a.renderVolatileTurnContext("continue")
+	if !strings.Contains(vol, "SHARED WORKSPACE") || !strings.Contains(vol, "peer-x") {
+		t.Fatalf("late-converging injector text must reach the volatile turn context, got:\n%.400s", vol)
+	}
+
+	a.maybeInjectStableSystemHead()
+	got := firstSystemText(t, a)
+	if !strings.Contains(got, "BASE PROMPT") {
+		t.Fatalf("base prompt must be present in the stable head, got:\n%.400s", got)
+	}
+	if strings.Contains(got, "SHARED WORKSPACE") || strings.Contains(got, "peer-x") {
+		t.Fatalf("injector output must not rewrite the stable system head (#5807), got:\n%.400s", got)
 	}
 
 	before := a.lastInjectedSystemPrompt
-	a.maybeInjectDynamicSystemPrompt("again")
+	a.maybeInjectStableSystemHead()
 	if a.lastInjectedSystemPrompt != before {
-		t.Fatal("identical injector output must not re-trigger update")
+		t.Fatal("identical stable head parts must not re-trigger head update")
 	}
 }
 

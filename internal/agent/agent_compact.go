@@ -108,13 +108,11 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	}
 
 	a.CancelPreCompact()
-	if a.compactLocallyForSendBudget("reactive compact") {
-		if retries != nil {
-			*retries = *retries + 1
-		}
-		return true
-	}
 
+	// #5807: on a real overflow prefer the compact-with-summary rebuild —
+	// one reassembly that preserves the stable head. Per-group truncation is
+	// the LAST resort: every dropped group re-invalidates the prefix from
+	// the head down, the dominant recurring token cost the audit flagged.
 	debug.Log("agent", "reactive compact: compacting conversation")
 	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Compressing conversation via summarization...] "})
 
@@ -136,10 +134,11 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		debug.Log("agent", "reactive compact: summarization failed (%v), falling back to truncation", compactErr)
 	}
 
-	if cm, ok := a.contextManager.(interface{ TruncateOldestGroupForRetry() bool }); ok {
-		if cm.TruncateOldestGroupForRetry() {
-			changed = true
-		}
+	// Group-drop last resort (#5807): only fires when summarization was
+	// unavailable or left the context over budget — compactLocallyForSendBudget
+	// self-guards below budget, so a successful compact never drops a group.
+	if a.compactLocallyForSendBudget("reactive compact (group-drop last resort)") {
+		changed = true
 	}
 
 	if !changed {

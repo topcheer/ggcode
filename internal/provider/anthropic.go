@@ -991,8 +991,23 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	}
 	var systemBlocks []sysBlock
 
+	// #5807: at most one user-turn volatile-tail breakpoint per request.
+	// Live rotation keeps a single flagged block, but history resumed from
+	// persistence can carry stale flags — honor only the last one.
+	lastUserCacheMsg, lastUserCacheBlk := -1, -1
+	for mi, m := range messages {
+		if m.Role != "user" {
+			continue
+		}
+		for bi, b := range m.Content {
+			if b.Type == "text" && b.Cache {
+				lastUserCacheMsg, lastUserCacheBlk = mi, bi
+			}
+		}
+	}
+
 	programmaticTools := map[string]bool{}
-	for _, m := range messages {
+	for mi, m := range messages {
 		if m.Role == "system" {
 			for _, b := range m.Content {
 				if b.Type == "text" && b.Text != "" {
@@ -1009,7 +1024,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 			}
 		}
 		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Content))
-		for _, b := range m.Content {
+		for bi, b := range m.Content {
 			switch b.Type {
 			case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result", "code_execution_tool_result":
 				if pb, err := serverToolBlockParam(b.Raw); err == nil {
@@ -1018,7 +1033,11 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 					debug.Log("anthropic", "server tool block echo skipped: %v", err)
 				}
 			case "text":
-				blocks = append(blocks, anthropic.NewTextBlock(b.Text))
+				tb := anthropic.NewTextBlock(b.Text)
+				if b.Cache && mi == lastUserCacheMsg && bi == lastUserCacheBlk && tb.OfText != nil {
+					tb.OfText.CacheControl = anthropic.NewCacheControlEphemeralParam()
+				}
+				blocks = append(blocks, tb)
 			case "image":
 				blocks = append(blocks, p.imageContentBlock(ctx, b.ImageMIME, b.ImageData))
 			case "tool_use":
