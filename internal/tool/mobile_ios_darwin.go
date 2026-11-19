@@ -144,7 +144,11 @@ func (b *iosBackend) boot(ctx context.Context, device string) (Result, error) {
 		return Result{IsError: true, Content: fmt.Sprintf("boot failed: %v\n%s", err, stderr)}, nil
 	}
 
-	exec.Command("open", "-a", "Simulator").Start()
+	// Bring the simulator frontend to the foreground: DeviceHub on newer
+	// macOS, Simulator on older. Probe-based; failure stays silent because
+	// the boot itself already succeeded.
+	frontend := simFrontendApp(ctx, runCommand)
+	exec.Command("open", "-a", frontend).Start()
 	return Result{Content: fmt.Sprintf("Booted simulator %s.", device)}, nil
 }
 
@@ -237,12 +241,7 @@ func (b *iosBackend) tap(ctx context.Context, device, ref string, x, y int) (Res
 	if sx > 1 || sy > 1 {
 		x, y = x/sx, y/sy
 	}
-	script := fmt.Sprintf(`
-tell application "Simulator" to activate
-delay 0.2
-tell application "System Events"
-    click at {%d, %d}
-end tell`, x, y)
+	script := tapAppleScript(simFrontendApp(ctx, runCommand), x, y)
 	_, stderr, err := runCommand(ctx, 10*time.Second, "osascript", "-e", script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("tap failed: %v\n%s\nNote: Grant Accessibility permission to Terminal/ggcode in System Preferences > Security & Privacy > Privacy > Accessibility", err, stderr)}, nil
@@ -319,12 +318,7 @@ func (b *iosBackend) typeText(ctx context.Context, device, ref, text string, x, 
 	}
 
 	escapedText := escapeAppleScriptString(text)
-	script := fmt.Sprintf(`
-tell application "Simulator" to activate
-delay 0.2
-tell application "System Events"
-    keystroke "%s"
-end tell`, escapedText)
+	script := typeAppleScript(simFrontendApp(ctx, runCommand), escapedText)
 	_, stderr, err := runCommand(ctx, 10*time.Second, "osascript", "-e", script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("type failed: %v\n%s", err, stderr)}, nil
@@ -350,20 +344,8 @@ func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y int, en
 	if sx > 1 || sy > 1 {
 		x, y, ex, ey = x/sx, y/sy, ex/sx, ey/sy
 	}
-	steps := 8
-	var sb strings.Builder
-	sb.WriteString(`tell application "Simulator" to activate` + "\n" + `delay 0.2` + "\n")
-	sb.WriteString("tell application \"System Events\"\n")
-	sb.WriteString(fmt.Sprintf("  mouse move to {%d, %d}\n", x, y))
-	sb.WriteString("  mouse down\n")
-	for i := 1; i <= steps; i++ {
-		interX := x + (ex-x)*i/steps
-		interY := y + (ey-y)*i/steps
-		sb.WriteString(fmt.Sprintf("  mouse move to {%d, %d}\n", interX, interY))
-	}
-	sb.WriteString("  mouse up\n")
-	sb.WriteString("end tell")
-	_, stderr, err := runCommand(ctx, 15*time.Second, "osascript", "-e", sb.String())
+	script := swipeAppleScript(simFrontendApp(ctx, runCommand), x, y, ex, ey)
+	_, stderr, err := runCommand(ctx, 15*time.Second, "osascript", "-e", script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("swipe failed: %v\n%s", err, stderr)}, nil
 	}
@@ -371,28 +353,9 @@ func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y int, en
 }
 
 func (b *iosBackend) press(ctx context.Context, device, key string) (Result, error) {
-	var script string
-	switch strings.ToLower(key) {
-	case "home":
-		script = `tell application "Simulator" to activate
-delay 0.1
-tell application "System Events" to keystroke (ASCII character 28) using {shift down, command down}`
-	case "back":
-
+	script, ok := pressAppleScript(simFrontendApp(ctx, runCommand), key)
+	if !ok {
 		return Result{IsError: true, Content: "iOS does not have a hardware back button. Use swipe from left edge."}, nil
-	case "enter":
-		script = `tell application "Simulator" to activate
-delay 0.1
-tell application "System Events" to keystroke return`
-	case "escape":
-		script = `tell application "Simulator" to activate
-delay 0.1
-tell application "System Events" to key code 53`
-	default:
-
-		script = fmt.Sprintf(`tell application "Simulator" to activate
-delay 0.1
-tell application "System Events" to keystroke "%s"`, escapeAppleScriptString(key))
 	}
 	_, stderr, err := runCommand(ctx, 10*time.Second, "osascript", "-e", script)
 	if err != nil {
@@ -421,6 +384,102 @@ func (b *iosBackend) logs(ctx context.Context, device, pkg string, lines int) (R
 func escapeAppleScriptString(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	return strings.ReplaceAll(s, "\"", "\\\"")
+}
+
+// simCmdRunner mirrors the signature of runCommand so tests can inject a
+// fake System Events process table and open result.
+type simCmdRunner func(ctx context.Context, timeout time.Duration, name string, args ...string) (string, string, error)
+
+// simFrontendApp returns the name of the application acting as the iOS
+// simulator frontend. Recent macOS releases removed Simulator.app in favor
+// of DeviceHub.app (/Applications/Xcode.app/Contents/Applications/DeviceHub.app).
+// It probes the System Events process list: a running "DeviceHub" wins,
+// otherwise a running "Simulator" (older macOS) is used. If neither is
+// running it tries `open -a DeviceHub`; on failure it silently falls back
+// to "Simulator" so callers degrade like the old behavior. No caching:
+// the probe takes well under a second.
+func simFrontendApp(ctx context.Context, run simCmdRunner) string {
+	if run == nil {
+		run = runCommand
+	}
+	out, _, err := run(ctx, 5*time.Second, "osascript", "-e", `tell application "System Events" to get name of processes`)
+	if err == nil {
+		if strings.Contains(out, "DeviceHub") {
+			return "DeviceHub"
+		}
+		if strings.Contains(out, "Simulator") {
+			return "Simulator"
+		}
+	}
+	if _, _, openErr := run(ctx, 15*time.Second, "open", "-a", "DeviceHub"); openErr == nil {
+		return "DeviceHub"
+	}
+	return "Simulator"
+}
+
+// tapAppleScript builds the click-at-coordinates script targeting the given
+// simulator frontend app name.
+func tapAppleScript(app string, x, y int) string {
+	return fmt.Sprintf(`tell application %q to activate
+delay 0.2
+tell application "System Events"
+    click at {%d, %d}
+end tell`, app, x, y)
+}
+
+// typeAppleScript builds the keystroke script targeting the given simulator
+// frontend app name; text must already be AppleScript-escaped.
+func typeAppleScript(app, escapedText string) string {
+	return fmt.Sprintf(`tell application %q to activate
+delay 0.2
+tell application "System Events"
+    keystroke "%s"
+end tell`, app, escapedText)
+}
+
+// swipeAppleScript builds a drag script with interpolated mouse moves,
+// activating the given simulator frontend app first.
+func swipeAppleScript(app string, x, y, ex, ey int) string {
+	const steps = 8
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("tell application %q to activate\n", app))
+	sb.WriteString("delay 0.2\n")
+	sb.WriteString("tell application \"System Events\"\n")
+	sb.WriteString(fmt.Sprintf("  mouse move to {%d, %d}\n", x, y))
+	sb.WriteString("  mouse down\n")
+	for i := 1; i <= steps; i++ {
+		interX := x + (ex-x)*i/steps
+		interY := y + (ey-y)*i/steps
+		sb.WriteString(fmt.Sprintf("  mouse move to {%d, %d}\n", interX, interY))
+	}
+	sb.WriteString("  mouse up\n")
+	sb.WriteString("end tell")
+	return sb.String()
+}
+
+// pressAppleScript builds the key-press script for key, activating the given
+// simulator frontend app first. ok=false means the key is unsupported on iOS.
+func pressAppleScript(app, key string) (script string, ok bool) {
+	switch strings.ToLower(key) {
+	case "home":
+		return fmt.Sprintf(`tell application %q to activate
+delay 0.1
+tell application "System Events" to keystroke (ASCII character 28) using {shift down, command down}`, app), true
+	case "back":
+		return "", false
+	case "enter":
+		return fmt.Sprintf(`tell application %q to activate
+delay 0.1
+tell application "System Events" to keystroke return`, app), true
+	case "escape":
+		return fmt.Sprintf(`tell application %q to activate
+delay 0.1
+tell application "System Events" to key code 53`, app), true
+	default:
+		return fmt.Sprintf(`tell application %q to activate
+delay 0.1
+tell application "System Events" to keystroke "%s"`, app, escapeAppleScriptString(key)), true
+	}
 }
 
 func (b *iosBackend) listApps(ctx context.Context, device string) (Result, error) {
