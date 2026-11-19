@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -327,6 +328,12 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 		a.runtimeStats.addTokens(int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens))
 		a.syncContextManagerUsage(resp.Usage)
 		a.emitUsage(resp.Usage)
+		// #5812: ctxstats sampler - buffer provider cache usage and flush one
+		// prefix-drift record per model response (marker-gated, no-op by default).
+		if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
+			cm.RecordProviderUsage(resp.Usage.CacheRead, resp.Usage.CacheWrite, resp.Usage.InputTokens)
+			cm.RecordTurn("")
+		}
 
 		if msg, stop := a.RecordSessionTokenUsage(int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens)); msg != "" {
 			if a.noteUsageBudgetCrossing(i+1, msg, stop, "Session Token Budget", "session-token-budget",
