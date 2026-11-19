@@ -270,6 +270,7 @@ swarm:
   max_teammates_per_team: 16   # Max teammates per team
   teammate_timeout: 600s       # Timeout for a teammate task (0 = no timeout)
   inbox_size: 32               # Task inbox depth per teammate
+  teammate_early_compact_ratio: 0.70  # Proactive pre-compact trigger (0 = disable)
 ```
 
 | Key | Type | Default | Description |
@@ -277,6 +278,7 @@ swarm:
 | `max_teammates_per_team` | int | 16 | Maximum teammates allowed in a single team |
 | `teammate_timeout` | duration | 0 (none) | Maximum duration for a single teammate task |
 | `inbox_size` | int | 32 | Task inbox buffer size per teammate |
+| `teammate_early_compact_ratio` | float | 0.70 | Context-window fraction at which teammate agents proactively pre-compact; 0 disables (mirrors the sub-agent runner) |
 
 ## Knight
 

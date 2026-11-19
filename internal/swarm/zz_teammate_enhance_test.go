@@ -54,7 +54,11 @@ func newEarlyCompactManager(t *testing.T, cfg config.SwarmConfig, rec *earlyComp
 
 func TestSpawnTeammateWiresDefaultEarlyCompactRatio(t *testing.T) {
 	rec := &earlyCompactRecorder{}
-	m, team := newEarlyCompactManager(t, config.SwarmConfig{MaxTeammatesPerTeam: 4}, rec)
+	// Mirror the production path: cfg.Swarm comes from config.Load, which
+	// unmarshals over the 0.70 default preset by config.DefaultConfig.
+	cfg := config.DefaultConfig().Swarm
+	cfg.MaxTeammatesPerTeam = 4
+	m, team := newEarlyCompactManager(t, cfg, rec)
 	defer m.Shutdown()
 
 	if _, err := m.SpawnTeammate(team.ID, "worker", "blue", nil); err != nil {
@@ -89,19 +93,23 @@ func TestSpawnTeammateConfigOverridesEarlyCompactRatio(t *testing.T) {
 	}
 }
 
-func TestSpawnTeammateNegativeConfigDisablesEarlyCompact(t *testing.T) {
-	rec := &earlyCompactRecorder{}
-	m, team := newEarlyCompactManager(t, config.SwarmConfig{
-		MaxTeammatesPerTeam:       4,
-		TeammateEarlyCompactRatio: -1,
-	}, rec)
-	defer m.Shutdown()
+func TestSpawnTeammateZeroOrNegativeConfigDisablesEarlyCompact(t *testing.T) {
+	for name, ratio := range map[string]float64{"explicit zero": 0, "negative": -1} {
+		t.Run(name, func(t *testing.T) {
+			rec := &earlyCompactRecorder{}
+			m, team := newEarlyCompactManager(t, config.SwarmConfig{
+				MaxTeammatesPerTeam:       4,
+				TeammateEarlyCompactRatio: ratio,
+			}, rec)
+			defer m.Shutdown()
 
-	if _, err := m.SpawnTeammate(team.ID, "worker", "blue", nil); err != nil {
-		t.Fatalf("SpawnTeammate: %v", err)
-	}
-	if _, called := rec.get(); called {
-		t.Fatal("negative teammate_early_compact_ratio must disable the early trigger (no SetEarlyCompactRatio call)")
+			if _, err := m.SpawnTeammate(team.ID, "worker", "blue", nil); err != nil {
+				t.Fatalf("SpawnTeammate: %v", err)
+			}
+			if _, called := rec.get(); called {
+				t.Fatalf("teammate_early_compact_ratio %v must disable the early trigger (no SetEarlyCompactRatio call)", ratio)
+			}
+		})
 	}
 }
 
