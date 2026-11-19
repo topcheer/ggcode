@@ -29,3 +29,17 @@
 
 team_restore 重建 teammate 的 provider：预期=持久化团队结构、**活解析模型**（factory getter 现取）。实测回填：
 > [E2E 待填：____]
+
+## 追记（E2E 实测发现·#5830 follow-up P1）
+
+**exec 重启死锁**：restart 走 exec（PID 不变）后 bootID 更新，owner lease 判定序 owner_lease.go:207-210 同 host PID signal-0 权威优先——旧 lease 持有者=自己 PID→判 aliveForeign→RestoreTeam 永拒（心跳 5min 兜底被 PID 探针短路）。修法：alive() 中 `l.PID == os.Getpid()` 时视为 dead（自己的 exec 后代），或 lease 增进程启动时间戳防复用。E2E 绕行=清 owner.json 走 legacy 死继。
+
+## 4.5 provider 语义回填（E2E 实证 2026-11-20 01:10）
+
+teammate 恢复（RestoreTeam）= **fresh agent + factory getter 现取**：恢复时经 providerGetter 构造新 Agent——即 teammate 在"恢复瞬间"取当前主模型，恢复后钉死该值（与 spawn 同语义）。含义：分时切换对已恢复席同样不生效（钉死面与 spawn 一致）；但重启+恢复=天然换模窗口（恢复时现取）。修 teammate 钉死（getter 动态化）时恢复路径同修。
+
+## E2E 终版结论（四轮实证）
+
+- 跨重启持久化全链闭环 ✓：五席恢复（ID 钉死）/板 11 任务回/manifest sessionFile 回写/journal 同文件续写（21→29 行=回放挂载）
+- 途中修两缺陷已 commit：①restore 旧 mf 覆盖回写擦 sessionFile（52769ecf）②upsert 漏 lastResultSummary
+- 已立案未修：exec 重启死锁（owner_lease.go:207 PID 探针权威优先+bootID 变=活拒；修法=PID==os.Getpid() 视死或 lease 加启动时间戳）
