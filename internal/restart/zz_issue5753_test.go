@@ -96,6 +96,10 @@ func TestIssue5753ArmRecordRoundTrip(t *testing.T) {
 		loaded.ExecStage != want.ExecStage || loaded.ExecError != want.ExecError {
 		t.Errorf("round-trip mismatch: got %+v want %+v", loaded, want)
 	}
+	// #5809: the arming process's runtime identity must round-trip too.
+	if loaded.RunningRevision != want.RunningRevision || loaded.ArmedNumGC != want.ArmedNumGC {
+		t.Errorf("running-identity round-trip mismatch: got %+v want %+v", loaded, want)
+	}
 
 	ClearArmRecord("test")
 	if _, ok := LoadArmRecord(); ok {
@@ -115,7 +119,7 @@ func TestIssue5753NudgeAlarmOnOldImage(t *testing.T) {
 		ArmedAt:    time.Now().Add(-15 * time.Second),
 		PID:        31828,
 	}
-	notice, verified := armOutcomeFor(rec, "411da6abf9e0", false, time.Now())
+	notice, verified := armOutcomeFor(rec, runningImage{Revision: "411da6abf9e0"}, time.Now())
 	if verified {
 		t.Fatal("old-image notice must not be verified")
 	}
@@ -127,22 +131,26 @@ func TestIssue5753NudgeAlarmOnOldImage(t *testing.T) {
 
 	rec.ExecStage = "arm-delivery"
 	rec.ExecError = "armRestartMsg undeliverable: no live TUI program"
-	notice, _ = armOutcomeFor(rec, "411da6abf9e0", false, time.Now())
+	notice, _ = armOutcomeFor(rec, runningImage{Revision: "411da6abf9e0"}, time.Now())
 	if !strings.Contains(notice, "arm-delivery") || !strings.Contains(notice, "no live TUI program") {
 		t.Errorf("alarm must surface the recorded exec failure: %s", notice)
 	}
 }
 
 func TestIssue5753NudgeVerifiedOnNewImage(t *testing.T) {
+	// #5809: a revision match only verifies when the running revision
+	// DIFFERS from what the arming process was executing at arm time —
+	// that difference is the runtime evidence that the image changed.
 	rec := ArmRecord{
-		TargetPath: "/opt/ggcode/bin/ggcode",
-		Revision:   "145acc13c7c6",
-		ArmedAt:    time.Now().Add(-12 * time.Second),
-		PID:        31828,
+		TargetPath:      "/opt/ggcode/bin/ggcode",
+		Revision:        "145acc13c7c6",
+		RunningRevision: "411da6abf9e0",
+		ArmedAt:         time.Now().Add(-12 * time.Second),
+		PID:             31828,
 	}
-	notice, verified := armOutcomeFor(rec, "145acc13c7c6", false, time.Now())
+	notice, verified := armOutcomeFor(rec, runningImage{Revision: "145acc13c7c6"}, time.Now())
 	if !verified {
-		t.Fatalf("matching revision must verify: %s", notice)
+		t.Fatalf("target revision running and arming revision superseded must verify: %s", notice)
 	}
 	if !strings.Contains(notice, "restart verified") || !strings.Contains(notice, "145acc13c7c6") {
 		t.Errorf("verified notice shape: %s", notice)
@@ -159,17 +167,20 @@ func TestIssue5753UnstampedBuildIsExplicitlyUnverified(t *testing.T) {
 		ArmedAt:    time.Now().Add(-20 * time.Second),
 		PID:        42,
 	}
-	notice, verified := armOutcomeFor(rec, "", false, time.Now())
+	notice, verified := armOutcomeFor(rec, runningImage{}, time.Now())
 	if verified {
 		t.Fatal("unstamped build must not verify by revision")
 	}
-	for _, want := range []string{"could not be verified", "abcdef012345", "Do NOT treat the restart as done"} {
+	// #5809: the soft "could not be verified" note was upgraded to the
+	// loud alarm (with the sha and the correct verification signals) —
+	// soft notes got lost while seats served the old image for days.
+	for _, want := range []string{"ARMED-BUT-NOT-EXECUTED", "abcdef012345", "numGC"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("unverified notice missing %q: %s", want, notice)
 		}
 	}
 	// But a startup intent banner that matched is independent evidence.
-	if _, verified := armOutcomeFor(rec, "", true, time.Now()); !verified {
+	if _, verified := armOutcomeFor(rec, runningImage{IntentVerified: true}, time.Now()); !verified {
 		t.Error("startup intent match must verify unstamped builds")
 	}
 }
@@ -182,21 +193,24 @@ func TestIssue5753ArmOutcomeNoticeClearsOnVerifyAndExpiry(t *testing.T) {
 		t.Errorf("no record must produce empty notice, got %q", notice)
 	}
 
-	// Own record with matching revision (simulate via the running test
-	// binary when it is vcs-stamped; otherwise exercise expiry below).
-	rec, err := WriteArmRecord(issue5753TargetFile(t), "verify-clear")
-	if err != nil {
+	// #5809: a record written by THIS still-running process carries no
+	// runtime evidence of an exec (same running revision, numGC monotonic
+	// since the arm) and must NOT self-verify at nudge time — it alarms and
+	// the record stays for the deadline/startup surfaces to keep pressing.
+	if _, err := WriteArmRecord(issue5753TargetFile(t), "verify-clear"); err != nil {
 		t.Fatal(err)
 	}
-	if rev := SelfRevision(); rev != "" && rec.Revision == rev {
-		notice, verified := ArmOutcomeNotice(time.Now())
-		if !verified || !strings.Contains(notice, "restart verified") {
-			t.Errorf("expected verified notice, got %q", notice)
-		}
-		if _, ok := LoadArmRecord(); ok {
-			t.Error("verified record must be cleared")
-		}
+	notice, verified := ArmOutcomeNotice(time.Now())
+	if verified {
+		t.Fatalf("same-process record must not self-verify: %q", notice)
 	}
+	if !strings.Contains(notice, "ARMED-BUT-NOT-EXECUTED") {
+		t.Errorf("expected alarm notice, got %q", notice)
+	}
+	if _, ok := LoadArmRecord(); !ok {
+		t.Error("unverified record must be kept")
+	}
+	ClearArmRecord("test reset")
 
 	// Expired record: cleared silently, no immortal alarms.
 	rec2, err := WriteArmRecord(issue5753TargetFile(t), "expired")
@@ -232,12 +246,24 @@ func TestIssue5753RecordExecFailureAnnotates(t *testing.T) {
 		t.Error("ExecFailedAt must be stamped")
 	}
 
-	// Without an outstanding record the call is a no-op (slash-command
-	// restarts before ExecRestart stamps its own record).
+	// #5809 hardening: without an outstanding record the annotation now
+	// RECONSTRUCTS one — the old no-op dropped the failure footprint
+	// entirely (the 33495 second-order loss: arms whose record never
+	// persisted left the alarms nothing to fire on).
 	ClearArmRecord("test")
-	RecordExecFailure("exec", errors.New("x"))
-	if _, ok := LoadArmRecord(); ok {
-		t.Error("annotation must not resurrect a cleared record")
+	RecordExecFailure("exec", errors.New("fork/exec /bin/ggcode: permission denied"))
+	rec2, ok := LoadArmRecord()
+	if !ok {
+		t.Fatal("exec-failure annotation must reconstruct a missing record (#5809)")
+	}
+	if rec2.ExecStage != "exec" || !strings.Contains(rec2.ExecError, "permission denied") {
+		t.Errorf("reconstructed annotation missing: %+v", rec2)
+	}
+	if rec2.PID != os.Getpid() || rec2.TargetPath == "" || rec2.ExecFailedAt.IsZero() {
+		t.Errorf("reconstructed record incomplete: %+v", rec2)
+	}
+	if !strings.Contains(rec2.Reason, "#5809") {
+		t.Errorf("reconstructed record must mark its origin: %+v", rec2)
 	}
 }
 
@@ -275,10 +301,12 @@ func TestIssue5753StaleArmStartupNotice(t *testing.T) {
 		t.Error("reported record must be consumed")
 	}
 
-	// Alive foreign pid (another seat mid-handshake): skipped, record kept.
+	// Alive foreign pid (another seat mid-handshake, still inside the
+	// #5809 exec window): skipped, record kept.
 	rec2 := rec
 	rec2.PID = os.Getppid()
 	rec2.ExecError = ""
+	rec2.ArmedAt = time.Now().Add(-5 * time.Second)
 	if err := saveArmRecord(rec2); err != nil {
 		t.Fatal(err)
 	}

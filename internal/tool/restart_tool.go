@@ -192,7 +192,16 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 		// the exec target's embedded vcs.revision. Arm-time readers verified
 		// against the wrong one: current is the OLD process by definition,
 		// and the target side was previously path-only.
-		okNote += fmt.Sprintf(" Exec target: %s (current revision %s, target revision %s). After restart the startup banner verifies the running image.", p, t.Requester.ExecTargetRevision(), fileRevision(execPath))
+		// #5809: name the correct post-restart verification signals. The
+		// disk target revision is CONTEXT, not an anchor - the apply-at-exec
+		// update flow replaces the target bytes after this report, and a
+		// disk sync at any moment changes it without proving anything about
+		// the running process. The anchors are this report's CURRENT
+		// revision (what the old process runs right now; a landed
+		// image-change restart must differ from it) and a fresh memstats
+		// line (numGC resets on exec). Process start time is NOT a signal:
+		// it does not change across execve.
+		okNote += fmt.Sprintf(" Exec target: %s (current revision %s, target revision %s on disk at arm time - a pending binary update may replace it at exec time). After the restart, verify via the startup banner, the new process's current revision vs this report's current revision, and a fresh memstats line (numGC resets on exec); process start time is NOT a verification signal (unchanged across execve).", p, t.Requester.ExecTargetRevision(), fileRevision(execPath))
 	}
 	return Result{Content: okNote + handshakeNote + nudgeNote, HaltAgent: true}, nil
 }
