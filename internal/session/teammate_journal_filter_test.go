@@ -1,8 +1,10 @@
 package session
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -10,8 +12,16 @@ import (
 // Persistent teams (#5829): teammate journals (IDs carrying the "-tm-"
 // infix) must never surface in user session listers or latest-resume
 // selection.
+//
+// The store dir uses a retrying cleanup instead of t.TempDir's single-shot
+// RemoveAll: on GH Actions' overlay filesystem, RemoveAll occasionally
+// races with the kernel's directory listing (stale readdir → "directory
+// not empty" on an already-removed entry), which fails the test even
+// though every assertion passed (observed on main CI runs 44622469553).
+// The store itself is fully synchronous (no background writers), so a
+// bounded retry is strictly a filesystem-quirk accommodation.
 func TestTeammateJournalsFilteredFromListers(t *testing.T) {
-	dir := t.TempDir()
+	dir := mustTempDirWithRetryCleanup(t)
 	store, err := NewJSONLStore(dir)
 	if err != nil {
 		t.Fatalf("store: %v", err)
@@ -62,4 +72,26 @@ func TestTeammateJournalsFilteredFromListers(t *testing.T) {
 
 func testTextMessage(role, text string) provider.Message {
 	return provider.Message{Role: role, Content: []provider.ContentBlock{{Type: "text", Text: text}}}
+}
+
+// mustTempDirWithRetryCleanup returns a fresh temp dir whose t.Cleanup
+// retries RemoveAll with a short backoff (3 attempts, 100ms apart) to
+// absorb overlayfs stale-readdir races on CI runners.
+func mustTempDirWithRetryCleanup(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "tmjournal-")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() {
+		for i := 0; i < 3; i++ {
+			if err := os.RemoveAll(dir); err == nil {
+				return
+			} else if i == 2 {
+				t.Logf("RemoveAll(%s) still failing after retries: %v", dir, err)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
+	return dir
 }
