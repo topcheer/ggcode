@@ -277,6 +277,7 @@ swarm:
 | `max_teammates_per_team` | int | 16 | Maximum teammates allowed in a single team |
 | `teammate_timeout` | duration | 0 (none) | Maximum duration for a single teammate task |
 | `inbox_size` | int | 32 | Task inbox buffer size per teammate |
+| `teammate_early_compact_ratio` | float | 0.70 | Context-window fraction at which teammate agents proactively pre-compact; 0 disables (mirrors the sub-agent runner) |
 
 ## Knight
 
