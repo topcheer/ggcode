@@ -342,6 +342,13 @@ func mergeSwarmConfig(global, instance *SwarmConfig, tracked map[string]bool) {
 		global.PollInterval = instance.PollInterval
 		tracked["swarm"] = true
 	}
+	// Follows the established global-zero gate: because DefaultConfig
+	// presets 0.70, an instance value only applies when the global config
+	// explicitly disabled the knob (0), e.g. re-enabling per workspace.
+	if global.TeammateEarlyCompactRatio == 0 && instance.TeammateEarlyCompactRatio != 0 {
+		global.TeammateEarlyCompactRatio = instance.TeammateEarlyCompactRatio
+		tracked["swarm"] = true
+	}
 }
 
 func mergeHookConfig(global, instance *hooks.HookConfig, tracked map[string]bool) {

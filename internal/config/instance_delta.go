@@ -328,6 +328,9 @@ func (*Config) diffSwarm(current, global *SwarmConfig, delta map[string]interfac
 	if current.PollInterval != global.PollInterval {
 		swDelta["poll_interval"] = current.PollInterval.String()
 	}
+	if current.TeammateEarlyCompactRatio != global.TeammateEarlyCompactRatio {
+		swDelta["teammate_early_compact_ratio"] = current.TeammateEarlyCompactRatio
+	}
 	if len(swDelta) > 0 {
 		delta["swarm"] = swDelta
 	}
