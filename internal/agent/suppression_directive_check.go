@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 const maxSuppressWarnings = 5
@@ -222,7 +224,7 @@ func isBareSuppression(line, matched string, requiresRule bool) bool {
 
 	if matched == "# noqa" {
 
-		return !regexp.MustCompile(`^[A-Z0-9_:,]+$`).MatchString(rest)
+		return !rexcache.Must(`^[A-Z0-9_:,]+$`).MatchString(rest)
 	}
 
 	if strings.Contains(matched, "nolint") {

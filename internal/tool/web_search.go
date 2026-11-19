@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/rexcache"
 	"github.com/topcheer/ggcode/internal/util"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -236,11 +236,11 @@ type searchResult struct {
 
 func parseDDGResults(htmlBody string, max int) []searchResult {
 
-	reResult := regexp.MustCompile(`(?is)<a[^>]+class="result__a"[^>]*>(.*?)</a>`)
-	reSnippet := regexp.MustCompile(`(?is)<a[^>]+class="result__snippet"[^>]*>(.*?)</a>`)
-	reHref := regexp.MustCompile(`href="([^"]+)"`)
+	reResult := rexcache.Must(`(?is)<a[^>]+class="result__a"[^>]*>(.*?)</a>`)
+	reSnippet := rexcache.Must(`(?is)<a[^>]+class="result__snippet"[^>]*>(.*?)</a>`)
+	reHref := rexcache.Must(`href="([^"]+)"`)
 
-	resultBlocks := regexp.MustCompile(`(?is)<div[^>]+class="result[\s"][^>]*>`)
+	resultBlocks := rexcache.Must(`(?is)<div[^>]+class="result[\s"][^>]*>`)
 	indices := resultBlocks.FindAllStringIndex(htmlBody, max)
 
 	var results []searchResult

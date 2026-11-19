@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 var conventionalCommitPattern = regexp.MustCompile(`^(\w+)(\([^)]+\))?!?: `)
@@ -81,7 +83,7 @@ func inferCommitType(msg string) string {
 }
 
 func msgWordBoundary(s, word string) bool {
-	return regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`).MatchString(s)
+	return rexcache.Must(`\b` + regexp.QuoteMeta(word) + `\b`).MatchString(s)
 }
 
 func msgContainsAny(s string, subs ...string) bool {

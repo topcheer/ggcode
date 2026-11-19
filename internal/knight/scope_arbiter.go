@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 func scopeDowngradeReason(projDir, content string) string {
@@ -24,7 +26,7 @@ func scopeDowngradeReason(projDir, content string) string {
 	base := strings.ToLower(strings.TrimSpace(filepath.Base(projDir)))
 	if base != "" && base != "/" && base != "." && len(base) >= 3 {
 		if !genericProjectBasename(base) {
-			pattern := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(base) + `\b`)
+			pattern := rexcache.Must(`(?i)\b` + regexp.QuoteMeta(base) + `\b`)
 			if pattern.MatchString(lower) {
 				return "skill body references project basename " + base
 			}
@@ -55,10 +57,10 @@ func scopeDowngradeReason(projDir, content string) string {
 		}
 	}
 
-	if regexp.MustCompile("(?m)(?:^|[\\s`'\"(])\\./[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+").FindString(body) != "" {
+	if rexcache.Must("(?m)(?:^|[\\s`'\"(])\\./[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+").FindString(body) != "" {
 		return "skill body invokes a project-local script"
 	}
-	if regexp.MustCompile("(?m)(?:^|[\\s`'\"(])\\./[A-Za-z0-9._-]+\\.(?:sh|py|js|ts|rb|pl)\\b").FindString(body) != "" {
+	if rexcache.Must("(?m)(?:^|[\\s`'\"(])\\./[A-Za-z0-9._-]+\\.(?:sh|py|js|ts|rb|pl)\\b").FindString(body) != "" {
 		return "skill body invokes a project-local script"
 	}
 

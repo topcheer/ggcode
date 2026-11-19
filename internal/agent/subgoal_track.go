@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 const (
@@ -89,7 +90,7 @@ var sgStopWords = map[string]bool{
 
 func extractSubgoalKeywords(desc string) []string {
 
-	tokens := regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9_-]{2,}`).FindAllString(desc, -1)
+	tokens := rexcache.Must(`[a-zA-Z][a-zA-Z0-9_-]{2,}`).FindAllString(desc, -1)
 	var kws []string
 	seen := make(map[string]bool)
 	for _, t := range tokens {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 type DangerLevel int
@@ -57,7 +58,24 @@ type dangerPattern struct {
 // unanchored (agent-layer parity fix was #5456/#5460).
 const rmCmdAnchor = `(?:^|[|;&\n` + "`" + `("']\s*|(?:sudo|doas|xargs|nohup|env|nice)(?:\s+(?:-{1,2}[A-Za-z][\w-]*(?:=[^\s;|&` + "`" + `]*|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')?|[A-Za-z_][A-Za-z0-9_]*=[^\s;|&` + "`" + `]*|-\d|\d+))*\s+)`
 
+// dangerousPatternsOnce compiles the ~70-entry deny-list exactly once per
+// process (#5831): NewDangerousDetector used to recompile every pattern on
+// each construction, and long-lived owners (AllowedRiskLedger, verify,
+// config policy) plus per-call owners kept regexp/syntax.(*compiler).inst
+// at the top of the fleet heap profiles.
+var (
+	dangerousPatternsOnce sync.Once
+	sharedDangerPatterns  []dangerPattern
+)
+
 func NewDangerousDetector() *DangerousDetector {
+	dangerousPatternsOnce.Do(func() {
+		sharedDangerPatterns = buildDangerousDetector().patterns
+	})
+	return &DangerousDetector{patterns: sharedDangerPatterns}
+}
+
+func buildDangerousDetector() *DangerousDetector {
 	d := &DangerousDetector{}
 	d.patterns = []dangerPattern{
 

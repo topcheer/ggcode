@@ -6,6 +6,8 @@ import (
 	"go/token"
 	"regexp"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 const hardcodedOutputMaxWarnings = 2
@@ -263,13 +265,13 @@ func isLikelyConfigGetter(name string) bool {
 func checkHardcodedOutputPython(src string) []string {
 	var warnings []string
 
-	dictRe := regexp.MustCompile(`(?s)\{([^{}]*?)\}`)
+	dictRe := rexcache.Must(`(?s)\{([^{}]*?)\}`)
 	for _, m := range dictRe.FindAllStringSubmatch(src, -1) {
 		if len(m) < 2 {
 			continue
 		}
 
-		pairRe := regexp.MustCompile(`("[^"]*"|'[^']*')\s*:\s*("[^"]*"|'[^']*'|[^,}]+)`)
+		pairRe := rexcache.Must(`("[^"]*"|'[^']*')\s*:\s*("[^"]*"|'[^']*'|[^,}]+)`)
 		entries := len(pairRe.FindAllString(m[1], -1))
 		if entries >= minHardcodedEntries {
 			if allStringLiterals(m[1]) {

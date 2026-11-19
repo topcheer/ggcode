@@ -6,6 +6,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 func (t MultiEditFile) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit, error) {
@@ -91,7 +93,7 @@ func (t BatchReplace) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit, 
 	}
 	var re *regexp.Regexp
 	if args.IsRegex {
-		compiled, err := regexp.Compile(args.Pattern)
+		compiled, err := rexcache.Compile(args.Pattern)
 		if err != nil {
 
 			return nil, err

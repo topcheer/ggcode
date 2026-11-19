@@ -9,11 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/topcheer/ggcode/internal/rexcache"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -490,7 +491,7 @@ func getChromeVersion(chromePath string) int {
 		return 0
 	}
 
-	re := regexp.MustCompile(`(\d+)\.`)
+	re := rexcache.Must(`(\d+)\.`)
 	match := re.FindStringSubmatch(string(output))
 	if len(match) < 2 {
 		return 0

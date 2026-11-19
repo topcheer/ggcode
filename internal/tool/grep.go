@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/rexcache"
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
@@ -209,7 +210,7 @@ func (t Grep) Execute(ctx context.Context, input json.RawMessage) (Result, error
 	if args.Multiline {
 		flags += "(?s)"
 	}
-	re, err := regexp.Compile(flags + args.Pattern)
+	re, err := rexcache.Compile(flags + args.Pattern)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid regex: %v", err)}, nil
 	}

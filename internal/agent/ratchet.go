@@ -19,6 +19,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 type Rule struct {
@@ -93,7 +94,7 @@ func (rs *RuleStore) compilePattern(pattern string) (*regexp.Regexp, error) {
 	if re, ok := rs.regexCache[pattern]; ok {
 		return re, nil
 	}
-	re, err := regexp.Compile(pattern)
+	re, err := rexcache.Compile(pattern)
 	if err != nil {
 		return nil, err
 	}

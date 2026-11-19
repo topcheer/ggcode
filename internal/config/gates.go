@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 // DefaultMergeGateCommands lists the lifecycle commands the merge gate
@@ -98,7 +100,7 @@ func (m MergeGateConfig) CompiledHoldPatterns() ([]*regexp.Regexp, error) {
 	}
 	out := make([]*regexp.Regexp, 0, len(m.HoldPatterns))
 	for i, p := range m.HoldPatterns {
-		re, err := regexp.Compile(p)
+		re, err := rexcache.Compile(p)
 		if err != nil {
 			return nil, fmt.Errorf("gates.merge.hold_patterns[%d] %q: %w", i, p, err)
 		}

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 type CommandRuleSet struct {
@@ -250,7 +251,7 @@ func compileCommandPattern(pattern string) (*regexp.Regexp, error) {
 	}
 	sb.WriteString(`$`)
 
-	return regexp.Compile(sb.String())
+	return rexcache.Compile(sb.String())
 }
 
 var ErrEmptyPattern = &patternError{"command pattern is empty"}
