@@ -69,10 +69,13 @@ func TestIssue4436DelegatePanicCompletesSubAgent(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if sa, ok := mgr.Get(id); ok {
-			if sa.Status != subagent.StatusRunning && sa.Status != subagent.StatusPending {
+		// #5825: poll via SnapshotByID (lock-safe). Reading sa.Status off the
+		// raw *SubAgent races Manager.SetCancel's write under sa.mu (full-package
+		// -race run).
+		if snap, ok := mgr.SnapshotByID(id); ok {
+			if snap.Status != subagent.StatusRunning && snap.Status != subagent.StatusPending {
 
-				if sa.Status == subagent.StatusFailed || sa.Status == subagent.StatusCompleted || sa.Status == subagent.StatusCancelled {
+				if snap.Status == subagent.StatusFailed || snap.Status == subagent.StatusCompleted || snap.Status == subagent.StatusCancelled {
 					return
 				}
 			}

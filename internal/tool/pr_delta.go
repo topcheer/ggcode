@@ -246,9 +246,14 @@ func patchIDsForRange(ctx context.Context, dir, revRange string) (map[string]str
 	patchID.Stdin = pipeR
 	var out bytes.Buffer
 	patchID.Stdout = &out
-	var errBuf bytes.Buffer
-	revList.Stderr = &errBuf
-	patchID.Stderr = &errBuf
+	// #5825: each Cmd.Stderr gets its OWN buffer. os/exec spawns one
+	// writer goroutine per command's stderr descriptor; sharing one
+	// bytes.Buffer between the two concurrently-running commands is a
+	// data race on the buffer's internals (caught by the full-package
+	// -race run).
+	var revListErrBuf, patchIDErrBuf bytes.Buffer
+	revList.Stderr = &revListErrBuf
+	patchID.Stderr = &patchIDErrBuf
 
 	if err := revList.Start(); err != nil {
 		return nil, fmt.Errorf("git rev-list %s failed to start: %v", revRange, err)
@@ -263,10 +268,10 @@ func patchIDsForRange(ctx context.Context, dir, revRange string) (map[string]str
 	pipeR.Close()
 
 	if revListErr != nil {
-		return nil, fmt.Errorf("git rev-list %s failed: %v", revRange, revListErr)
+		return nil, fmt.Errorf("git rev-list %s failed: %v (stderr: %s)", revRange, revListErr, strings.TrimSpace(revListErrBuf.String()))
 	}
 	if patchIDErr != nil {
-		return nil, fmt.Errorf("git patch-id failed: %v", patchIDErr)
+		return nil, fmt.Errorf("git patch-id failed: %v (stderr: %s)", patchIDErr, strings.TrimSpace(patchIDErrBuf.String()))
 	}
 
 	ids := map[string]string{}
