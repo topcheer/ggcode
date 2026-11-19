@@ -93,7 +93,13 @@ func (m *Manager) persistTeamBoardNow(teamID string, tm *task.Manager) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// #5829: every persist refreshes the owner lease heartbeat so another
+	// instance sees this owner as alive.
+	m.refreshOwnerHeartbeat(teamID)
+	return nil
 }
 
 func (m *Manager) persistTeamBoardAsync(teamID string, tm *task.Manager) {
@@ -107,6 +113,13 @@ func (m *Manager) persistTeamBoardAsync(teamID string, tm *task.Manager) {
 }
 
 func (m *Manager) loadTeamBoard(teamID string) *task.Manager {
+	// #5829: never silently load a board owned by a live foreign instance.
+	// The authoritative foreign-board entry path is RestoreTeam (explicit,
+	// lease-checked); this guard covers any implicit load path.
+	if v := m.checkOwnerLease(teamID); v == leaseAliveForeign {
+		debug.Log("swarm", "WARN board load for %s refused: owner lease alive (foreign instance is running); starting empty", teamID)
+		return task.NewManager()
+	}
 	tm := m.loadTeamBoardRaw(teamID)
 
 	rolled := 0

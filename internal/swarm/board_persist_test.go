@@ -64,9 +64,16 @@ func TestBoardPersistenceRoundTrip(t *testing.T) {
 		t.Fatalf("board snapshot never landed at %s", boardFile)
 	}
 
+	// Restart: a fresh manager never inherits a foreign board implicitly
+	// (#5829) - simulate the dead owner of a restarted host and restore.
 	m2 := newBoardTestManager(t)
-	team2 := m2.CreateTeam("persist-team", "leader-2")
-	_ = team2
+	stale := ownerLease{BootID: "restarted-from", PID: 4194304, Hostname: "restarted-host", Heartbeat: time.Now().Add(-2 * ownerLeaseTTL)}
+	if err := writeOwnerLeaseFile(m2.ownerLeasePath(team.ID), &stale); err != nil {
+		t.Fatalf("age lease: %v", err)
+	}
+	if _, err := m2.RestoreTeam(team.ID); err != nil {
+		t.Fatalf("RestoreTeam(restart): %v", err)
+	}
 	restored, err := m2.EnsureTaskManager(team.ID)
 	if err != nil {
 		t.Fatalf("EnsureTaskManager(restart): %v", err)

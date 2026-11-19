@@ -235,12 +235,15 @@ func NewSwarmManager(
 	toolBuilder func([]string) interface{},
 ) *swarm.Manager {
 	mgr := swarm.NewManager(cfg, prov, factory, toolBuilder)
+	// Persistent teams (#5829): enable teammate session journals.
+	mgr.JournalsEnabled = true
 	if onUsage != nil {
 		mgr.SetUsageHandler(onUsage)
 	}
 	if registry != nil {
 		_ = registry.Register(tool.TeamCreateTool{Manager: mgr})
 		_ = registry.Register(tool.TeamDeleteTool{Manager: mgr})
+		_ = registry.Register(tool.TeamRestoreTool{Manager: mgr})
 		_ = registry.Register(tool.TeammateSpawnTool{Manager: mgr})
 		_ = registry.Register(tool.TeammateListTool{Manager: mgr})
 		_ = registry.Register(tool.TeammateShutdownTool{Manager: mgr})

@@ -3,6 +3,7 @@ package swarm
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/task"
 )
 
@@ -45,7 +47,18 @@ type Manager struct {
 	// (#5540). Empty (production default) uses util.ConfigDir(); tests set
 	// it to a t.TempDir() so deterministic team IDs cannot collide on the
 	// shared path across tests and packages.
-	BoardRoot      string
+	BoardRoot string
+	// SessionRoot overrides the directory for teammate session journals
+	// (persistent teams P1). Empty (production default) uses the user's
+	// sessions dir; tests point it at a t.TempDir().
+	SessionRoot string
+
+	// JournalsEnabled gates teammate journal persistence (P1). Production
+	// wiring (CLI/TUI + headless runtime) sets it to true; unit tests that
+	// do not exercise persistence leave it false so they never touch the
+	// user's real sessions directory.
+	JournalsEnabled bool
+
 	teams          map[string]*Team
 	provider       provider.Provider
 	providerGetter func() provider.Provider
@@ -79,6 +92,15 @@ type Manager struct {
 	streamRsnBuf    map[string]*strings.Builder
 	streamBatchDone chan struct{}
 	shutdownOnce    sync.Once
+
+	// Persistent teams (#5829): bootID/hostname identify this instance in
+	// team-dir owner leases; journalStoreCache caches the journal session
+	// store (journalMu-guarded); manifestMu serializes manifest writes.
+	bootID            string
+	hostname          string
+	journalMu         sync.Mutex
+	journalStoreCache *session.JSONLStore
+	manifestMu        sync.Mutex
 }
 
 func NewManager(cfg config.SwarmConfig, prov provider.Provider, factory AgentFactory, builder ToolBuilder) *Manager {
@@ -105,6 +127,7 @@ func newManager(cfg config.SwarmConfig, prov provider.Provider, getter func() pr
 	// teammate_early_compact_ratio: 0 can disable the early trigger
 	// (a manager-side zero-default would make that indistinguishable).
 	rootCtx, rootCancel := context.WithCancel(context.Background())
+	hostname, _ := os.Hostname()
 	return &Manager{
 		teams:           make(map[string]*Team),
 		provider:        prov,
@@ -115,6 +138,8 @@ func newManager(cfg config.SwarmConfig, prov provider.Provider, getter func() pr
 		results:         make(map[string]string),
 		rootCtx:         rootCtx,
 		rootCancel:      rootCancel,
+		bootID:          randomHex(8),
+		hostname:        hostname,
 		streamTextBuf:   make(map[string]*strings.Builder),
 		streamRsnBuf:    make(map[string]*strings.Builder),
 		streamBatchDone: make(chan struct{}),
@@ -161,16 +186,33 @@ func (m *Manager) Shutdown() {
 		}
 		team.mu.Unlock()
 	}
+	// Persistent teams P1: graceful shutdown flushes a clean journal footer
+	// for every teammate so RestoreTeam can distinguish clean vs crashed.
+	// (Takes no Manager locks; journals use their own store mutex.)
+	for _, team := range m.teams {
+		for _, tm := range team.listTeammates() {
+			m.flushTeammateFooter(tm, "clean")
+		}
+	}
 	if m.rootCancel != nil {
 		m.rootCancel()
 	}
+
+	// Drain any in-flight manifest write: a stamp that already passed the
+	// rootCtx liveness gate must finish (or be blocked out) before callers
+	// proceed to workspace cleanup, or it could recreate a team directory
+	// mid-removal. manifestMu is never held while acquiring m.mu, so this
+	// cannot deadlock against the lock held here.
+	m.manifestMu.Lock()
+	m.manifestMu.Unlock()
 }
 
 func (m *Manager) CreateTeam(name, leaderID string) TeamSnapshot {
-	m.mu.Lock()
-	m.nextTeamID++
-	id := fmt.Sprintf("team-%d", m.nextTeamID)
-	m.mu.Unlock()
+	// #5829: random collision-checked team ID (team-<6hex>). Display Name
+	// stays human-readable. A fresh CreateTeam NEVER lands on an existing
+	// directory — inheriting a foreign (even dead) board is an explicit
+	// RestoreTeam decision, never an accident.
+	id := m.newTeamID()
 
 	team := &Team{
 		ID:        id,
@@ -184,6 +226,21 @@ func (m *Manager) CreateTeam(name, leaderID string) TeamSnapshot {
 	m.mu.Lock()
 	m.teams[id] = team
 	m.mu.Unlock()
+
+	// P0: own the directory from birth. P2: persist the manifest so the
+	// team is restorable. Failures degrade to in-memory-only (WARN).
+	if err := m.stampOwnerLease(id); err != nil {
+		debug.Log("swarm", "owner lease stamp for %s failed: %v (team runs in-memory only)", id, err)
+	}
+	if err := m.writeManifest(id, &TeamManifest{
+		TeamID:    id,
+		Name:      name,
+		LeaderID:  leaderID,
+		CreatedAt: team.CreatedAt,
+		Teammates: []ManifestTeammate{},
+	}); err != nil {
+		debug.Log("swarm", "manifest write for %s failed: %v", id, err)
+	}
 
 	m.emit(Event{Type: "team_created", TeamID: id, Timestamp: time.Now()})
 	return team.snapshot()
@@ -253,6 +310,16 @@ func (m *Manager) DeleteTeam(teamID string) error {
 		delete(m.teams, teamID)
 	}
 	m.mu.Unlock()
+
+	// Persistent teams: flush clean footers, then remove the persisted team
+	// directory (board + manifest + owner lease) — a deleted team is not
+	// restorable (#5829).
+	for _, tm := range team.listTeammates() {
+		m.flushTeammateFooter(tm, "clean")
+	}
+	if err := os.RemoveAll(m.teamDir(teamID)); err != nil {
+		debug.Log("swarm", "team dir removal for %s failed: %v", teamID, err)
+	}
 
 	m.emit(Event{Type: "team_deleted", TeamID: teamID, Timestamp: time.Now()})
 	return nil
@@ -424,9 +491,60 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	team.Teammates[tmID] = tm
 	team.mu.Unlock()
 
+	// Persistent teams P1: allocate the journal session before the agent
+	// starts so every turn is written through from the first one.
+	var journalSes *session.Session
+	if m.JournalsEnabled {
+		journalSes = m.allocateTeammateJournal(teamID, name)
+	}
+	tm.mu.Lock()
+	tm.journal = journalSes
+	tm.mu.Unlock()
+
+	agent := m.constructTeammateAgent(team, tm)
+
+	// P1: wire the journaler (same writer surface as the main loop).
+	if journalSes != nil {
+		if store, err := m.journalStore(); err == nil {
+			attachTeammateJournaler(agent, store, journalSes)
+		}
+	}
+
+	safego.Go("swarm.teammateLoop", func() {
+		runTeammateLoop(ctx, tm, team, agent, m, m.emit, m.cfg.TeammateTimeout)
+	})
+
+	m.emit(Event{
+		Type:         "teammate_spawned",
+		TeamID:       teamID,
+		TeammateID:   tmID,
+		TeammateName: name,
+		Timestamp:    time.Now(),
+	})
+
+	// P2: record the member (with its journal) in the persisted manifest.
+	if err := m.upsertManifestTeammate(teamID, ManifestTeammate{
+		ID:           tmID,
+		Name:         name,
+		Color:        color,
+		AllowedTools: sortedToolsCopy(allowedTools),
+		SessionFile:  teammateJournalID(tm),
+		LastActiveAt: time.Now(),
+	}); err != nil {
+		debug.Log("swarm", "manifest upsert for %s/%s failed: %v", teamID, tmID, err)
+	}
+
+	return tm.snapshot(), nil
+}
+
+// constructTeammateAgent builds the teammate's agent runner with the shared
+// wiring (tool set, system prompt, usage handler, permission policy,
+// session id, early-compact ratio). Used by both SpawnTeammate and
+// RestoreTeam so a restored teammate behaves identically to a fresh one.
+func (m *Manager) constructTeammateAgent(team *Team, tm *Teammate) AgentRunner {
 	var toolSet interface{}
 	if m.toolBuilder != nil {
-		toolSet = m.toolBuilder(allowedTools)
+		toolSet = m.toolBuilder(tm.AllowedTools)
 	}
 
 	m.mu.Lock()
@@ -436,9 +554,9 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	m.mu.Unlock()
 	var systemPrompt string
 	if builder != nil {
-		systemPrompt = builder(name, team.Name, wd)
+		systemPrompt = builder(tm.Name, team.Name, wd)
 	} else {
-		systemPrompt = buildTeammateSystemPrompt(name, team.Name, wd)
+		systemPrompt = buildTeammateSystemPrompt(tm.Name, team.Name, wd)
 	}
 	var agent AgentRunner
 	if m.agentFactory != nil {
@@ -462,9 +580,9 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 			}
 		}
 
-		if tmID != "" {
+		if tm.ID != "" {
 			if sid, ok := agent.(interface{ SetSessionID(string) }); ok {
-				sid.SetSessionID(tmID)
+				sid.SetSessionID(tm.ID)
 			}
 		}
 
@@ -486,20 +604,7 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 			}
 		}
 	}
-
-	safego.Go("swarm.teammateLoop", func() {
-		runTeammateLoop(ctx, tm, team, agent, m, m.emit, m.cfg.TeammateTimeout)
-	})
-
-	m.emit(Event{
-		Type:         "teammate_spawned",
-		TeamID:       teamID,
-		TeammateID:   tmID,
-		TeammateName: name,
-		Timestamp:    time.Now(),
-	})
-
-	return tm.snapshot(), nil
+	return agent
 }
 
 func (m *Manager) ShutdownTeammate(teamID, tmID string) error {
@@ -524,7 +629,13 @@ func (m *Manager) ShutdownTeammate(teamID, tmID string) error {
 	tm.EndedAt = time.Now()
 	tm.mu.Unlock()
 
+	// P1: graceful per-member shutdown marker. P2: drop the member from
+	// the persisted manifest.
+	m.flushTeammateFooter(tm, "clean")
 	team.removeTeammate(tmID)
+	if err := m.removeManifestTeammate(teamID, tmID); err != nil {
+		debug.Log("swarm", "manifest member removal for %s/%s failed: %v", teamID, tmID, err)
+	}
 
 	m.emit(Event{
 		Type:       "teammate_shutdown",
@@ -773,6 +884,12 @@ func (m *Manager) emit(ev Event) {
 				m.mu.Lock()
 				m.storeResultLocked(ev.TeammateID, ev.Result)
 				m.mu.Unlock()
+
+				// P2: stamp the done-mail digest into the manifest
+				// (#5822 hook). Synchronous: the teammate loop can afford
+				// one small locked JSON write per task, and an async
+				// goroutine here raced test/workspace teardown.
+				m.stampTeammateResult(ev.TeamID, ev.TeammateID, ev.Result, time.Now())
 
 				outcome := "success"
 				if ev.IsError || ev.Error != nil {
