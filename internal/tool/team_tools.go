@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/swarm"
 )
@@ -232,7 +233,11 @@ func (t TeammateListTool) Execute(_ context.Context, input json.RawMessage) (Res
 		if tm.CurrentTask != "" {
 			task = fmt.Sprintf(" — %s", tm.CurrentTask)
 		}
-		fmt.Fprintf(&sb, "- %s [%s] %s%s\n", tm.ID, tm.Status, tm.Name, task)
+		active := ""
+		if !tm.LastActiveAt.IsZero() {
+			active = fmt.Sprintf(" (last active %s)", tm.LastActiveAt.Format(time.RFC3339))
+		}
+		fmt.Fprintf(&sb, "- %s [%s] %s%s%s\n", tm.ID, tm.Status, tm.Name, task, active)
 	}
 	return Result{Content: sb.String()}, nil
 }
@@ -350,8 +355,10 @@ func (t TeammateResultsTool) Execute(_ context.Context, input json.RawMessage) (
 	}
 
 	names := make(map[string]string)
+	lastActive := make(map[string]time.Time)
 	for _, tm := range team.Teammates {
 		names[tm.ID] = tm.Name
+		lastActive[tm.ID] = tm.LastActiveAt
 	}
 
 	ids := make([]string, 0, len(results))
@@ -367,7 +374,11 @@ func (t TeammateResultsTool) Execute(_ context.Context, input json.RawMessage) (
 		if name == "" {
 			name = id
 		}
-		fmt.Fprintf(&sb, "─── %s (%s) ───\n%s\n\n", name, id, results[id])
+		active := ""
+		if la := lastActive[id]; !la.IsZero() {
+			active = fmt.Sprintf(", last active %s", la.Format(time.RFC3339))
+		}
+		fmt.Fprintf(&sb, "─── %s (%s%s) ───\n%s\n\n", name, id, active, results[id])
 	}
 	return Result{Content: sb.String()}, nil
 }

@@ -66,6 +66,7 @@ type Teammate struct {
 	CreatedAt     time.Time
 	StartedAt     time.Time
 	EndedAt       time.Time
+	LastActiveAt  time.Time
 
 	events        []TeammateEvent
 	eventsDropped int
@@ -98,6 +99,15 @@ func (t *Teammate) setLastResult(result string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.LastResult = result
+}
+
+// touchActive stamps LastActiveAt (tm.mu-protected). Called on message-loop
+// activity (handleMessage entry/completion and task claim/completion) so
+// teammate_list / teammate_results can surface liveness.
+func (t *Teammate) touchActive() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.LastActiveAt = time.Now()
 }
 
 func (t *Teammate) appendEvent(ev TeammateEvent) {
@@ -142,6 +152,7 @@ type TeammateStatusInfo struct {
 	CurrentTask  string
 	LastResult   string
 	AllowedTools []string
+	LastActiveAt time.Time
 }
 
 func (t *Teammate) statusInfo() TeammateStatusInfo {
@@ -155,6 +166,7 @@ func (t *Teammate) statusInfo() TeammateStatusInfo {
 		CurrentTask:  t.CurrentTask,
 		LastResult:   t.LastResult,
 		AllowedTools: tools,
+		LastActiveAt: t.LastActiveAt,
 	}
 	t.mu.Unlock()
 	return info
@@ -171,6 +183,7 @@ type TeammateSnapshot struct {
 	CreatedAt     time.Time
 	StartedAt     time.Time
 	EndedAt       time.Time
+	LastActiveAt  time.Time
 	Events        []TeammateEvent
 	EventsDropped int
 }
@@ -192,6 +205,7 @@ func (t *Teammate) snapshot() TeammateSnapshot {
 		CreatedAt:     t.CreatedAt,
 		StartedAt:     t.StartedAt,
 		EndedAt:       t.EndedAt,
+		LastActiveAt:  t.LastActiveAt,
 		Events:        events,
 		EventsDropped: t.eventsDropped,
 	}
