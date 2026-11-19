@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/task"
 )
 
@@ -67,6 +68,10 @@ type Teammate struct {
 	StartedAt     time.Time
 	EndedAt       time.Time
 	LastActiveAt  time.Time
+
+	// journal is the teammate's persisted session (persistent teams P1);
+	// nil when journaling is unavailable. Guarded by mu.
+	journal *session.Session
 
 	events        []TeammateEvent
 	eventsDropped int

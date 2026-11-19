@@ -1212,6 +1212,21 @@ func (a *Agent) SetPersistHandler(fn func(msg provider.Message)) {
 	}
 }
 
+// SeedContextMessages replays persisted history into the live context
+// manager (teammate journal restore, persistent teams #5829). System
+// messages are skipped — the system prompt is set at construction and
+// replaying it would duplicate. Callers attach any journal persist
+// handler AFTER seeding so replayed messages are not re-appended to their
+// own journal.
+func (a *Agent) SeedContextMessages(msgs []provider.Message) {
+	for _, msg := range msgs {
+		if msg.Role == "system" {
+			continue
+		}
+		a.contextManager.Add(msg)
+	}
+}
+
 // SetEarlyCompactRatio forwards an earlier auto-compact trigger ratio to the
 // context manager (#5002 gap 2). Sub-agent harnesses use this to schedule
 // proactive background compaction at ~70% of the window instead of waiting

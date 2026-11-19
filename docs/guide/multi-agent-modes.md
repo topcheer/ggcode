@@ -121,7 +121,8 @@ For tasks where a single attempt frequently fails (tricky refactor, elusive bug,
 
 **Code**: `internal/swarm/` (manager.go, idle_runner.go, team.go)  
 **Spawned by**: `teammate_spawn` tool  
-**Wire-up**: `cmd/ggcode/root.go` → `swarm.NewManager(cfg, prov, factory, builder)`
+**Wire-up**: `cmd/ggcode/root.go` → `swarm.NewManager(cfg, prov, factory, builder)`  
+**Persistence**: teammates survive restarts - journals, manifest, and the `team_restore` entry path are covered in [persistent-teams.md](persistent-teams.md) (#5829)
 
 ### Tool Access
 

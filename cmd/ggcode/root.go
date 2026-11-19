@@ -1512,6 +1512,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		for _, name := range []string{
 			"ask_user", "spawn_agent", "wait_agent", "list_agents",
 			"teammate_spawn", "teammate_shutdown", "team_create", "team_delete",
+			"team_restore",
 		} {
 			cloned.Unregister(name)
 		}
@@ -1523,6 +1524,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		}
 		return prov
 	}, swarmAgentFactory, swarmToolBuilder)
+	// Persistent teams (#5829): enable teammate session journals.
+	swarmMgr.JournalsEnabled = true
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
 	// #5657-followup item 7: backfill the team view source for the plan
 	// face closure (declared before the introspector is wired).

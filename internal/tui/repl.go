@@ -1092,6 +1092,7 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 
 	tools.Register(tool.TeamCreateTool{Manager: mgr})
 	tools.Register(tool.TeamDeleteTool{Manager: mgr})
+	tools.Register(tool.TeamRestoreTool{Manager: mgr})
 	tools.Register(tool.TeammateSpawnTool{Manager: mgr})
 	tools.Register(tool.TeammateListTool{Manager: mgr})
 	tools.Register(tool.TeammateShutdownTool{Manager: mgr})

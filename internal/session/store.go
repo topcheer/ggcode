@@ -704,6 +704,7 @@ type jsonlRecord struct {
 	TunnelEventsComplete bool                `json:"tunnel_events_complete,omitempty"`
 	Message              *provider.Message   `json:"message,omitempty"`
 	Timestamp            time.Time           `json:"timestamp,omitempty"`
+	FooterStatus         string              `json:"footer_status,omitempty"`
 	TunnelEvent          *TunnelEvent        `json:"tunnel_event,omitempty"`
 	CostJSON             json.RawMessage     `json:"cost,omitempty"`
 
@@ -745,6 +746,14 @@ func validSessionID(id string) bool {
 		}
 	}
 	return !strings.HasPrefix(id, "-")
+}
+
+// isTeammateJournalID reports whether a session ID belongs to a teammate
+// journal (persistent teams #5829: IDs carry the "-tm-" infix). Teammate
+// journals are machine-owned restore artifacts and never surface in user
+// session listers or latest-resume selection.
+func isTeammateJournalID(id string) bool {
+	return strings.Contains(id, "-tm-")
 }
 
 func (s *JSONLStore) sessionPath(id string) string {
@@ -1345,6 +1354,9 @@ func (s *JSONLStore) List() ([]*Session, error) {
 
 	result := make([]*Session, 0, len(idx))
 	for _, e := range idx {
+		if isTeammateJournalID(e.ID) {
+			continue
+		}
 		result = append(result, &Session{
 			ID:              e.ID,
 			Title:           e.Title,
@@ -1787,7 +1799,7 @@ func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
 	})
 
 	for _, e := range idx {
-		if NormalizeWorkspacePath(e.Workspace) == normalizedWorkspace && e.MsgCount > 0 {
+		if NormalizeWorkspacePath(e.Workspace) == normalizedWorkspace && e.MsgCount > 0 && !isTeammateJournalID(e.ID) {
 			return &Session{
 				ID:        e.ID,
 				Title:     e.Title,
@@ -1836,7 +1848,7 @@ func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
 
 	result := make([]*Session, 0, len(idx))
 	for _, e := range idx {
-		if NormalizeWorkspacePath(e.Workspace) == normalizedWorkspace {
+		if NormalizeWorkspacePath(e.Workspace) == normalizedWorkspace && !isTeammateJournalID(e.ID) {
 			result = append(result, &Session{
 				ID:        e.ID,
 				Title:     e.Title,
@@ -1996,6 +2008,24 @@ func (s *JSONLStore) AppendMessageToDisk(ses *Session, msg provider.Message) err
 	}
 	s.lastIndexUpdate[ses.ID] = time.Now()
 	return s.updateIndex(ses)
+}
+
+// AppendTeammateFooter writes the terminal status marker for a teammate
+// session journal (persistent teams #5829): "clean" on graceful shutdown,
+// "crashed" on panic. The loader ignores the record type; restore paths
+// scan for it to distinguish clean vs crashed sessions.
+func (s *JSONLStore) AppendTeammateFooter(ses *Session, status string) error {
+	if ses == nil {
+		return fmt.Errorf("session is nil")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := jsonlRecord{Type: "teammate_footer", SessionID: ses.ID, FooterStatus: status, Timestamp: time.Now()}
+	if err := appendRecordLine(s.sessionPath(ses.ID), rec); err != nil {
+		return err
+	}
+	ses.UpdatedAt = time.Now()
+	return nil
 }
 
 func (s *JSONLStore) AppendUserMessageRemovalToDisk(ses *Session) error {

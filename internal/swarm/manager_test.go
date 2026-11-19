@@ -3,6 +3,7 @@ package swarm
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -79,8 +80,13 @@ func TestManager_CreateTeam(t *testing.T) {
 	m, _ := testManager(t)
 
 	snap := m.CreateTeam("my-team", "leader-1")
-	if snap.ID != "team-1" {
-		t.Errorf("expected team-1, got %s", snap.ID)
+	// #5829: team IDs are random (team-<6hex>), never per-process counters.
+	if !strings.HasPrefix(snap.ID, "team-") || len(snap.ID) != len("team-")+6 {
+		t.Errorf("expected team-<6hex>, got %s", snap.ID)
+	}
+	again := m.CreateTeam("my-team-2", "leader-1")
+	if again.ID == snap.ID {
+		t.Errorf("team IDs must be unique, got %s twice", snap.ID)
 	}
 	if snap.Name != "my-team" {
 		t.Errorf("expected my-team, got %s", snap.Name)
@@ -731,8 +737,8 @@ func TestManager_SystemPromptBuilder(t *testing.T) {
 		return "custom-prompt"
 	})
 
-	m.CreateTeam("my-team", "")
-	_, err := m.SpawnTeammate("team-1", "tester", "", nil)
+	created := m.CreateTeam("my-team", "")
+	_, err := m.SpawnTeammate(created.ID, "tester", "", nil)
 	if err != nil {
 		t.Fatalf("SpawnTeammate failed: %v", err)
 	}
@@ -747,8 +753,8 @@ func TestManager_SystemPromptBuilder_FallbackToMinimal(t *testing.T) {
 	m, _ := testManager(t)
 	m.SetWorkingDir("/test/dir")
 
-	m.CreateTeam("fallback-team", "")
-	_, err := m.SpawnTeammate("team-1", "fallback-teammate", "", nil)
+	created := m.CreateTeam("fallback-team", "")
+	_, err := m.SpawnTeammate(created.ID, "fallback-teammate", "", nil)
 	if err != nil {
 		t.Fatalf("SpawnTeammate failed: %v", err)
 	}

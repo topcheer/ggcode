@@ -30,6 +30,11 @@ func runTeammateLoop(
 			debug.Log("swarm", "teammate panic recovered teammate=%s error=%v stack=%s", tm.ID, r, string(runtimedebug.Stack()))
 
 			rollbackClaimedTask(mgr, team, tm)
+			// Persistent teams P1: a panicked teammate gets a crashed journal
+			// footer so RestoreTeam WARNs instead of assuming a clean exit.
+			if mgr != nil {
+				mgr.flushTeammateFooter(tm, "crashed")
+			}
 			tm.setStatus(TeammateShuttingDown)
 			if onEvent != nil {
 				onEvent(Event{

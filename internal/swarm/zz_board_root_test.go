@@ -5,13 +5,10 @@ import (
 	"testing"
 )
 
-// #5540: every fresh Manager deterministically mints team-1, and the board
-// persist path used to be keyed to the shared util.ConfigDir - so tests in
-// the same or different packages collided on the same on-disk board.json
-// ("already claimed by tm-1 in_progress on the shared board" flake). With
-// the BoardRoot override, two Managers with the same team ID must be fully
-// isolated on disk, and production default (empty BoardRoot) must keep the
-// legacy path.
+// #5540 + #5829: team IDs are random per Manager (team-<6hex>), so two
+// Managers can never mint the same team; combined with the BoardRoot
+// override, boards are fully isolated on disk. Production default (empty
+// BoardRoot) keeps the shared config-dir path.
 func TestBoardRootIsolatesDeterministicTeams(t *testing.T) {
 	rootA := t.TempDir()
 	rootB := t.TempDir()
@@ -23,11 +20,11 @@ func TestBoardRootIsolatesDeterministicTeams(t *testing.T) {
 
 	teamA := mA.CreateTeam("test", "leader")
 	teamB := mB.CreateTeam("test", "leader")
-	if teamA.ID != teamB.ID {
-		t.Fatalf("both managers must mint the same deterministic team id, got %s vs %s", teamA.ID, teamB.ID)
+	if teamA.ID == teamB.ID {
+		t.Fatalf("random team IDs must differ across managers, got %s twice", teamA.ID)
 	}
 
-	// Same team ID, different roots: each writes its own board file.
+	// Different IDs (and roots): each writes its own board file.
 	tmA, errA := mA.EnsureTaskManager(teamA.ID)
 	if errA != nil {
 		t.Fatalf("ensure A: %v", errA)
