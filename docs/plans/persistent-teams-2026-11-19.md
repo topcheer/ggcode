@@ -67,6 +67,30 @@ Reuse the main agent's session machinery end-to-end:
   by lock, DeleteTeam removes manifest.
 - E2E: kill-and-restore cycle preserves members *and* their memory (P1+P2 together).
 
+## P0 — Cross-instance safety (from #5829, discovered during the mono-ops migration)
+
+The 2026-11-19 single-instance migration exposed a real bug: team IDs are per-process
+sequential (`team-1`...) while boards persist by bare teamID — two instances on one
+machine collide, and a new instance silently inherits a dead fleet's board. The fix folds
+into this design (no separate patch PR):
+
+1. **Random team IDs**: `team-<6+hex>` at CreateTeam (manager.go:179). Display Name stays
+   human-readable. Kills the collision class at birth.
+2. **Owner lease on the manifest + board dir**: `owner.json` (boot ID, PID, hostname,
+   heartbeat refreshed on every persist). Restore/load path: owner alive (PID signal-0 on
+   same host, or heartbeat <5min) → refuse + loud WARN; owner dead → inherit and re-stamp.
+3. **RestoreTeam becomes the authoritative board-entry path**: only an explicit
+   `team_restore` (or same-boot-id automatic resume) loads a foreign board — a fresh
+   CreateTeam NEVER picks up an existing directory, even a dead one (tonight's inherited
+   etunnel board case becomes an explicit user decision instead of an accident).
+4. Legacy dirs without owner.json: dead-owner semantics + one-line WARN.
+
+### Acceptance (P0)
+- Two Managers in one process (and simulated second instance via different boot ID) create
+  teams → distinct board paths, never shared.
+- Live-owner lease → load refused + WARN. Dead lease / legacy → inheritable via RestoreTeam
+  only. Pins for all three paths.
+
 ## P3 — Inbox durability (deferred, explicitly out of scope for v1)
 
 Board tasks are durable; an unread done-mail lost on restart costs one notification, not work.
