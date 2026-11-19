@@ -40,6 +40,12 @@ const swarmStreamBatchInterval = 500 * time.Millisecond
 
 const swarmCancelTimeout = 5 * time.Second
 
+// teammateEarlyCompactRatio mirrors subagentEarlyCompactRatio
+// (internal/subagent/runner.go): proactive pre-compact trigger at ~70% of
+// the context window. Persistent teammates run long single-task sessions
+// like sub-agents, so they get the same early trigger wired at spawn.
+const teammateEarlyCompactRatio = 0.70
+
 type Manager struct {
 	// BoardRoot overrides the on-disk root for team board persistence
 	// (#5540). Empty (production default) uses util.ConfigDir(); tests set
@@ -99,6 +105,11 @@ func newManager(cfg config.SwarmConfig, prov provider.Provider, getter func() pr
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 1 * time.Second
+	}
+	// Default the teammate early pre-compact trigger to the same 70% the
+	// sub-agent runner uses; an explicit negative value disables it.
+	if cfg.TeammateEarlyCompactRatio == 0 {
+		cfg.TeammateEarlyCompactRatio = teammateEarlyCompactRatio
 	}
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	return &Manager{
@@ -411,6 +422,7 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 		AllowedTools: sortedToolsCopy(allowedTools),
 		Inbox:        make(chan MailMessage, m.cfg.InboxSize),
 		CreatedAt:    time.Now(),
+		LastActiveAt: time.Now(),
 		ctx:          ctx,
 		cancel:       cancel,
 		done:         make(chan struct{}),
@@ -460,6 +472,23 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 		if tmID != "" {
 			if sid, ok := agent.(interface{ SetSessionID(string) }); ok {
 				sid.SetSessionID(tmID)
+			}
+		}
+
+		// #5002 gap 2 parity with the sub-agent runner: teammates run long
+		// single-task sessions with no user-turn pacing, so wire the early
+		// pre-compact trigger at ~70% of the window (configurable via
+		// swarm.teammate_early_compact_ratio; a negative value disables it,
+		// leaving SetEarlyCompactRatio(0)-style reactive compaction).
+		if ratio := m.cfg.TeammateEarlyCompactRatio; ratio > 0 {
+			if ec, ok := agent.(interface{ SetEarlyCompactRatio(float64) }); ok {
+				ec.SetEarlyCompactRatio(ratio)
+			} else if cm, ok := agent.(interface {
+				ContextManager() interface {
+					SetEarlyCompactRatio(float64)
+				}
+			}); ok && cm.ContextManager() != nil {
+				cm.ContextManager().SetEarlyCompactRatio(ratio)
 			}
 		}
 	}

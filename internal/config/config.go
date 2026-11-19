@@ -509,6 +509,14 @@ type SwarmConfig struct {
 	TeammateTimeout     time.Duration `yaml:"teammate_timeout"`
 	InboxSize           int           `yaml:"inbox_size"`
 	PollInterval        time.Duration `yaml:"poll_interval"`
+
+	// TeammateEarlyCompactRatio is the proactive pre-compact trigger for
+	// spawned teammate agents, as a fraction of the context window (0.70 =
+	// compact at 70%). It mirrors the sub-agent runner's 70% convention
+	// (internal/subagent/runner.go #5002 gap 2). Zero (unset) defaults to
+	// 0.70 in swarm.NewManager; a negative value disables the early trigger
+	// (teammates keep only the reactive ~90% compaction path).
+	TeammateEarlyCompactRatio float64 `yaml:"teammate_early_compact_ratio,omitempty"`
 }
 
 type LanChatConfig struct {

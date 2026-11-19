@@ -62,6 +62,7 @@ func runTeammateLoop(
 
 	tm.mu.Lock()
 	tm.StartedAt = time.Now()
+	tm.LastActiveAt = tm.StartedAt
 	tm.mu.Unlock()
 
 	pollInterval := mgr.cfg.PollInterval
@@ -122,6 +123,7 @@ func handleMessage(
 	taskTimeout time.Duration,
 	msg MailMessage,
 ) {
+	tm.touchActive()
 	if agent == nil {
 		if onEvent != nil {
 			onEvent(Event{
@@ -143,6 +145,7 @@ func handleMessage(
 	}
 
 	tm.mu.Lock()
+	currentTaskID := tm.CurrentTaskID
 	tm.CurrentTaskID = ""
 	tm.mu.Unlock()
 	tm.setStatus(TeammateWorking)
@@ -171,6 +174,15 @@ func handleMessage(
 	tm.setLastResult(result)
 
 	debug.Log("swarm", "teammate %s setLastResult len=%d", tm.ID, len(result))
+
+	tm.touchActive()
+
+	// Auto done-summary back-report: after a successful task, drop a short
+	// completion note into the leader's inbox so persistent-team leads see
+	// finished work without polling teammate_results.
+	if taskErr == nil && ctx.Err() == nil {
+		sendDoneSummaryToLeader(mgr, team, tm, currentTaskID, result)
+	}
 
 	if ctx.Err() != nil {
 		tm.setStatus(TeammateShuttingDown)
@@ -257,6 +269,7 @@ func tryClaimPendingTask(
 		tm.mu.Lock()
 		tm.CurrentTaskID = claimed.ID
 		tm.mu.Unlock()
+		tm.touchActive()
 
 		teammateConsumeProbe(tm.ID)
 		if onEvent != nil {
@@ -365,6 +378,10 @@ func tryClaimPendingTask(
 			}
 
 			persistTaskResult(tmMgr, claimed.ID, result)
+
+			// Board tasks carry a real task ID: mail the same done-summary
+			// note to the leader as the direct-inbox path does.
+			sendDoneSummaryToLeader(mgr, team, tm, claimed.ID, result)
 		}
 		if onEvent != nil {
 			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
@@ -375,6 +392,7 @@ func tryClaimPendingTask(
 		tm.mu.Lock()
 		tm.CurrentTaskID = ""
 		tm.mu.Unlock()
+		tm.touchActive()
 
 		if onEvent != nil {
 			onEvent(Event{
@@ -393,6 +411,54 @@ func tryClaimPendingTask(
 }
 
 const maxTransientTaskRetries = 3
+
+// buildDoneSummary renders the one-line completion note mailed to the team
+// leader when a teammate finishes a task: "[done <name>] task <id>: <first
+// line of result>". The task segment is omitted for ad-hoc inbox work that
+// carries no board task ID; the result line is capped at 120 characters.
+func buildDoneSummary(teammateName, taskID, result string) string {
+	head := fmt.Sprintf("[done %s]", teammateName)
+	if taskID != "" {
+		head += fmt.Sprintf(" task %s", taskID)
+	}
+	if first := firstResultLine(result); first != "" {
+		head += ": " + first
+	}
+	return head
+}
+
+// firstResultLine returns the first non-empty line of a task result,
+// truncated to 120 characters.
+func firstResultLine(result string) string {
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return ""
+	}
+	if idx := strings.IndexByte(result, '\n'); idx >= 0 {
+		result = result[:idx]
+	}
+	return util.Truncate(strings.TrimSpace(result), 120)
+}
+
+// sendDoneSummaryToLeader drops the completion note into the team leader's
+// inbox (team.LeaderID) after a successful task. Leaderless teams,
+// self-addressed notes, and delivery failures (leader not a teammate in
+// this team, inbox full, shutting down) are logged and skipped: the note
+// is advisory and must never fail the task itself.
+func sendDoneSummaryToLeader(mgr *Manager, team *Team, tm *Teammate, taskID, result string) {
+	if mgr == nil || team == nil || team.LeaderID == "" || team.LeaderID == tm.ID {
+		return
+	}
+	summary := buildDoneSummary(tm.Name, taskID, result)
+	if err := mgr.SendToTeammate(team.ID, team.LeaderID, MailMessage{
+		From:    tm.ID,
+		Content: summary,
+		Summary: summary,
+		Type:    "message",
+	}); err != nil {
+		debug.Log("swarm", "teammate %s done-summary to leader %s not delivered: %v", tm.ID, team.LeaderID, err)
+	}
+}
 
 func buildTaskPrompt(tk task.Task) string {
 	var sb strings.Builder
