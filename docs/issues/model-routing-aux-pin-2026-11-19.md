@@ -43,3 +43,7 @@ teammate 恢复（RestoreTeam）= **fresh agent + factory getter 现取**：恢�
 - 跨重启持久化全链闭环 ✓：五席恢复（ID 钉死）/板 11 任务回/manifest sessionFile 回写/journal 同文件续写（21→29 行=回放挂载）
 - 途中修两缺陷已 commit：①restore 旧 mf 覆盖回写擦 sessionFile（52769ecf）②upsert 漏 lastResultSummary
 - 已立案未修：exec 重启死锁（owner_lease.go:207 PID 探针权威优先+bootID 变=活拒；修法=PID==os.Getpid() 视死或 lease 加启动时间戳）
+
+## 收口挂账清理（01:26）
+- [silent-error 闭环] 早前 "lanchat no receipt records (DapperShark f52b0b13)" 为记录淘汰所致误报：DapperShark 后续 LAN 明示"DM 为正式通道已知悉、重组完成"，送达与消费由对方实证闭环，非未处理错误。
+- [ SilentShark cron-1 删裁 ] 裁决 DM delivered @01:18，执行回报在途（该席同步盯桌面 dmg 换池 run）。
