@@ -327,6 +327,9 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 		a.runtimeStats.addTokens(int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens))
 		a.syncContextManagerUsage(resp.Usage)
 		a.emitUsage(resp.Usage)
+		// #5812: one ctxstats line per LLM interaction (memstats-mirror for
+		// prompt-cache health); self-gated, no-op unless sampling is enabled.
+		a.samplePromptCacheStats(resp.Usage, activeToolDefs)
 
 		if msg, stop := a.RecordSessionTokenUsage(int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens)); msg != "" {
 			if a.noteUsageBudgetCrossing(i+1, msg, stop, "Session Token Budget", "session-token-budget",

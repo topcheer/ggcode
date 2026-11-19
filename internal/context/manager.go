@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -107,6 +108,7 @@ type Manager struct {
 	messages                 []provider.Message
 	version                  int64
 	nonTailMutSeq            int64
+	mutSources               map[string]bool // pending #5812 mutation sources, drained per turn by the ctxstats sampler
 	runAdded                 []provider.Message
 	runAddedIDs              map[string]bool
 	tokens                   int
@@ -464,6 +466,7 @@ func (m *Manager) applyReconcileFixes(fixes []reconcileNeedFix) bool {
 	m.markBenignRemoval()
 	m.version++
 	m.nonTailMutSeq++
+	m.recordMutSourceLocked(MutSourceReconcile)
 	m.tokens = 0
 	for _, msg := range m.messages {
 		m.tokens += m.countTokens(msg)
@@ -579,6 +582,7 @@ func (m *Manager) removeOrphanToolResults() {
 		m.markBenignRemoval()
 		m.version++
 		m.nonTailMutSeq++
+		m.recordMutSourceLocked(MutSourceOrphanCleanup)
 		m.tokens = 0
 		for _, msg := range m.messages {
 			m.tokens += m.countTokens(msg)
@@ -617,6 +621,7 @@ func (m *Manager) UpdateFirstSystemMessage(msg provider.Message) {
 			m.tokens += newTokens - oldTokens
 			m.version++
 			m.nonTailMutSeq++
+			m.recordMutSourceLocked(MutSourceSystemRewrite)
 			debug.Log("prompt-cache", "system head rewritten: prefix-cache invalidation event (est old=%d new=%d tokens)", oldTokens, newTokens)
 			return
 		}
@@ -625,6 +630,7 @@ func (m *Manager) UpdateFirstSystemMessage(msg provider.Message) {
 	m.messages = append([]provider.Message{msg}, m.messages...)
 	m.version++
 	m.nonTailMutSeq++
+	m.recordMutSourceLocked(MutSourceSystemInsert)
 	m.tokens += newTokens
 	debug.Log("prompt-cache", "system head inserted: prefix-cache invalidation event (est=%d tokens)", newTokens)
 }
@@ -918,6 +924,7 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 
 	m.version++
 	m.nonTailMutSeq++
+	m.recordMutSourceLocked(MutSourceCompaction)
 	m.recalcTokens()
 	liveTokensAfter := m.tokenCountLocked()
 
@@ -1082,11 +1089,13 @@ func (m *Manager) Clear() {
 		m.messages = []provider.Message{sys}
 		m.version++
 		m.nonTailMutSeq++
+		m.recordMutSourceLocked(MutSourceUserReset)
 		m.tokens = m.countTokens(sys)
 	} else {
 		m.messages = nil
 		m.version++
 		m.nonTailMutSeq++
+		m.recordMutSourceLocked(MutSourceUserReset)
 		m.tokens = 0
 	}
 	m.invalidateUsageBaselineLocked()
@@ -1199,6 +1208,7 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	m.injectPostCompactNoteAfterCompaction()
 	m.version++
 	m.nonTailMutSeq++
+	m.recordMutSourceLocked(MutSourceCompaction)
 	m.recalcTokens()
 	debug.Log("ctx", "Summarize: msgs=%d→%d oldTokens=%d newTokens=%d summaryChars=%d summaryEstimatedTokens=%d extraMsgs=%d stateTextChars=%d",
 		oldLen, len(newMsgs), oldTokens, m.tokenCountLocked(), len(summaryText), EstimateTokens(summaryText), len(extraMsgs), len(stateText))
@@ -1233,6 +1243,7 @@ func (m *Manager) TruncateOldestGroupForRetry() bool {
 	m.markBenignRemoval()
 	m.version++
 	m.nonTailMutSeq++
+	m.recordMutSourceLocked(MutSourcePTLTruncate)
 	m.recalcTokens()
 	return true
 }
@@ -1312,6 +1323,7 @@ func (m *Manager) RemoveLastAssistantGroup() string {
 	m.markBenignRemoval()
 	m.version++
 	m.nonTailMutSeq++
+	m.recordMutSourceLocked(MutSourceRemoveLastGroup)
 	m.recalcTokens()
 	debug.Log("ctx", "RemoveLastAssistantGroup: removed %d messages from index %d, remaining=%d tokens=%d",
 		removed, lastAsstIdx, len(m.messages), m.tokenCountLocked())
@@ -1560,6 +1572,7 @@ func (m *Manager) commitMechanicalCompaction() int {
 	m.markBenignRemoval()
 	m.version++
 	m.nonTailMutSeq++
+	m.recordMutSourceLocked(MutSourceMechanicalCompaction)
 	m.recalcTokens()
 	return before - m.tokens
 }
@@ -2231,6 +2244,45 @@ func formatToolInputForSummary(input []byte, maxLen int) string {
 		result = headRunesPlain(result, maxLen-3) + "..."
 	}
 	return result
+}
+
+// NonTailMutSeq returns the non-tail mutation counter (#5808): every
+// mutation that invalidates the cached prefix beyond a plain append.
+// The ctxstats turn sampler reads it once per turn (#5812).
+func (m *Manager) NonTailMutSeq() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.nonTailMutSeq
+}
+
+// DrainMutationSources returns the distinct mutation sources recorded
+// since the previous drain (sorted), clearing the pending set (#5812).
+// The ctxstats turn sampler is the intended consumer; draining only
+// when sampling is enabled keeps a disabled sampler from paying for
+// this.
+func (m *Manager) DrainMutationSources() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.mutSources) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m.mutSources))
+	for src := range m.mutSources {
+		out = append(out, src)
+	}
+	sort.Strings(out)
+	m.mutSources = nil
+	return out
+}
+
+// recordMutSourceLocked tags the pending mutation set at every
+// nonTailMutSeq++ call site (#5812 call-site instrumentation): the
+// sampler maps these sources onto the drift reason enum.
+func (m *Manager) recordMutSourceLocked(src string) {
+	if m.mutSources == nil {
+		m.mutSources = make(map[string]bool)
+	}
+	m.mutSources[src] = true
 }
 
 func truncateGroupsForPTLRetry(msgs []provider.Message) ([]provider.Message, bool) {
