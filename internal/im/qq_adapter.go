@@ -600,6 +600,10 @@ func (a *qqAdapter) handleMessageEvent(ctx context.Context, eventType string, pa
 		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
 			a.publishState(false, "warning", err.Error())
 		}
+		// A completed rebind moved this workspace to a different channel; the
+		// cached gateway session belongs to the old binding context and must
+		// not be RESUMEd against the new one (issue #5805).
+		a.dropSessionOnRebind(pairingResult)
 		return
 	}
 	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
@@ -896,6 +900,31 @@ func (a *qqAdapter) handleInvalidSession(payload map[string]any) error {
 	debug.Log("qq", "adapter=%s invalid session (resumable=%v)", a.name, resumable)
 	a.closeWS()
 	return errQQReconnect
+}
+
+// dropSessionOnRebind clears the cached gateway session and sequence number
+// when a completed pairing switches this workspace from a previous channel to
+// a new one. The stale session belongs to the old binding context: RESUMEing
+// it (and heartbeating its high lastSeq) against the fresh server-side cursor
+// leaves messages in the cursor gap unpushed until a later invalid session
+// eventually forces a full identify (issue #5805). Dropping the state makes
+// the next gateway handshake IDENTIFY from scratch, and closing the live
+// socket forces that reconnect promptly instead of waiting for an organic
+// disconnect.
+func (a *qqAdapter) dropSessionOnRebind(result PairingResult) {
+	if _, _, replaced := previousBindingReplacementNotice(result); !replaced {
+		return
+	}
+	a.mu.Lock()
+	hadSession := a.sessionID != "" || a.lastSeq > 0
+	a.sessionID = ""
+	a.lastSeq = 0
+	a.connected = false
+	a.mu.Unlock()
+	if hadSession {
+		debug.Log("qq", "adapter=%s binding rebind: dropping gateway session to force identify", a.name)
+		a.closeWS()
+	}
 }
 
 var errQQReconnect = errors.New("qq gateway reconnect requested")
