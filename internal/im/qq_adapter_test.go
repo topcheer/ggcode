@@ -256,7 +256,7 @@ func TestHandleMessageEventStartsPairingForNewChannel(t *testing.T) {
 		connected:      true,
 		token:          "token-123",
 		tokenExpiresAt: time.Now().Add(time.Hour),
-		ws:             &websocket.Conn{},
+		ws:             &websocket.Conn{}, // sentinel keeps isConnected true; closeWS is panic-guarded (#5805)
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			if req.Method == http.MethodPost {
 				body, _ := io.ReadAll(req.Body)

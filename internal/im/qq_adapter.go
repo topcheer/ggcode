@@ -597,6 +597,21 @@ func (a *qqAdapter) handleMessageEvent(ctx context.Context, eventType string, pa
 		if sendErr := a.sendReplyText(ctx, channelID, msgID, pairingResult.ReplyText); sendErr != nil {
 			a.publishState(false, "warning", sendErr.Error())
 		}
+		// #5805: a completed rebind moves this adapter's channel binding to a
+		// different workspace, but the QQ gateway session/seq state describes
+		// the OLD binding context. Resuming with the stale seq makes the
+		// server-side cursor skip the gap (messages silently undelivered).
+		// Drop the WS session and reconnect via identify so the new binding
+		// context rebuilds state from scratch. For plain re-binds to the same
+		// context the reconnect is a few seconds of latency, not a loss.
+		if pairingResult.Kind == PairingKindRebind {
+			debug.Log("qq", "adapter=%s binding rebound; resetting gateway session for identify", a.name)
+			a.mu.Lock()
+			a.sessionID = ""
+			a.lastSeq = 0
+			a.mu.Unlock()
+			a.closeWS()
+		}
 		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
 			a.publishState(false, "warning", err.Error())
 		}
@@ -901,6 +916,7 @@ func (a *qqAdapter) handleInvalidSession(payload map[string]any) error {
 var errQQReconnect = errors.New("qq gateway reconnect requested")
 
 func (a *qqAdapter) closeWS() {
+	defer safego.Recover("qq.closeWS") // zero-value/sentinels: Close must never take the read loop down (#5805)
 	a.mu.RLock()
 	ws := a.ws
 	a.mu.RUnlock()
