@@ -69,6 +69,21 @@ func TestLiveOwnerLeaseRefused(t *testing.T) {
 		t.Fatalf("spawn: %v", err)
 	}
 
+	// A real foreign owner is a DIFFERENT process: same host, different
+	// live PID (PID 1 is init and always alive on the test host), foreign
+	// boot, fresh heartbeat. (m1's own lease carries our own PID, which the
+	// self-PID short-circuit in alive() deliberately treats as inheritable
+	// - the exec-restart case.)
+	foreign := ownerLease{
+		BootID:    "foreign-boot",
+		PID:       1,
+		Hostname:  m1.hostname,
+		Heartbeat: time.Now(),
+	}
+	if err := writeOwnerLeaseFile(m1.ownerLeasePath(s.ID), &foreign); err != nil {
+		t.Fatalf("write foreign lease: %v", err)
+	}
+
 	if v := m2.checkOwnerLease(s.ID); v != leaseAliveForeign {
 		t.Fatalf("verdict = %v, want leaseAliveForeign", v)
 	}
@@ -139,6 +154,47 @@ func TestLegacyDirNoOwnerInheritsViaRestore(t *testing.T) {
 	}
 	if _, err := m2.RestoreTeam(s.ID); err != nil {
 		t.Fatalf("legacy restore should inherit: %v", err)
+	}
+}
+
+// Exec-restart self-deadlock regression: the restart tool replaces the
+// binary via exec, preserving the PID while the new image's Manager mints
+// a fresh bootID. A lease carrying the CALLER'S OWN PID with a foreign
+// bootID must classify as dead (inheritable), not alive-foreign —
+// otherwise an exec-restarted instance locks itself out of its own team
+// forever (field report: two restarts, zero successful restores).
+func TestExecRestartSelfPIDLeaseInheritable(t *testing.T) {
+	root := t.TempDir()
+	m1 := newLeaseTestManager(t, root)
+	m2 := newLeaseTestManager(t, root) // stands in for the post-exec image
+
+	s := m1.CreateTeam("execlock", "leader-1")
+	if _, err := m1.SpawnTeammate(s.ID, "dave", "", nil); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+
+	// Simulate the post-exec on-disk state: m1's PID (== our own process,
+	// == m2's process in this same-process test), but a foreign bootID and
+	// an already-stale heartbeat (the exec happened >TTL ago).
+	preExec := ownerLease{
+		BootID:    "old-image-boot",
+		PID:       os.Getpid(),
+		Hostname:  m1.hostname,
+		Heartbeat: time.Now().Add(-2 * ownerLeaseTTL),
+	}
+	if err := writeOwnerLeaseFile(m1.ownerLeasePath(s.ID), &preExec); err != nil {
+		t.Fatalf("write pre-exec lease: %v", err)
+	}
+
+	if v := m2.checkOwnerLease(s.ID); v != leaseDead {
+		t.Fatalf("verdict = %v, want leaseDead (self-PID lease is inheritable)", v)
+	}
+	snap, err := m2.RestoreTeam(s.ID)
+	if err != nil {
+		t.Fatalf("RestoreTeam after exec-restart must succeed: %v", err)
+	}
+	if snap.ID != s.ID || len(snap.Teammates) != 1 {
+		t.Fatalf("restored snapshot mismatch: %+v", snap)
 	}
 }
 
