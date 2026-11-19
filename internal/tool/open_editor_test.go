@@ -224,9 +224,12 @@ func TestOpenEditor_LaunchAndVerify(t *testing.T) {
 		t.Fatalf("startDetached failed: %v", err)
 	}
 
-	_ = cmd.Wait()
-
-	for i := 0; i < 100; i++ {
+	// #5825: do NOT call cmd.Wait() here — startDetached already owns the
+	// Cmd via its "tool.openEditor.reap" goroutine; a second concurrent Wait
+	// on the same exec.Cmd is a data race (Go 1.27 os/exec internals). The
+	// marker poll below is the readiness check (extended to 5s: without the
+	// removed Wait barrier, first scheduling under -race can lag).
+	for i := 0; i < 500; i++ {
 		if _, err := os.Stat(markerPath); err == nil {
 			break
 		}
