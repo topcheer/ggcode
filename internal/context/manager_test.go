@@ -376,14 +376,22 @@ func TestContextManager_VersionCounter_IncrementsOnMutation(t *testing.T) {
 		t.Fatalf("after UpdateFirstSystemMessage prepend: version = %d, want 2", v)
 	}
 
-	cm.UpdateFirstSystemMessage(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "new sys"}}})
+	// #5807: a byte-identical head rewrite is a no-op (nothing after the
+	// head is invalidated), but a changed head rewrite IS a mutation — it
+	// invalidates the whole prefix cache after messages[0].
+	cm.UpdateFirstSystemMessage(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "sys prompt"}}})
 	if v := cm.version; v != 2 {
-		t.Fatalf("after UpdateFirstSystemMessage replace: version = %d, want 2 (no increment)", v)
+		t.Fatalf("after UpdateFirstSystemMessage identical rewrite: version = %d, want 2 (no increment)", v)
+	}
+
+	cm.UpdateFirstSystemMessage(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "new sys"}}})
+	if v := cm.version; v != 3 {
+		t.Fatalf("after UpdateFirstSystemMessage changed rewrite: version = %d, want 3 (head rewrite invalidates prefix)", v)
 	}
 
 	cm.Clear()
-	if v := cm.version; v != 3 {
-		t.Fatalf("after Clear: version = %d, want 3", v)
+	if v := cm.version; v != 4 {
+		t.Fatalf("after Clear: version = %d, want 4", v)
 	}
 }
 

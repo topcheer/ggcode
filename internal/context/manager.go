@@ -589,15 +589,35 @@ func (m *Manager) removeOrphanToolResults() {
 	}
 }
 
+// systemMessageText renders the comparable text of a system message (block
+// bytes only; the Cache flag is transport metadata, not content).
+func systemMessageText(m provider.Message) string {
+	var b strings.Builder
+	for _, blk := range m.Content {
+		if blk.Type == "text" {
+			b.WriteString(blk.Text)
+		}
+	}
+	return b.String()
+}
+
 func (m *Manager) UpdateFirstSystemMessage(msg provider.Message) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i, existing := range m.messages {
 		if existing.Role == "system" {
+			if systemMessageText(existing) == systemMessageText(msg) {
+				// #5807: byte-identical rewrite invalidates nothing after
+				// the head — no version/nonTailMutSeq bump, no event.
+				return
+			}
 			oldTokens := m.countTokens(existing)
 			newTokens := m.countTokens(msg)
 			m.messages[i] = msg
 			m.tokens += newTokens - oldTokens
+			m.version++
+			m.nonTailMutSeq++
+			debug.Log("prompt-cache", "system head rewritten: prefix-cache invalidation event (est old=%d new=%d tokens)", oldTokens, newTokens)
 			return
 		}
 	}
@@ -606,6 +626,48 @@ func (m *Manager) UpdateFirstSystemMessage(msg provider.Message) {
 	m.version++
 	m.nonTailMutSeq++
 	m.tokens += newTokens
+	debug.Log("prompt-cache", "system head inserted: prefix-cache invalidation event (est=%d tokens)", newTokens)
+}
+
+// AppendUserTurnWithVolatileTail adds the new user turn with the #5807
+// volatile per-prompt context attached as a trailing text block. The
+// trailing block carries the live user-turn cache breakpoint; volatile
+// blocks from earlier turns drop theirs so explicit-breakpoint providers
+// (which cap breakpoint counts) keep at most one user-turn breakpoint.
+// Clearing the stale flag is metadata-only: block bytes stay identical, so
+// an already-cached prefix is unaffected.
+func (m *Manager) AppendUserTurnWithVolatileTail(msg provider.Message, content []provider.ContentBlock, volatileText string) {
+	if strings.TrimSpace(volatileText) == "" {
+		msg.Content = content
+		m.Add(msg)
+		return
+	}
+	m.mu.Lock()
+	m.clearUserTurnCacheFlagsLocked()
+	m.mu.Unlock()
+
+	merged := make([]provider.ContentBlock, 0, len(content)+1)
+	merged = append(merged, content...)
+	merged = append(merged, provider.ContentBlock{Type: "text", Text: volatileText, Cache: true})
+	msg.Content = merged
+	m.Add(msg)
+	debug.Log("prompt-cache", "volatile turn context attached: tailTokens=%d", EstimateTokens(volatileText))
+}
+
+// clearUserTurnCacheFlagsLocked demotes Cache flags on user-role text
+// blocks. Only volatile tail blocks set the flag on user turns today, so
+// this rotates the breakpoint to the newest turn without touching bytes.
+func (m *Manager) clearUserTurnCacheFlagsLocked() {
+	for i := range m.messages {
+		if m.messages[i].Role != "user" {
+			continue
+		}
+		for j := range m.messages[i].Content {
+			if b := &m.messages[i].Content[j]; b.Type == "text" && b.Cache {
+				b.Cache = false
+			}
+		}
+	}
 }
 
 func (m *Manager) StartRunTracking() {

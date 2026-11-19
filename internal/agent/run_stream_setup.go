@@ -100,11 +100,19 @@ func (a *Agent) runStreamSetup(ctx context.Context, content []provider.ContentBl
 // buildRunTurnContextD1 stages the user turn + pre-loop injections (#5543 knife-5).
 func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.ContentBlock, userOrigin string, rsc *runStreamCtx, onEvent func(provider.StreamEvent)) (msgs []provider.Message, userText string, toolDefs []provider.ToolDefinition, err error) {
 	userTurn := provider.Message{
-		Role:    "user",
-		Content: content,
-		Origin:  userOrigin,
+		Role:   "user",
+		Origin: userOrigin,
 	}
-	a.contextManager.Add(userTurn)
+	// #5807: per-prompt volatile context rides INSIDE the new user turn as a
+	// trailing text block. The turn is an append, so the prior prefix stays
+	// byte-identical and only the tail block pays the cache write cost; the
+	// stable system head (assembled below) never depends on runPrompt.
+	if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
+		cm.AppendUserTurnWithVolatileTail(userTurn, content, a.renderVolatileTurnContext(rsc.userPromptForStats))
+	} else {
+		userTurn.Content = content
+		a.contextManager.Add(userTurn)
+	}
 
 	userText = ""
 	for _, b := range content {
@@ -159,7 +167,7 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 		})
 	}
 	a.maybeInjectPerfRegression()
-	a.maybeInjectDynamicSystemPrompt(rsc.userPromptForStats)
+	a.maybeInjectStableSystemHead()
 	a.maybeInjectRatchetRules()
 
 	a.mu.RLock()

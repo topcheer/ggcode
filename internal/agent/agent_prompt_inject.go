@@ -10,40 +10,37 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
-	a.mu.Lock()
-	base := a.baseSystemPrompt
-	fn := a.systemPromptInjector
-	a.mu.Unlock()
+// volatileTurnContextHeader delimits the per-prompt dynamic context block
+// (#5807) that rides inside the new user turn as a trailing text block, so
+// the model can tell agent-assembled context apart from user prose.
+const volatileTurnContextHeader = "[Turn context - agent-assembled for this prompt]"
 
+// maybeInjectStableSystemHead assembles the STABLE system head (messages[0]).
+//
+// #5807: the head only carries session-stable segments - base prompt,
+// temporal anchor, cruise-mode goal, keyed instruction blocks (#5698) and
+// trajectory learnings - so a new user prompt never rewrites it and the
+// provider prefix cache survives across turns. Per-prompt segments
+// (intent-filtered ratchet rules, playbook hints, failure attribution
+// memory, injector/layer output) render into the new user turn instead:
+// see renderVolatileTurnContext.
+func (a *Agent) maybeInjectStableSystemHead() {
 	defer a.logHarnessFingerprint()
 
-	var dynamicParts []string
+	a.mu.Lock()
+	base := a.baseSystemPrompt
+	a.mu.Unlock()
+
+	var headParts []string
 
 	if a.currentMode().IsCruiseMode() {
 		if goal := a.getAutopilotGoal(); goal != "" {
-			dynamicParts = append(dynamicParts, fmt.Sprintf(
+			headParts = append(headParts, fmt.Sprintf(
 				"⏵ ACTIVE GOAL (persistent — do not lose sight of this):\n%s\n\n"+
 					"Continue working toward this goal. Do not ask the user for confirmation "+
 					"unless genuinely blocked. Use best judgment for implementation decisions.",
 				goal,
 			))
-		}
-	}
-
-	if fn != nil {
-		extra := strings.TrimSpace(fn())
-		if extra != "" {
-			dynamicParts = append(dynamicParts, extra)
-		}
-	}
-
-	for _, layer := range a.systemPromptLayers {
-		if layer.fn == nil {
-			continue
-		}
-		if extra := strings.TrimSpace(layer.fn()); extra != "" {
-			dynamicParts = append(dynamicParts, extra)
 		}
 	}
 
@@ -53,53 +50,31 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 	// keys whose one-line delta rode this assembly.
 	var keyedAnnounced []string
 	if keyedBlock, announced := a.renderKeyedInstructionBlocks(); keyedBlock != "" {
-		dynamicParts = append(dynamicParts, keyedBlock)
+		headParts = append(headParts, keyedBlock)
 		keyedAnnounced = announced
 		debug.Log("agent", "Injected keyed session instructions into system prompt (%d announce line(s))", len(announced))
 	}
 
-	if rs := a.getRuleStore(); rs != nil {
-		intent := classifyTaskType(runPrompt)
-		rs.SetRunIntent(intent)
-		rulesText := rs.TopRulesForPromptFiltered(5, intent)
-		if rulesText != "" {
-			dynamicParts = append(dynamicParts, rulesText)
-			debug.Log("agent", "Injected learned ratchet rules into system prompt (intent=%s)", intent)
-		}
-	}
-
-	if workingDir := a.WorkingDir(); workingDir != "" {
-		if pb := NewPlaybook(workingDir); pb != nil {
-			playbookText := pb.HintsForPrompt(runPrompt, 3)
-			if playbookText != "" {
-				dynamicParts = append(dynamicParts, playbookText)
-				debug.Log("agent", "Injected playbook strategy hints into system prompt")
-			}
-		}
-
-		if a.trajIntel != nil {
-			if sec := a.trajIntel.RenderPromptSection(workingDir); sec != "" {
-				dynamicParts = append(dynamicParts, sec)
-				debug.Log("agent", "Injected past-run trajectory learnings into system prompt")
-			}
-		}
-
-		if ft := FailureHintsForPrompt(workingDir, runPrompt, 2); ft != "" {
-			dynamicParts = append(dynamicParts, ft)
-			debug.Log("agent", "Injected failure attribution memory into system prompt")
+	if workingDir := a.WorkingDir(); workingDir != "" && a.trajIntel != nil {
+		if sec := a.trajIntel.RenderPromptSection(workingDir); sec != "" {
+			headParts = append(headParts, sec)
+			debug.Log("agent", "Injected past-run trajectory learnings into system prompt")
 		}
 	}
 
 	base = a.withTemporalContext(base)
-	if base == "" && len(dynamicParts) == 0 {
+	if base == "" && len(headParts) == 0 {
 		return
 	}
 
 	var fullText string
-	if len(dynamicParts) == 0 {
+	switch {
+	case len(headParts) == 0:
 		fullText = base
-	} else {
-		fullText = base + "\n\n" + strings.Join(dynamicParts, "\n\n")
+	case base == "":
+		fullText = strings.Join(headParts, "\n\n")
+	default:
+		fullText = base + "\n\n" + strings.Join(headParts, "\n\n")
 	}
 	if fullText == a.lastInjectedSystemPrompt {
 		return
@@ -114,11 +89,11 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 	}
 
 	ctxWindow := a.contextManager.ContextWindow()
+	headTokens := context.EstimateTokens(fullText)
 	if ctxWindow > 0 {
-		estTokens := context.EstimateTokens(fullText)
-		ratio := float64(estTokens) / float64(ctxWindow)
+		ratio := float64(headTokens) / float64(ctxWindow)
 		if ratio > 0.15 {
-			debug.Log("agent", "WARNING: system prompt is %.1f%% of context window (%d tokens / %d). Consider trimming memory files, ratchet rules, or reducing ExtraPrompt.", ratio*100, estTokens, ctxWindow)
+			debug.Log("agent", "WARNING: system prompt is %.1f%% of context window (%d tokens / %d). Consider trimming memory files, ratchet rules, or reducing ExtraPrompt.", ratio*100, headTokens, ctxWindow)
 		}
 	}
 
@@ -127,22 +102,77 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 		return
 	}
 
-	if len(dynamicParts) == 0 {
-		cm.UpdateFirstSystemMessage(provider.Message{
-			Role:    "system",
-			Content: []provider.ContentBlock{{Type: "text", Text: base, Cache: true}},
-		})
-		return
-	}
+	debug.Log("prompt-cache", "stable system head assembled: headTokens=%d window=%d", headTokens, ctxWindow)
 
-	dynamicText := strings.Join(dynamicParts, "\n\n")
+	// Single stable block carrying the cache breakpoint at the stable
+	// boundary (#5807): everything before it is session-stable, everything
+	// per-prompt rides the user turn tail instead.
 	cm.UpdateFirstSystemMessage(provider.Message{
 		Role: "system",
 		Content: []provider.ContentBlock{
-			{Type: "text", Text: base, Cache: true},
-			{Type: "text", Text: dynamicText},
+			{Type: "text", Text: fullText, Cache: true},
 		},
 	})
+}
+
+// renderVolatileTurnContext renders the per-prompt dynamic segments that used
+// to rewrite the system head on every user turn (#5807): injector/layer
+// output, intent-filtered ratchet rules, playbook strategy hints and failure
+// attribution memory. The caller attaches the result to the NEW user turn as
+// a trailing text block: the turn is an append, so the old prefix stays
+// byte-identical and only the tail block pays the cache write cost.
+func (a *Agent) renderVolatileTurnContext(runPrompt string) string {
+	a.mu.RLock()
+	fn := a.systemPromptInjector
+	layers := append([]systemPromptLayer(nil), a.systemPromptLayers...)
+	a.mu.RUnlock()
+
+	var parts []string
+
+	if fn != nil {
+		if extra := strings.TrimSpace(fn()); extra != "" {
+			parts = append(parts, extra)
+		}
+	}
+
+	for _, layer := range layers {
+		if layer.fn == nil {
+			continue
+		}
+		if extra := strings.TrimSpace(layer.fn()); extra != "" {
+			parts = append(parts, extra)
+		}
+	}
+
+	if rs := a.getRuleStore(); rs != nil {
+		intent := classifyTaskType(runPrompt)
+		rs.SetRunIntent(intent)
+		rulesText := rs.TopRulesForPromptFiltered(5, intent)
+		if rulesText != "" {
+			parts = append(parts, rulesText)
+			debug.Log("agent", "Injected learned ratchet rules into turn context (intent=%s)", intent)
+		}
+	}
+
+	if workingDir := a.WorkingDir(); workingDir != "" {
+		if pb := NewPlaybook(workingDir); pb != nil {
+			playbookText := pb.HintsForPrompt(runPrompt, 3)
+			if playbookText != "" {
+				parts = append(parts, playbookText)
+				debug.Log("agent", "Injected playbook strategy hints into turn context")
+			}
+		}
+
+		if ft := FailureHintsForPrompt(workingDir, runPrompt, 2); ft != "" {
+			parts = append(parts, ft)
+			debug.Log("agent", "Injected failure attribution memory into turn context")
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return volatileTurnContextHeader + "\n\n" + strings.Join(parts, "\n\n")
 }
 
 func (a *Agent) temporalContextLine() string {

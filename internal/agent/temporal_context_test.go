@@ -51,9 +51,9 @@ func TestTemporalLineFormat(t *testing.T) {
 	t.Fatalf("no weekday in line: %q", line)
 }
 
-func TestMaybeInjectDynamicSystemPromptIncludesTemporal(t *testing.T) {
+func TestMaybeInjectStableSystemHeadIncludesTemporal(t *testing.T) {
 	a := NewAgent(nil, nil, "You are a coding assistant.", 1)
-	a.maybeInjectDynamicSystemPrompt("")
+	a.maybeInjectStableSystemHead()
 
 	if !strings.Contains(a.lastInjectedSystemPrompt, "Current date/time: ") {
 		t.Fatalf("temporal header missing from injected prompt: %q", a.lastInjectedSystemPrompt)
