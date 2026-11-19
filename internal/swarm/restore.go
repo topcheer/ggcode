@@ -141,13 +141,14 @@ func (m *Manager) restoreTeammate(team *Team, mt *ManifestTeammate) {
 			tm.mu.Unlock()
 		}
 		if err := m.upsertManifestTeammate(team.ID, ManifestTeammate{
-			ID:           tm.ID,
-			Name:         tm.Name,
-			Role:         mt.Role,
-			Color:        tm.Color,
-			AllowedTools: sortedToolsCopy(mt.AllowedTools),
-			SessionFile:  teammateJournalID(tm),
-			LastActiveAt: mt.LastActiveAt,
+			ID:                tm.ID,
+			Name:              tm.Name,
+			Role:              mt.Role,
+			Color:             tm.Color,
+			AllowedTools:      sortedToolsCopy(mt.AllowedTools),
+			SessionFile:       teammateJournalID(tm),
+			LastActiveAt:      mt.LastActiveAt,
+			LastResultSummary: mt.LastResultSummary,
 		}); err != nil {
 			debug.Log("swarm", "manifest session rebind for %s/%s failed: %v", team.ID, tm.Name, err)
 		}
