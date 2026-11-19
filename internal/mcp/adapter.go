@@ -35,7 +35,31 @@ type Adapter struct {
 
 	breaker *serverBreaker
 
+	// leaseGuard, when set, fast-fails calls whose liveness lease expired
+	// (#5814 half-dead watchdog). Returns the fail-fast message when the
+	// server is considered likely dead.
+	leaseGuard func() (string, bool)
+
 	serverInstructions string
+}
+
+// SetLivenessGuard installs a pre-call lease check executed before transport
+// attempts. The guard itself is owned by the plugin layer.
+func (a *Adapter) SetLivenessGuard(guard func() (string, bool)) {
+	a.mu.Lock()
+	a.leaseGuard = guard
+	a.mu.Unlock()
+}
+
+// SetBreakerOnOpen registers a callback fired when the server breaker
+// transitions to OPEN (#5814: stdio servers auto re-init).
+func (a *Adapter) SetBreakerOnOpen(fn func()) {
+	a.mu.Lock()
+	breaker := a.breaker
+	a.mu.Unlock()
+	if breaker != nil {
+		breaker.SetOnOpen(fn)
+	}
 }
 
 func NewAdapter(serverName string, caller toolCaller, tools []ToolDefinition) *Adapter {
@@ -93,15 +117,16 @@ func (a *Adapter) RegisterTools(registry *tool.Registry) error {
 			desc = desc + "\n\nServer usage notes: " + util.Truncate(notes, serverInstructionsMaxRunes)
 		}
 		t := &mcpTool{
-			name:     name,
-			caller:   a.caller,
-			toolName: td.Name,
-			desc:     desc,
-			schema:   td.InputSchema,
-			readOnly: a.readOnly,
-			blocked:  blocked,
-			srvName:  a.serverName,
-			breaker:  a.breaker,
+			name:       name,
+			caller:     a.caller,
+			toolName:   td.Name,
+			desc:       desc,
+			schema:     td.InputSchema,
+			readOnly:   a.readOnly,
+			blocked:    blocked,
+			srvName:    a.serverName,
+			breaker:    a.breaker,
+			leaseGuard: a.leaseGuard,
 		}
 		if err := registry.Register(t); err != nil {
 
@@ -147,6 +172,8 @@ type mcpTool struct {
 
 	breaker *serverBreaker
 
+	leaseGuard func() (string, bool)
+
 	ContextFill float64
 	fillMu      sync.Mutex
 }
@@ -161,15 +188,16 @@ func (t *mcpTool) SetContextFill(fill float64) {
 
 func (t *mcpTool) Clone() tool.Tool {
 	return &mcpTool{
-		name:     t.name,
-		caller:   t.caller,
-		toolName: t.toolName,
-		desc:     t.desc,
-		schema:   append(json.RawMessage(nil), t.schema...),
-		readOnly: t.readOnly,
-		blocked:  t.blocked,
-		srvName:  t.srvName,
-		breaker:  t.breaker,
+		name:       t.name,
+		caller:     t.caller,
+		toolName:   t.toolName,
+		desc:       t.desc,
+		schema:     append(json.RawMessage(nil), t.schema...),
+		readOnly:   t.readOnly,
+		blocked:    t.blocked,
+		srvName:    t.srvName,
+		breaker:    t.breaker,
+		leaseGuard: t.leaseGuard,
 	}
 }
 
@@ -188,6 +216,11 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 
 	if t.breaker != nil {
 		if blocked, msg := t.breaker.gate(); blocked {
+			return tool.Result{Content: msg, IsError: true}, nil
+		}
+	}
+	if t.leaseGuard != nil {
+		if msg, dead := t.leaseGuard(); dead {
 			return tool.Result{Content: msg, IsError: true}, nil
 		}
 	}

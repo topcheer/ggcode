@@ -629,6 +629,14 @@ mcp_servers:
       - /path/to/allowed/dir
     env:
       NODE_ENV: production
+    # Periodic stdio liveness probe (#5814), in seconds. Default 600 (10m);
+    # 0 disables it for this server. Global env overrides:
+    #   GGCODE_MCP_HEALTH_PROBE_INTERVAL=600|10m   (interval, seconds or duration)
+    #   GGCODE_MCP_HEALTH_PROBE=off                (kill switch)
+    # On a failed probe or an open circuit breaker the stdio child is
+    # respawned automatically (capped retries with backoff); per-server
+    # health is visible via list_mcp_capabilities and debug.Log mcp-health.
+    # health_probe_interval: 300
 
   - name: github
     command: npx

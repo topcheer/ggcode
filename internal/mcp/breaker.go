@@ -33,6 +33,18 @@ type serverBreaker struct {
 	probing   bool
 	threshold int
 	cooldown  time.Duration
+
+	// onOpen, when set, fires once on every transition into breakerOpen so
+	// owners can react (stdio servers auto re-init, #5814). Called without the
+	// lock held.
+	onOpen func()
+}
+
+// SetOnOpen registers the callback fired when the breaker opens.
+func (b *serverBreaker) SetOnOpen(fn func()) {
+	b.mu.Lock()
+	b.onOpen = fn
+	b.mu.Unlock()
 }
 
 func newServerBreaker(server string) *serverBreaker {
@@ -76,8 +88,8 @@ func (b *serverBreaker) gate() (blocked bool, msg string) {
 }
 
 func (b *serverBreaker) recordFailure(err error) {
+	var openedHook func()
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.failures++
 	b.lastErr = errString(err)
 	switch b.state {
@@ -87,6 +99,7 @@ func (b *serverBreaker) recordFailure(err error) {
 			b.openedAt = time.Now()
 			b.probing = false
 			debugLogBreaker(b, "OPEN", "%d consecutive infra failures (last: %s)", b.failures, b.lastErr)
+			openedHook = b.onOpen
 		} else {
 			debugLogBreaker(b, "failure", "%d/%d (last: %s)", b.failures, b.threshold, b.lastErr)
 		}
@@ -96,8 +109,13 @@ func (b *serverBreaker) recordFailure(err error) {
 		b.openedAt = time.Now()
 		b.probing = false
 		debugLogBreaker(b, "REOPEN", "probe failed: %s", b.lastErr)
+		openedHook = b.onOpen
 	case breakerOpen:
 
+	}
+	b.mu.Unlock()
+	if openedHook != nil {
+		openedHook()
 	}
 }
 

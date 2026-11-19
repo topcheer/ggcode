@@ -77,6 +77,11 @@ type Client struct {
 	lastReadProgress  atomic.Int64
 	hangWatchdogArmed atomic.Bool
 
+	// #5814 liveness lease + probe preference.
+	lastHealthyAt atomic.Int64
+	leaseMaxAge   atomic.Int64
+	probePref     atomic.Int32
+
 	hangAbort    atomic.Bool
 	oauthHandler *OAuthHandler
 
@@ -758,8 +763,12 @@ func (c *Client) sendRequestOnce(ctx context.Context, method string, params inte
 
 	if resp.IsError() {
 
+		// A JSON-RPC error response still proves the transport round-trip
+		// works; refresh the liveness lease before surfacing the error.
+		c.markHealthy()
 		return decorateSpecError(resp.Error)
 	}
+	c.markHealthy()
 
 	if result != nil && resp.Result != nil {
 		if err := json.Unmarshal(resp.Result, result); err != nil {

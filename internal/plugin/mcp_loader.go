@@ -41,6 +41,12 @@ type MCPServerInfo struct {
 	Migrated              bool
 	Disabled              bool
 	OAuthRequired         bool
+
+	// #5814 fleet health: healthy | stale | dead | reiniting | unknown.
+	Health         MCPHealth
+	HealthSince    time.Time
+	LastProbeAt    time.Time
+	LastProbeError string
 }
 
 type MCPOAuthRequiredError struct {
@@ -88,6 +94,18 @@ type MCPPlugin struct {
 
 	healthCancel context.CancelFunc
 
+	// #5814 proactive health state (mcp_health.go).
+	health         MCPHealth
+	healthSince    time.Time
+	healthInterval time.Duration
+	lastProbeAt    time.Time
+	lastProbeErr   string
+	probeKickMu    sync.Mutex
+	probeKickAt    time.Time
+	reinitMu       sync.Mutex
+	reinitActive   bool
+	closedCh       chan struct{}
+
 	registry *tool.Registry
 
 	samplingHandler mcp.SamplingHandler
@@ -100,6 +118,7 @@ func NewMCPPlugin(cfg config.MCPServerConfig) *MCPPlugin {
 		cfg:       cfg,
 		status:    MCPStatusPending,
 		baselines: NewToolBaselineStore(""),
+		closedCh:  make(chan struct{}),
 	}
 }
 
@@ -111,52 +130,6 @@ func (m *MCPPlugin) SetSamplingHandler(h mcp.SamplingHandler) {
 
 func (m *MCPPlugin) SetElicitationHandler(h mcp.ElicitationHandler) {
 	m.elicitationHandler = h
-}
-
-func (m *MCPPlugin) startWSHealthProbe(client *mcp.Client) {
-	if !strings.EqualFold(strings.TrimSpace(m.cfg.Type), "ws") &&
-		!strings.EqualFold(strings.TrimSpace(m.cfg.Type), "websocket") {
-		return
-	}
-
-	if m.healthCancel != nil {
-		m.healthCancel()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	m.healthCancel = cancel
-
-	safego.Go("plugin.mcp.wsHealthProbe", func() {
-		ticker := time.NewTicker(wsHealthProbeInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-
-			m.mu.RLock()
-			connected := m.connected && m.client == client
-			m.mu.RUnlock()
-			if !connected {
-				continue
-			}
-			probeCtx, probeCancel := context.WithTimeout(ctx, 30*time.Second)
-			_, err := client.ListTools(probeCtx)
-			probeCancel()
-			if err == nil {
-				continue
-			}
-			if !isWSConnError(err) {
-				continue
-			}
-			debug.Log("mcp-ws-health", "server=%s transport dropped (%v), reconnecting", m.cfg.Name, err)
-
-			m.attemptReconnect(ctx)
-
-			return
-		}
-	})
 }
 
 const wsHealthProbeInterval = 60 * time.Second
@@ -256,7 +229,7 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.setupNotificationHandler(client)
 
 	m.startReconnectWatcher(client)
-	m.startWSHealthProbe(client)
+	m.startHealthMonitor(client)
 	return m.adapter, nil
 }
 
@@ -481,11 +454,20 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 		return false
 	}
 	oldAdapter := m.adapter
+	oldClient := m.client
 	m.adapter = nil
 	m.connected = false
 	m.client = nil
 	m.status = MCPStatusPending
 	m.mu.Unlock()
+
+	if oldClient != nil {
+		// #5814: the health-driven re-init paths arrive here with a live but
+		// stalled stdio child; Close kills its process group so respawns do
+		// not leak half-dead children. Closing an already-dead client is a
+		// harmless no-op.
+		_ = oldClient.Close()
+	}
 
 	m.notifyStateChange()
 
@@ -632,6 +614,10 @@ func (m *MCPPlugin) Info() MCPServerInfo {
 		PromptNames:           append([]string(nil), m.prompts...),
 		ResourceNames:         append([]string(nil), m.resources...),
 		ResourceTemplateNames: append([]string(nil), m.resourceTemplates...),
+		Health:                m.healthForReport(),
+		HealthSince:           m.healthSince,
+		LastProbeAt:           m.lastProbeAt,
+		LastProbeError:        m.lastProbeErr,
 	}
 	if m.adapter != nil {
 		info.ToolNames = m.adapter.ToolNames()
@@ -652,6 +638,10 @@ func (m *MCPPlugin) Close() error {
 
 	m.mu.Lock()
 	m.closed = true
+	if m.closedCh != nil {
+		close(m.closedCh)
+		m.closedCh = nil
+	}
 	if m.reconnectCancel != nil {
 		m.reconnectCancel()
 		m.reconnectCancel = nil
@@ -934,6 +924,8 @@ func (m *MCPManager) SnapshotMCP() []tool.MCPServerSnapshot {
 			PromptNames:           append([]string(nil), info.PromptNames...),
 			ResourceNames:         append([]string(nil), info.ResourceNames...),
 			ResourceTemplateNames: append([]string(nil), info.ResourceTemplateNames...),
+			Health:                string(info.Health),
+			LastProbeError:        info.LastProbeError,
 		})
 	}
 	return out
@@ -1521,7 +1513,17 @@ func mcpServerConfigEqual(a, b config.MCPServerConfig) bool {
 	if a.OAuthClientSecret != b.OAuthClientSecret {
 		return false
 	}
+	if !intPtrEqual(a.HealthProbeIntervalSeconds, b.HealthProbeIntervalSeconds) {
+		return false
+	}
 	return true
+}
+
+func intPtrEqual(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func (m *MCPManager) Close() error {

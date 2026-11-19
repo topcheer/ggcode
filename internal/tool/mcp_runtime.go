@@ -16,6 +16,11 @@ type MCPServerSnapshot struct {
 	PromptNames           []string
 	ResourceNames         []string
 	ResourceTemplateNames []string
+
+	// #5814 fleet health: healthy | stale | dead | reiniting | unknown
+	// (empty when the runtime does not report it).
+	Health         string
+	LastProbeError string
 }
 
 type MCPPromptMessage struct {
@@ -97,9 +102,17 @@ func (t ListMCPCapabilitiesTool) Execute(ctx context.Context, input json.RawMess
 		case snap.Pending:
 			status = "pending"
 		}
-		sb.WriteString(fmt.Sprintf("- %s (%s)\n", snap.Name, status))
+		health := strings.TrimSpace(snap.Health)
+		if health != "" {
+			sb.WriteString(fmt.Sprintf("- %s (%s, health: %s)\n", snap.Name, status, health))
+		} else {
+			sb.WriteString(fmt.Sprintf("- %s (%s)\n", snap.Name, status))
+		}
 		if snap.Error != "" {
 			sb.WriteString(fmt.Sprintf("  error: %s\n", snap.Error))
+		}
+		if snap.LastProbeError != "" {
+			sb.WriteString(fmt.Sprintf("  last probe: %s\n", snap.LastProbeError))
 		}
 		sb.WriteString(fmt.Sprintf("  tools: %s\n", joinOrNone(snap.ToolNames)))
 		sb.WriteString(fmt.Sprintf("  prompts: %s\n", joinOrNone(snap.PromptNames)))

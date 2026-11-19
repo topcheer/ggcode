@@ -172,11 +172,15 @@ type MCPServerConfig struct {
 	Stateless         bool              `yaml:"stateless,omitempty" json:"stateless,omitempty"`
 	AllowToolDrift    bool              `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
 	SkipOSVCheck      bool              `yaml:"skip_osv_check,omitempty" json:"skip_osv_check,omitempty"`
-	CommandClear      bool              `yaml:"-" json:"-"`
-	URLClear          bool              `yaml:"-" json:"-"`
-	Source            string            `yaml:"-" json:"-"`
-	OriginPath        string            `yaml:"-" json:"-"`
-	Migrated          bool              `yaml:"-" json:"-"`
+	// HealthProbeIntervalSeconds gates the periodic liveness probe (#5814):
+	// nil = default (env override applies, then transport default), 0 = probe
+	// disabled for this server, >0 = interval in seconds.
+	HealthProbeIntervalSeconds *int   `yaml:"health_probe_interval,omitempty" json:"health_probe_interval,omitempty"`
+	CommandClear               bool   `yaml:"-" json:"-"`
+	URLClear                   bool   `yaml:"-" json:"-"`
+	Source                     string `yaml:"-" json:"-"`
+	OriginPath                 string `yaml:"-" json:"-"`
+	Migrated                   bool   `yaml:"-" json:"-"`
 }
 
 type PluginConfigEntry struct {
