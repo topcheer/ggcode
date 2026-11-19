@@ -224,8 +224,6 @@ func TestOpenEditor_LaunchAndVerify(t *testing.T) {
 		t.Fatalf("startDetached failed: %v", err)
 	}
 
-	_ = cmd.Wait()
-
 	for i := 0; i < 100; i++ {
 		if _, err := os.Stat(markerPath); err == nil {
 			break
