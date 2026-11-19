@@ -12,25 +12,31 @@ import (
 	"testing"
 	"time"
 
+	"sync"
+
 	"github.com/topcheer/ggcode/internal/provider"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
 type mockProvider struct {
+	mu        sync.Mutex
 	chatCalls int
 	reply     string
 }
 
 func (m *mockProvider) Name() string { return "mock" }
 func (m *mockProvider) Chat(ctx context.Context, msgs []provider.Message, tools []provider.ToolDefinition) (*provider.ChatResponse, error) {
+	m.mu.Lock()
 	m.chatCalls++
+	reply := m.reply
+	m.mu.Unlock()
 	return &provider.ChatResponse{
 		Message: provider.Message{
 			Role: "assistant",
 			Content: []provider.ContentBlock{
 				{Type: "text", Text: func() string {
-					if m.reply != "" {
-						return m.reply
+					if reply != "" {
+						return reply
 					}
 					return "Summary: User asked about testing. Assistant responded with helpful information."
 				}()},

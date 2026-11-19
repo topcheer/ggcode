@@ -107,6 +107,7 @@ type Manager struct {
 	messages                 []provider.Message
 	version                  int64
 	nonTailMutSeq            int64
+	ctxStats                 *ctxStatsSampler
 	runAdded                 []provider.Message
 	runAddedIDs              map[string]bool
 	tokens                   int
@@ -140,6 +141,7 @@ func NewManager(contextWindow int) *Manager {
 		contextWindow: contextWindow,
 		calibrator:    NewTokenCalibrator(),
 		pinned:        newPinnedContext(),
+		ctxStats:      newCtxStatsSampler(),
 	}
 }
 
