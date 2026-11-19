@@ -13,7 +13,7 @@ import (
 // RestoreTeam is the authoritative board-entry path for a persisted team
 // (#5829): it loads the manifest (P2), enforces the owner lease (P0), and
 // rehydrates every member from its journal (P1) before starting the idle
-// loop. A fresh CreateTeam never lands here — inheriting a foreign board is
+// loop. A fresh CreateTeam never lands here - inheriting a foreign board is
 // always an explicit decision.
 func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 	m.mu.Lock()
@@ -61,16 +61,18 @@ func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 		m.restoreTeammate(team, &mt)
 	}
 
-	if err := m.writeManifest(teamID, mf); err != nil {
-		debug.Log("swarm", "manifest refresh on restore of %s failed: %v", teamID, err)
-	}
+	// NOTE: do NOT rewrite the manifest from the loaded `mf` here -
+	// restoreTeammate's upsertManifestTeammate calls have already rebound
+	// sessionFile to the freshly allocated journals on disk; writing the
+	// stale `mf` back would erase those session bindings and break
+	// journal replay on the next restore (#5831 E2E finding).
 
 	m.emit(Event{Type: "team_restored", TeamID: teamID, Timestamp: time.Now()})
 	return team.snapshot(), nil
 }
 
 // RestoreTeamByName resolves a persisted team by display name (or ID) and
-// restores it — the team_restore tool entry point.
+// restores it - the team_restore tool entry point.
 func (m *Manager) RestoreTeamByName(name string) (TeamSnapshot, error) {
 	mf, err := m.findTeamManifestByName(name)
 	if err != nil {
