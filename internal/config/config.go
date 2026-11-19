@@ -513,10 +513,13 @@ type SwarmConfig struct {
 	// TeammateEarlyCompactRatio is the proactive pre-compact trigger for
 	// spawned teammate agents, as a fraction of the context window (0.70 =
 	// compact at 70%). It mirrors the sub-agent runner's 70% convention
-	// (internal/subagent/runner.go #5002 gap 2). Zero (unset) defaults to
-	// 0.70 in swarm.NewManager; a negative value disables the early trigger
-	// (teammates keep only the reactive ~90% compaction path).
-	TeammateEarlyCompactRatio float64 `yaml:"teammate_early_compact_ratio,omitempty"`
+	// (internal/subagent/runner.go #5002 gap 2). DefaultConfig presets
+	// 0.70 and Load unmarshals over it, so an unset swarm section keeps the
+	// early trigger while an explicit teammate_early_compact_ratio: 0 (or
+	// any negative value) disables it, leaving only the reactive ~90%
+	// compaction path. swarm.NewManager consumes the value as-is: the config
+	// is the single source of truth, there is no manager-side default.
+	TeammateEarlyCompactRatio float64 `yaml:"teammate_early_compact_ratio"`
 }
 
 type LanChatConfig struct {
@@ -1182,6 +1185,7 @@ func DefaultConfig() *Config {
 			}),
 		},
 	}
+	cfg.Swarm.TeammateEarlyCompactRatio = 0.70
 	cfg.expandEnv()
 	populateDefaultModels(cfg)
 	cfg.normalizeActiveModel()
