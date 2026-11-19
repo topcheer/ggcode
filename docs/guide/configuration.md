@@ -270,6 +270,7 @@ swarm:
   max_teammates_per_team: 16   # Max teammates per team
   teammate_timeout: 600s       # Timeout for a teammate task (0 = no timeout)
   inbox_size: 32               # Task inbox depth per teammate
+  teammate_early_compact_ratio: 0.70  # Proactive pre-compact trigger (0 = disable)
 ```
 
 | Key | Type | Default | Description |
