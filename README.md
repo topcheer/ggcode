@@ -22,7 +22,9 @@ curl -fsSL https://ggcode.dev/install.sh | bash
 irm https://ggcode.dev/install.ps1 | iex
 ```
 
-**Other methods:** [Homebrew](docs/guide/install.md#macos) · [winget](docs/guide/install.md#windows) · [npm](docs/guide/install.md#npm) · [pip](docs/guide/install.md#pip) · [build from source](docs/guide/install.md#build-from-source)
+**Other methods:** [Homebrew](docs/guide/install.md#macos) · [winget](docs/guide/install.md#windows) · [build from source](docs/guide/install.md#build-from-source)
+
+> The legacy `npm` / `pip` installers are deprecated and no longer documented; use the shell installer or the methods above.
 
 > All install scripts default to non-privileged (no sudo / admin required).
 

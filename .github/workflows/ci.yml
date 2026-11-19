@@ -83,6 +83,19 @@ jobs:
             # shellcheck disable=SC2086
             GOMEMLIMIT=2GiB GOGC=50 go test -tags goolm -p 1 -timeout 300s $sel
           fi
+      # #5733 (F1): ggcode-relay is a separate load-bearing module (mobile
+      # relay backbone, own go.mod + deploy manifests) that previously had
+      # zero CI coverage - a breaking commit landed green. Runs the full
+      # relay module on every event; it is tiny (~7k LOC, ~seconds), so no
+      # path selection applies. Precedent: desktop/wailskit CI wiring (#4932).
+      - name: Relay module (build + vet + test)
+        working-directory: ggcode-relay
+        run: |
+          set -eu
+          go mod download
+          go build ./...
+          go vet ./...
+          GOMEMLIMIT=1GiB GOGC=50 go test -p 1 -timeout 120s ./...
 
   # Gate: the embedded webui dist must be rebuilt whenever web/ changes.
   # Guards against "edited web/ but forgot make build-all" shipping a
