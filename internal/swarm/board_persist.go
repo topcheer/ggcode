@@ -27,7 +27,11 @@ func (m *Manager) boardRoot() string {
 }
 
 // #5860: teams/<sessionID>/<teamID>/ - the confirmed session id is the
-// namespace; the directory is the ownership.
+// namespace; the directory is the ownership. An empty namespace (session
+// never confirmed) must never create or persist a team: CreateTeam panics
+// on it. Cross-process root pollution (teams/<teamID>, #5867) came from
+// pre-#5860 binaries without any namespace - cured by upgrading those
+// processes, not by re-allowing unsessioned boards here.
 func (m *Manager) sessionTeamsDir() string {
 	return filepath.Join(m.boardRoot(), "swarm", "teams", m.SessionNamespace())
 }
