@@ -123,3 +123,30 @@ func TestLiveForeignSessionStillRefusedAfterAdoptionChange(t *testing.T) {
 		t.Fatalf("LIVE owner's foreign team must stay refused, got: %v", err)
 	}
 }
+
+// Field screenshot (burrow/android-port): a team torn down mid-review
+// leaves ALL members in ShuttingDown while the map entry persists - the
+// old "already active" refusal then blocked team_restore forever. Now:
+// a dead-state husk is evicted and restored fresh from the manifest.
+func TestDeadStateHuskTakenOverByRestore(t *testing.T) {
+	root := t.TempDir()
+	m1 := newLeaseTestManager(t, root)
+	m1.SetOwnerSession("s-husk")
+	s := m1.CreateTeam("husked", "leader-1")
+	if _, err := m1.SpawnTeammate(s.ID, "alice", "", nil); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+
+	// Tear the team down mid-review: same manager (in map), all members
+	// ShuttingDown, goroutines cancelled - the husk state from the field.
+	m1.Shutdown()
+
+	// Restore on the SAME manager must take over, not refuse.
+	snap, err := m1.RestoreTeam(s.ID)
+	if err != nil {
+		t.Fatalf("dead-state husk must be taken over by restore (user symptom: 'already active' blocks recovery): %v", err)
+	}
+	if snap.ID != s.ID || len(snap.Teammates) != 1 {
+		t.Fatalf("takeover snapshot mismatch: %+v", snap)
+	}
+}
