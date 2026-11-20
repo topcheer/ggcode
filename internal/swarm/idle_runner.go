@@ -551,6 +551,30 @@ func ctxCancelRollbackTask(tmMgr *task.Manager, claimed task.Task, tm *Teammate)
 		}
 	}
 	attempts++
+	// Park at the same retry ceiling as the failure (:345) and panic
+	// (:518) paths. Without this branch, a restart storm (each shutdown
+	// cancels ctx -> rollback -> re-claim after boot) re-ran the same
+	// task forever: attempts kept climbing past maxTransientTaskRetries
+	// but ctx-cancel never parked. This was the "teammate redoing old
+	// tasks after every restart" loop.
+	if attempts >= maxTransientTaskRetries {
+		completed := task.StatusCompleted
+		meta := map[string]string{
+			"permanent_error": "max_retries_exceeded",
+			"error":           "teammate repeatedly interrupted by restarts (ctx cancelled)",
+			"retry_attempts":  strconv.Itoa(attempts),
+		}
+		meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, fmt.Errorf("teammate repeatedly interrupted by restarts")))
+		if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
+			ExpectedStatus: &inProgress,
+			Status:         &completed,
+			Metadata:       meta,
+		}); uerr != nil {
+			debug.Log("swarm", "teammate %s ctx-cancel park of %s failed: %v", tm.ID, claimed.ID, uerr)
+		}
+		debug.Log("swarm", "teammate %s ctx-cancel rollback of %s exceeded %d retries, parking as completed(max_retries)", tm.ID, claimed.ID, maxTransientTaskRetries)
+		return
+	}
 	if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
 		ExpectedStatus: &inProgress,
 		Status:         &pending,
