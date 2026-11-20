@@ -339,7 +339,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		// is empty; once the user starts typing they become ordinary input,
 		// and any other key falls through to the composer so text can be
 		// queued on the interrupt channel while the gate is open.
-		composerBusy := strings.TrimSpace(m.input.Value()) != ""
+		composerBusy := approvalComposerBusy(m.input.Value()) // #5864: TrimSpace misses zero-width/control runes
 		switch msg.String() {
 		case "up":
 			m.approvalCursor = (m.approvalCursor - 1 + len(m.approvalOptions)) % len(m.approvalOptions)
@@ -728,6 +728,26 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 // so user input stays deliverable during the approval wait (#5843). The
 // approval itself remains pending: empty-composer enter or the y/n/a
 // shortcuts still answer it.
+// approvalComposerBusy reports whether the composer holds real, user-visible
+// text while an approval gate is open (#5864). strings.TrimSpace alone is not
+// enough: zero-width runes (U+200B..U+200D, U+FEFF) and control chars pasted
+// into the composer look empty but kept composerBusy true, so Enter fell into
+// queueApprovalGateSubmission forever and the approval gate never resolved —
+// the prompt stayed up while the agent loop kept running (freeze).
+func approvalComposerBusy(value string) bool {
+	for _, r := range value {
+		switch {
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			// ordinary whitespace
+		case r >= 0x200B && r <= 0x200D, r == 0xFEFF, r < 0x20, r == 0x7F:
+			// invisible: zero-width family, BOM, control chars — not busy
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) queueApprovalGateSubmission() {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
@@ -737,6 +757,13 @@ func (m *Model) queueApprovalGateSubmission() {
 	m.history = append(m.history, text)
 	m.historyIdx = len(m.history)
 	m.queuePendingSubmission(text)
+	// #5864: the queued Enter must not look like the approval was swallowed —
+	// the gate is still open and needs an explicit answer.
+	if m.currentLanguage() == LangZhCN {
+		m.chatWriteSystem(nextSystemID(), "已排队待发送；审批弹窗仍待决——清空输入后按 Enter/y/n/a 裁决（Esc 拒绝）")
+	} else {
+		m.chatWriteSystem(nextSystemID(), "Queued for delivery; the approval prompt is still pending — clear the composer and press Enter/y/n/a to decide (Esc denies)")
+	}
 }
 
 func deleteFromCursorToEnd(ta *textarea.Model) {
