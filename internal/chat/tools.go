@@ -220,6 +220,16 @@ func (t *BaseToolItem) RenderBody(width int) string {
 	return t.styles.ToolBody.Render(body)
 }
 
+// #5867: render-path regexes. These compile-once vars replaced inline
+// regexp.MustCompile calls inside renderFileLineCount/renderSearchCount
+// that re-compiled the pattern on EVERY TUI frame while a tool result
+// was on screen (a top alloc site in fleet memstats, second only to the
+// UsageHistory copies fixed the same day).
+var (
+	fileLineCountRe = regexp.MustCompile(`(?m)^\s+\d+\s`)
+	searchCountRe   = regexp.MustCompile(`Showing \d+ of (\d+) matches?|Found (\d+) matches?|(?:Showing|Found|Listed|Returned) \d+ of (\d+) results?`)
+)
+
 func (t *BaseToolItem) renderFileLineCount() string {
 	var lines int
 
@@ -270,8 +280,7 @@ func (t *BaseToolItem) renderFileLineCount() string {
 		}
 	}
 
-	re := regexp.MustCompile(`(?m)^\s+\d+\s`)
-	matches := re.FindAllString(t.result, -1)
+	matches := fileLineCountRe.FindAllString(t.result, -1)
 	lines = len(matches)
 
 	if lines == 0 {
@@ -343,8 +352,7 @@ func (t *BaseToolItem) renderEditDiff() string {
 
 func (t *BaseToolItem) renderSearchCount() string {
 
-	re := regexp.MustCompile(`Showing \d+ of (\d+) matches?|Found (\d+) matches?|(?:Showing|Found|Listed|Returned) \d+ of (\d+) results?`)
-	m := re.FindStringSubmatch(t.result)
+	m := searchCountRe.FindStringSubmatch(t.result)
 	n := ""
 	if len(m) >= 4 {
 		if m[1] != "" {
