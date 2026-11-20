@@ -168,6 +168,38 @@ func handleMessage(
 
 	result, taskErr := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
 
+	// Direct-delivered board tasks (swarm_task_create with assignee) carry
+	// their task ID on the message. Mark the board task completed here -
+	// historically this path only replied to the leader and never touched
+	// the board, so finished direct tasks stayed pending forever and every
+	// restart re-claimed and re-ran them.
+	if msg.TaskID != "" && taskErr == nil && ctx.Err() == nil {
+		if board := mgr.GetTaskManager(team.ID); board != nil {
+			pending := task.StatusPending
+			inProgress := task.StatusInProgress
+			completed := task.StatusCompleted
+			if existing, ok := board.Get(msg.TaskID); ok &&
+				(existing.Status == pending || existing.Status == inProgress) {
+				owner := tm.ID
+				if _, uerr := board.Update(msg.TaskID, task.UpdateOptions{
+					ExpectedStatus: &inProgress,
+					Owner:          &owner,
+					Status:         &completed,
+				}); uerr != nil {
+					// Task may never have been claimed (still pending).
+					if _, uerr2 := board.Update(msg.TaskID, task.UpdateOptions{
+						ExpectedStatus: &pending,
+						Owner:          &owner,
+						Status:         &completed,
+					}); uerr2 != nil {
+						debug.Log("swarm", "teammate %s direct-task completion of %s failed: %v", tm.ID, msg.TaskID, uerr2)
+					}
+				}
+				debug.Log("swarm", "teammate %s direct-task %s marked completed on board", tm.ID, msg.TaskID)
+			}
+		}
+	}
+
 	if msg.ReplyTo != nil {
 		select {
 		case msg.ReplyTo <- TaskResult{Output: result, Error: taskErr}:

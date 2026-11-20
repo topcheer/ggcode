@@ -119,6 +119,7 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 			From:    "leader",
 			Content: prompt,
 			Type:    "task",
+			TaskID:  created.ID,
 		})
 		if err != nil {
 

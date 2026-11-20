@@ -24,6 +24,13 @@ type MailMessage struct {
 	Summary string
 	Type    string
 
+	// TaskID links a directly-delivered board task to this message so the
+	// runner can mark the board task completed when the work finishes.
+	// Without it, direct-delivered tasks stayed pending on the board
+	// forever after completion, and every restart re-claimed and re-ran
+	// them (the "teammate redoing finished work after restart" loop).
+	TaskID string
+
 	ReplyTo chan<- TaskResult
 }
 
