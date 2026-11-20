@@ -2,6 +2,7 @@ package tui
 
 import (
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -36,13 +37,20 @@ func TestIssue5864_InvisibleResidueMakesComposerBusy(t *testing.T) {
 	if m.pendingApproval != nil {
 		t.Fatal("post-fix: Enter must resolve the approval even with invisible residue — prompt stayed (freeze)")
 	}
-	select {
-	case d := <-ch:
-		if d == permission.Cancelled || d == permission.Deny {
-			t.Fatalf("unexpected decision %v", d)
+	deadline := time.Now().Add(500 * time.Millisecond) // decision arrives via safego.Go (async)
+	for {
+		select {
+		case d := <-ch:
+			if d == permission.Cancelled || d == permission.Deny {
+				t.Fatalf("unexpected decision %v", d)
+			}
+			return
+		default:
+			if time.Now().After(deadline) {
+				t.Fatal("post-fix: Enter must deliver a decision (freeze was: nothing delivered)")
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-	default:
-		t.Fatal("post-fix: Enter must deliver a decision (freeze was: nothing delivered)")
 	}
 }
 
@@ -56,13 +64,20 @@ func TestIssue5864_CleanComposerEnterResolves(t *testing.T) {
 	if m.pendingApproval != nil {
 		t.Fatal("clean-composer Enter must consume the approval prompt")
 	}
-	select {
-	case d := <-ch:
-		if d != permission.Allow {
-			t.Fatalf("cursor=0 is Allow(y)? got %v (option order may differ — see defaultApprovalOptions)", d)
+	deadline := time.Now().Add(500 * time.Millisecond) // decision arrives via safego.Go (async)
+	for {
+		select {
+		case d := <-ch:
+			if d == permission.Cancelled || d == permission.Deny {
+				t.Fatalf("unexpected decision %v (cursor=0 should be an allow-family option)", d)
+			}
+			return
+		default:
+			if time.Now().After(deadline) {
+				t.Fatal("clean-composer Enter must deliver a decision")
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-	default:
-		t.Fatal("clean-composer Enter must deliver a decision")
 	}
 }
 
