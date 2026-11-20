@@ -239,11 +239,19 @@ func (m *Manager) CreateTeam(name, leaderID string) TeamSnapshot {
 	if err := m.stampOwnerLease(id); err != nil {
 		debug.Log("swarm", "owner lease stamp for %s failed: %v (team runs in-memory only)", id, err)
 	}
+	// #5858 defense in depth: the manifest must never be written with an
+	// empty ownership stamp. Re-mint if every earlier binding path failed.
+	m.mu.Lock()
+	if m.ownerSessionID == "" {
+		m.ownerSessionID = "auto-" + randomHex(8)
+	}
+	stamp := m.ownerSessionID
+	m.mu.Unlock()
 	if err := m.writeManifest(id, &TeamManifest{
+		OwnerSessionID: stamp,
 		TeamID:         id,
 		Name:           name,
 		LeaderID:       leaderID,
-		OwnerSessionID: m.ownerSessionID, // #5837: teams belong to their creating session
 		CreatedAt:      team.CreatedAt,
 		Teammates:      []ManifestTeammate{},
 	}); err != nil {

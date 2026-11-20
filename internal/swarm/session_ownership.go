@@ -21,6 +21,15 @@ import (
 // it. An empty owner session (unset) keeps legacy behavior: everything is
 // visible and restorable (pre-#5837 manifests, tests).
 func (m *Manager) SetOwnerSession(sessionID string) {
+	if sessionID == "" {
+		// #5858 field regression: on the resume path the caller once bound
+		// an EMPTY session ID (ag.SessionID() raced the resume), which
+		// overwrote the auto-minted fallback - every team created after
+		// that landed an unstamped manifest (omitempty dropped the empty
+		// field) and became unrestorable/undeletable. An empty bind is
+		// never meaningful: keep the auto-mint instead.
+		return
+	}
 	m.mu.Lock()
 	m.ownerSessionID = sessionID
 	m.mu.Unlock()

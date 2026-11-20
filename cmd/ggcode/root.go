@@ -732,7 +732,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	// surface is session-filtered from the first visible turn. The initial
 	// pre-agent prompt stays unfiltered only until that first rebuild.
 	swarm.SetProcessOwnerSession(ag.SessionID())
-	swarm.SetProcessWorkspace(ag.WorkingDir())
 
 	// Memory v2: resident memory curator. It watches memory save/delete
 	// events and runs a debounced headless curation pass (tag, merge,
@@ -1537,16 +1536,16 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	// #5837: teams are session-scoped; bind the manager and rebuild this
 	// session's persisted teams right away (process-level prompt filter is
 	// set earlier, right after agent creation - see Review B-2 note).
+	// #5858 defect B (LuckyRobin diagnosis): the OLD order was
+	// SetOwnerSession -> AutoRestore -> SetWorkingDir, so the auto-restore
+	// scan ran with WorkingDir unset (wrong store + wrong filter). Working
+	// dir FIRST, then session bind (empty-race-safe via the SetOwnerSession
+	// guard), then auto-restore. Store = GLOBAL (#5853 ruling): no
+	// workspace BoardRoot override.
+	swarmMgr.SetWorkingDir(ag.WorkingDir())
 	swarmMgr.SetOwnerSession(ag.SessionID())
 	for _, snap := range swarmMgr.AutoRestoreSessionTeams() {
 		debug.Log("swarm", "auto-restored session team %s (%s): %d member(s)", snap.ID, snap.Name, len(snap.Teammates))
-	}
-	swarmMgr.SetWorkingDir(ag.WorkingDir())
-	// #5851-followup: workspace-scoped team store. New teams persist under
-	// <workspace>/.ggcode/swarm/teams (per-workspace semantics; the global
-	// ~/.ggcode/swarm/teams stays as a legacy pool for explicit adoption).
-	if wd := ag.WorkingDir(); wd != "" {
-		swarmMgr.BoardRoot = filepath.Join(wd, ".ggcode")
 	}
 	// #5657-followup item 7: backfill the team view source for the plan
 	// face closure (declared before the introspector is wired).
