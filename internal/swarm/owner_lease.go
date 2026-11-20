@@ -203,23 +203,32 @@ func (l *ownerLease) alive(hostname string) bool {
 	if l == nil || l.BootID == "" {
 		return false
 	}
-	// Same-host PID probe is authoritative while it succeeds.
-	if l.Hostname == hostname && l.PID > 0 {
-		// Self-PID short-circuit (exec-restart self-deadlock): the restart
-		// tool replaces the binary via exec, which PRESERVES the PID while
-		// the new image's Manager mints a fresh bootID. The on-disk lease
-		// then carries our own PID with a foreign bootID, and the probe
-		// below finds "a live process" — us — forever refusing restore.
-		// A lease whose PID is the caller's own PID can only be our own
-		// exec predecessor (or a coincidental PID reuse after this lease's
-		// TTL already expired elsewhere); either way it is inheritable.
-		if l.PID == os.Getpid() {
-			return false
+	// Same-host PID probe is authoritative in BOTH directions: a live PID
+	// means alive; a DEAD PID means the owner is provably gone. The
+	// heartbeat is only a fallback for FOREIGN hosts where no probe is
+	// possible - otherwise a same-host owner that died seconds after its
+	// last heartbeat is misread as alive for up to ownerLeaseTTL, blocking
+	// cold-start restore of its own teams (probe-catch on 2026-11-20).
+	if l.Hostname == hostname {
+		if l.PID > 0 {
+			// Self-PID short-circuit (exec-restart self-deadlock): the restart
+			// tool replaces the binary via exec, which PRESERVES the PID while
+			// the new image's Manager mints a fresh bootID. The on-disk lease
+			// then carries our own PID with a foreign bootID, and the probe
+			// below finds "a live process" — us — forever refusing restore.
+			// A lease whose PID is the caller's own PID can only be our own
+			// exec predecessor (or a coincidental PID reuse after this lease's
+			// TTL already expired elsewhere); either way it is inheritable.
+			if l.PID == os.Getpid() {
+				return false
+			}
+			if pidAlive(l.PID) {
+				return true
+			}
 		}
-		if pidAlive(l.PID) {
-			return true
-		}
+		// Same host, probe failed: owner is gone regardless of heartbeat.
+		return false
 	}
-	// Fall back to heartbeat freshness (foreign host, or probe not decisive).
+	// Foreign host: no PID probe possible; fall back to heartbeat freshness.
 	return time.Since(l.Heartbeat) < ownerLeaseTTL
 }
