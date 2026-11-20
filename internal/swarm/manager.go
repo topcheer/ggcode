@@ -96,8 +96,11 @@ type Manager struct {
 	// Persistent teams (#5829): bootID/hostname identify this instance in
 	// team-dir owner leases; journalStoreCache caches the journal session
 	// store (journalMu-guarded); manifestMu serializes manifest writes.
+	// #5837: ownerSessionID binds teams to their creating SESSION (cross-
+	// session isolation) - ownership is session-scoped, not PID-scoped.
 	bootID            string
 	hostname          string
+	ownerSessionID    string
 	journalMu         sync.Mutex
 	journalStoreCache *session.JSONLStore
 	manifestMu        sync.Mutex
@@ -233,11 +236,12 @@ func (m *Manager) CreateTeam(name, leaderID string) TeamSnapshot {
 		debug.Log("swarm", "owner lease stamp for %s failed: %v (team runs in-memory only)", id, err)
 	}
 	if err := m.writeManifest(id, &TeamManifest{
-		TeamID:    id,
-		Name:      name,
-		LeaderID:  leaderID,
-		CreatedAt: team.CreatedAt,
-		Teammates: []ManifestTeammate{},
+		TeamID:         id,
+		Name:           name,
+		LeaderID:       leaderID,
+		OwnerSessionID: m.ownerSessionID, // #5837: teams belong to their creating session
+		CreatedAt:      team.CreatedAt,
+		Teammates:      []ManifestTeammate{},
 	}); err != nil {
 		debug.Log("swarm", "manifest write for %s failed: %v", id, err)
 	}

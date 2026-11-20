@@ -36,12 +36,13 @@ type ManifestTeammate struct {
 
 // TeamManifest is the persisted team descriptor.
 type TeamManifest struct {
-	TeamID    string             `json:"teamID"`
-	Name      string             `json:"name"`
-	LeaderID  string             `json:"leaderID"`
-	CreatedAt time.Time          `json:"createdAt"`
-	UpdatedAt time.Time          `json:"updatedAt"`
-	Teammates []ManifestTeammate `json:"teammates"`
+	TeamID         string             `json:"teamID"`
+	Name           string             `json:"name"`
+	LeaderID       string             `json:"leaderID"`
+	OwnerSessionID string             `json:"ownerSessionID,omitempty"`
+	CreatedAt      time.Time          `json:"createdAt"`
+	UpdatedAt      time.Time          `json:"updatedAt"`
+	Teammates      []ManifestTeammate `json:"teammates"`
 }
 
 func (m *Manager) manifestPath(teamID string) string {

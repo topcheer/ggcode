@@ -38,7 +38,35 @@ type PersistedTeamInfo struct {
 // Manager); default-layout deployments are fully covered.
 // Pure disk read — no Manager instance required.
 func SummarizePersistedTeams() []PersistedTeamInfo {
-	teamsDir := filepath.Join(util.ConfigDir(), "swarm", "teams")
+	return SummarizeVisibleTeams(processOwnerSession())
+}
+
+// SummarizeVisibleTeams scans <configDir>/swarm/teams and keeps only the
+// teams the given session may see: its own teams plus adoptable legacy
+// (unclaimed) ones. Foreign-session teams are invisible (#5837). An empty
+// session ID keeps the unfiltered legacy behavior.
+func SummarizeVisibleTeams(sessionID string) []PersistedTeamInfo {
+	all := summarizePersistedTeamsUnder(util.ConfigDir())
+	if sessionID == "" {
+		return all
+	}
+	out := make([]PersistedTeamInfo, 0, len(all))
+	for _, info := range all {
+		mf, err := readManifestFile(filepath.Join(util.ConfigDir(), "swarm", "teams", info.TeamID, "manifest.json"))
+		if err != nil {
+			continue
+		}
+		if mf.OwnerSessionID == "" || mf.OwnerSessionID == sessionID {
+			out = append(out, info)
+		}
+	}
+	return out
+}
+
+// summarizePersistedTeamsUnder scans <root>/swarm/teams (test entry for
+// arbitrary board roots).
+func summarizePersistedTeamsUnder(root string) []PersistedTeamInfo {
+	teamsDir := filepath.Join(root, "swarm", "teams")
 	entries, err := os.ReadDir(teamsDir)
 	if err != nil {
 		return nil // no teams dir yet — nothing to surface
