@@ -241,7 +241,11 @@ func NewSwarmManager(
 	if onUsage != nil {
 		mgr.SetUsageHandler(onUsage)
 	}
-	if registry != nil {
+	// #5867 invariant: a session without a confirmed id cannot have teams.
+	// Desktop chain: skip board tools entirely until an id exists. The TUI
+	// chain registers via SetSwarmManager pre-confirm, so its guard lives
+	// in tool layer (TeamCreate rejects with IsError until confirmed).
+	if sessionID != "" && registry != nil {
 		_ = registry.Register(tool.TeamCreateTool{Manager: mgr})
 		_ = registry.Register(tool.TeamDeleteTool{Manager: mgr})
 		_ = registry.Register(tool.TeamRestoreTool{Manager: mgr})

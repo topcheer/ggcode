@@ -58,6 +58,12 @@ func (t TeamCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "name is required"}, nil
 	}
 
+	// #5867: unconfirmed session (fresh chat, no id yet) = no teams. The
+	// manager would panic mid-loop and take the TUI down; an IsError result
+	// lets the agent retry after the first message confirms the session.
+	if t.Manager.SessionNamespace() == "" {
+		return Result{IsError: true, Content: "session not confirmed yet: team tools unlock after the first message"}, nil
+	}
 	snap := t.Manager.CreateTeam(args.Name, args.LeaderID)
 	out, _ := json.Marshal(snap)
 	return Result{Content: string(out) + "\n"}, nil
