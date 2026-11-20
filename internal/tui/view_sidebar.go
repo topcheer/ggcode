@@ -33,7 +33,7 @@ func (m Model) renderSidebar() string {
 	}
 	vendor, _, model := m.currentSelection()
 
-	body := strings.Join([]string{
+	sections := []string{
 		"",
 		renderSidebarLogo(m.sidebarWidth()-4, sidebarHomepageURL),
 		"",
@@ -52,7 +52,11 @@ func (m Model) renderSidebar() string {
 		m.renderSidebarMCPSection(),
 		"",
 		m.renderSidebarA2ASection(),
-	}, "\n")
+	}
+	if swarmSection := m.renderSidebarSwarmSection(); swarmSection != "" {
+		sections = append(sections, "", swarmSection)
+	}
+	body := strings.Join(sections, "\n")
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

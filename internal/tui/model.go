@@ -357,6 +357,7 @@ type Model struct {
 	hooksPanel            *hooksPanelState
 	inspectorPanel        *inspectorPanelState
 	swarmMgr              *swarm.Manager
+	swarmTeams            []swarm.TeamSnapshot
 	acpClientMgr          *acpclient.ClientManager
 
 	impersonatePanel       *impersonatePanelState

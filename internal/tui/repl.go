@@ -1089,6 +1089,11 @@ func (r *REPL) SetACPClientManager(mgr *acpclient.ClientManager) {
 
 func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	r.model.swarmMgr = mgr
+	// #5851: seed the sidebar swarm panel snapshot. AutoRestoreSessionTeams
+	// (cmd/ggcode/root.go) runs before SetOnUpdate is wired below, so restore
+	// events are dropped; the seed makes auto-restored teams appear in the
+	// panel immediately, while later lifecycle events keep it fresh.
+	r.model.swarmTeams = mgr.ListTeams()
 
 	tools.Register(tool.TeamCreateTool{Manager: mgr})
 	tools.Register(tool.TeamDeleteTool{Manager: mgr})
