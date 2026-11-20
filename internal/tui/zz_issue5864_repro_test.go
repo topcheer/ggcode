@@ -65,3 +65,26 @@ func TestIssue5864_CleanComposerEnterResolves(t *testing.T) {
 		t.Fatal("clean-composer Enter must deliver a decision")
 	}
 }
+
+// Post-fix pin (#5864 layer 2): an approval raised while a teammate
+// (impersonate) panel is open must still be answerable — the panel used to
+// swallow every key before the approval branch, freezing the TUI.
+func TestIssue5864_ApprovalOutranksTeammatePanel(t *testing.T) {
+	m, ch := new5864Model()
+	m.impersonatePanel = &impersonatePanelState{} // an open modal panel (same swallow-path class as the teammate view)
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+
+	if m.pendingApproval != nil {
+		t.Fatal("Enter with approval pending + teammate panel open must resolve the approval (was: panel swallowed the key -> freeze)")
+	}
+	select {
+	case d := <-ch:
+		if d == permission.Cancelled {
+			t.Fatalf("unexpected decision %v", d)
+		}
+	default:
+		t.Fatal("decision must be delivered; pre-fix the gate hung forever")
+	}
+}

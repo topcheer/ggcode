@@ -225,6 +225,17 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m.updateKnightPanel(msg)
 	}
 
+	// #5864: an approval raised while a teammate (impersonate) panel is open
+	// used to be unreachable - the panel swallowed every key below before the
+	// pendingApproval branch could answer the gate, freezing the TUI.
+	// Approval keys must outrank the panel while a gate is pending.
+	if m.pendingApproval != nil {
+		switch msg.String() {
+		case "esc", "ctrl+c", "y", "Y", "n", "N", "a", "A", "enter", "up", "down", "tab", "shift+tab", "left", "right":
+			goto approvalGate
+		}
+	}
+
 	if m.impersonatePanel != nil {
 		return m.handleImpersonatePanelKey(msg)
 	}
@@ -333,6 +344,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
+approvalGate:
 	if m.pendingApproval != nil {
 		// #5843: the approval wait must keep the input drain open. Letter
 		// shortcuts (y/n/a/j/k) act on the approval only while the composer
