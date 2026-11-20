@@ -37,6 +37,7 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/version"
@@ -488,6 +489,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return fmt.Errorf("saving session: %w", err)
 	}
 	ag.SetSessionID(ses.ID)
+	// Review B-2 (sa-1 full audit): daemon-side prompt building never set
+	// the process-level owner session, so the persistent-teams prompt
+	// surface was unfiltered in daemon sessions. Bind it here, right after
+	// the session ID is known.
+	swarm.SetProcessOwnerSession(ses.ID)
 
 	if sessionLock == nil && ses.ID != "" {
 		lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID)
