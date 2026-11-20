@@ -240,14 +240,6 @@ func tryClaimPendingTask(
 			continue
 		}
 
-		// Clean-restart semantics: tasks frozen by a restart or restore
-		// (interrupted_by marker) are never auto-claimed. The leader
-		// re-arms them explicitly (task_update clears the marker, or a
-		// fresh swarm_task_create).
-		if v, ok := tk.Metadata["interrupted_by"]; ok && v != "" {
-			continue
-		}
-
 		if assignee, ok := tk.Metadata["assignee"]; ok && assignee != "" && assignee != tm.ID {
 			continue
 		}
@@ -587,7 +579,7 @@ func ctxCancelRollbackTask(tmMgr *task.Manager, claimed task.Task, tm *Teammate)
 		ExpectedStatus: &inProgress,
 		Status:         &pending,
 		Owner:          &owner,
-		Metadata:       map[string]string{"retry_attempts": strconv.Itoa(attempts), "interrupted_by": "restart"},
+		Metadata:       map[string]string{"retry_attempts": strconv.Itoa(attempts)},
 	}); uerr != nil {
 		debug.Log("swarm", "teammate %s ctx-cancel rollback of %s skipped: %v (task changed externally)", tm.ID, claimed.ID, uerr)
 	}
