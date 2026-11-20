@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Prompt-facing discoverability for persistent teams (#5829 follow-up).
@@ -42,31 +41,29 @@ func SummarizePersistedTeams() []PersistedTeamInfo {
 }
 
 // surfaceScanRoot returns the directory the prompt surface should scan:
-// the workspace-scoped store when set (#5851-followup), else the global
-// legacy pool.
+// the workspace-scoped store ONLY (#5852 follow-up, user ruling: no
+// global pool, no legacy concept - teams are workspace+session scoped,
+// full stop). Empty when no workspace is bound (nothing to surface).
 func surfaceScanRoot() string {
-	if r := processWorkspaceRoot(); r != "" {
-		return r
-	}
-	return util.ConfigDir()
+	return processWorkspaceRoot()
 }
 
-// SummarizeVisibleTeams scans <configDir>/swarm/teams and keeps only the
-// teams the given session may see: its own teams plus adoptable legacy
-// (unclaimed) ones. Foreign-session teams are invisible (#5837). An empty
-// session ID keeps the unfiltered legacy behavior.
+// SummarizeVisibleTeams scans the workspace team store and keeps ONLY the
+// given session's own teams (#5852 follow-up, user ruling): strict
+// workspace+session double scoping - no legacy/unclaimed visibility, no
+// empty-session passthrough.
 func SummarizeVisibleTeams(sessionID string) []PersistedTeamInfo {
-	all := summarizePersistedTeamsUnder(surfaceScanRoot())
-	if sessionID == "" {
-		return all
+	root := surfaceScanRoot()
+	if root == "" || sessionID == "" {
+		return nil
 	}
-	out := make([]PersistedTeamInfo, 0, len(all))
-	for _, info := range all {
-		mf, err := readManifestFile(filepath.Join(surfaceScanRoot(), "swarm", "teams", info.TeamID, "manifest.json"))
+	out := make([]PersistedTeamInfo, 0)
+	for _, info := range summarizePersistedTeamsUnder(root) {
+		mf, err := readManifestFile(filepath.Join(root, "swarm", "teams", info.TeamID, "manifest.json"))
 		if err != nil {
 			continue
 		}
-		if mf.OwnerSessionID == "" || mf.OwnerSessionID == sessionID {
+		if mf.OwnerSessionID == sessionID {
 			out = append(out, info)
 		}
 	}

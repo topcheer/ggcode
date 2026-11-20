@@ -67,43 +67,35 @@ func TestSessionOwnershipIsolation(t *testing.T) {
 	}
 }
 
-func TestLegacyTeamAdoptedOnExplicitRestore(t *testing.T) {
+// #5852 user ruling: NO legacy concept. An unstamped manifest (no
+// ownerSessionID - only producible by abnormal paths) is foreign by
+// definition: invisible and unrestorable. The normal flow always stamps.
+func TestUnstampedManifestIsForeign(t *testing.T) {
 	root := t.TempDir()
-	m1 := newLeaseTestManager(t, root) // no session (legacy creation)
-	s := m1.CreateTeam("legacyteam", "leader-1")
-	if _, err := m1.SpawnTeammate(s.ID, "bob", "", nil); err != nil {
+	m1 := newLeaseTestManager(t, root)
+	m1.SetOwnerSession("sess-maker")
+	s := m1.CreateTeam("unstamped", "leader-1")
+	if _, err := m1.SpawnTeammate(s.ID, "alice", "", nil); err != nil {
 		t.Fatalf("spawn: %v", err)
+	}
+	// strip the stamp (simulates abnormal/pre-stamp data)
+	if err := m1.updateManifest(s.ID, func(mf *TeamManifest) { mf.OwnerSessionID = "" }); err != nil {
+		t.Fatalf("strip: %v", err)
 	}
 
 	m2 := newLeaseTestManager(t, root)
-	m2.SetOwnerSession("sess-X")
-	// Legacy team is visible to every session...
-	infos := m2.FilterTeamsForSession(SummarizePersistedTeamsForTest(t, root))
-	found := false
-	for _, info := range infos {
+	m2.SetOwnerSession("sess-other")
+	if err := m2.SessionOwnsTeam(s.ID); err == nil {
+		t.Fatal("unstamped manifest must be foreign (refused)")
+	}
+	if _, err := m2.RestoreTeam(s.ID); err == nil {
+		t.Fatal("unstamped manifest must be unrestorable")
+	}
+	// and invisible to the surface
+	for _, info := range SummarizeVisibleTeams("sess-other") {
 		if info.TeamID == s.ID {
-			found = true
+			t.Fatal("unstamped manifest surfaced to a foreign session")
 		}
-	}
-	if !found {
-		t.Fatal("legacy team should be visible for adoption")
-	}
-	// ...and an explicit restore adopts it (stamps the session).
-	if _, err := m2.RestoreTeam(s.ID); err != nil {
-		t.Fatalf("legacy adopt-restore failed: %v", err)
-	}
-	mf, err := m2.loadManifest(s.ID)
-	if err != nil {
-		t.Fatalf("manifest: %v", err)
-	}
-	if mf.OwnerSessionID != "sess-X" {
-		t.Fatalf("adoption did not stamp session: %q", mf.OwnerSessionID)
-	}
-	// After adoption, a third session can no longer see it.
-	m3 := newLeaseTestManager(t, root)
-	m3.SetOwnerSession("sess-Y")
-	if err := m3.SessionOwnsTeam(s.ID); err == nil {
-		t.Fatal("post-adoption, foreign session must be denied")
 	}
 }
 

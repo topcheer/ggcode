@@ -14,6 +14,10 @@ func newLeaseTestManager(t *testing.T, boardRoot string) *Manager {
 	t.Helper()
 	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
 	m.BoardRoot = boardRoot
+	// Production callers always bind a session before creating teams
+	// (#5852: unstamped manifests are refused). Give each test manager a
+	// distinct pseudo-session so cross-manager tests model real sessions.
+	m.SetOwnerSession("test-sess-" + t.Name())
 	return m
 }
 

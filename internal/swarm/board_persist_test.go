@@ -14,6 +14,8 @@ import (
 
 func newBoardTestManager(t *testing.T) *Manager {
 	t.Helper()
+	defer func() {}() // keep shape
+
 	m := NewManager(config.SwarmConfig{}, nil,
 		func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
 			return &mockAgentRunner{
@@ -26,6 +28,7 @@ func newBoardTestManager(t *testing.T) *Manager {
 		func(_ []string) interface{} { return nil },
 	)
 	t.Cleanup(m.Shutdown)
+	m.SetOwnerSession("test-sess-" + t.Name())
 	return m
 }
 

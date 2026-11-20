@@ -132,17 +132,22 @@ func newManager(cfg config.SwarmConfig, prov provider.Provider, getter func() pr
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	hostname, _ := os.Hostname()
 	return &Manager{
-		teams:           make(map[string]*Team),
-		provider:        prov,
-		providerGetter:  getter,
-		cfg:             cfg,
-		agentFactory:    factory,
-		toolBuilder:     builder,
-		results:         make(map[string]string),
-		rootCtx:         rootCtx,
-		rootCancel:      rootCancel,
-		bootID:          randomHex(8),
-		hostname:        hostname,
+		teams:          make(map[string]*Team),
+		provider:       prov,
+		providerGetter: getter,
+		cfg:            cfg,
+		agentFactory:   factory,
+		toolBuilder:    builder,
+		results:        make(map[string]string),
+		rootCtx:        rootCtx,
+		rootCancel:     rootCancel,
+		bootID:         randomHex(8),
+		hostname:       hostname,
+		// #5852 user ruling: unstamped teams must never exist. Auto-mint a
+		// session so even library-level naked use never produces an
+		// unstamped manifest; production callers override via
+		// SetOwnerSession with the real session ID.
+		ownerSessionID:  "auto-" + randomHex(8),
 		streamTextBuf:   make(map[string]*strings.Builder),
 		streamRsnBuf:    make(map[string]*strings.Builder),
 		streamBatchDone: make(chan struct{}),
