@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/util"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -344,25 +345,34 @@ func (m *Model) drainPendingInterrupt(runID int) []provider.ContentBlock {
 	if text == "" && len(imgs) == 0 {
 		return nil
 	}
-	debug.Log("tui", "drainPendingInterrupt: runID=%d text=%s", runID, util.Truncate(text, 100))
+	debug.Log("tui", "drainPendingInterrupt: runID=%d text=%s imgs=%d", runID, util.Truncate(text, 100), len(imgs))
 
 	if override != nil {
 		m.setNextTunnelUserMessageOverride(*override)
 	}
-	if len(imgs) > 0 {
 
-		// #4598: this runs on the AGENT goroutine (the interruption
-		// handler set up in submit.go), while the Update goroutine may be
-		// appending a freshly pasted image to m.pendingImages right now.
-		// The old `m.pendingImages = imgs` REPLACED the slice and silently
-		// dropped anything pasted mid-run. Merge instead - same shape as
-		// restorePendingInput's #1744 restore above.
-
-		m.pendingImages = append(m.pendingImages, imgs...)
+	// #5842: images attached to a mid-run interjection must travel WITH the
+	// interjection, not be parked back into m.pendingImages (which only
+	// flushes on the user's NEXT explicit submission). The old behavior -
+	// returning only the text block and re-queueing the images - made a
+	// text-less image interjection a complete no-op: the empty text block
+	// failed the downstream non-blank check, so nothing was injected and
+	// the images sat invisible until whenever the user typed again.
+	blocks := make([]provider.ContentBlock, 0, len(imgs)+1)
+	for _, img := range imgs {
+		if len(img.img.Data) == 0 {
+			continue
+		}
+		blocks = append(blocks, provider.ImageBlock(img.img.MIME, image.EncodeBase64(img.img)))
+	}
+	if text != "" {
+		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: text})
+	}
+	if len(blocks) == 0 {
+		return nil
 	}
 	_ = hidden
-
-	return []provider.ContentBlock{{Type: "text", Text: text}}
+	return blocks
 }
 
 func (m *Model) sessionMutex() *sync.Mutex {
