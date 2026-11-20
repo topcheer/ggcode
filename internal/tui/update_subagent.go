@@ -130,7 +130,36 @@ func (m Model) handleSubAgentTunnelToolResultMsg(msg subAgentTunnelToolResultMsg
 func (m Model) handleSwarmTunnelEventMsg(msg swarmTunnelEventMsg) (Model, tea.Cmd) {
 	m.pushSwarmTunnelEvent(msg.Event)
 	m.extPaneHandleSwarmEvent(msg.Event)
+	if swarmEventAffectsSidebar(msg.Event) {
+		m.refreshSwarmTeamsSnapshot()
+	}
 	return m, nil
+}
+
+// swarmEventAffectsSidebar reports whether a swarm event changes what the
+// sidebar Swarm Teams section shows (#5851). High-frequency stream events
+// (teammate_text / teammate_reasoning / teammate_tool_call /
+// teammate_tool_result) are deliberately excluded: they never change the
+// roster or member status, and re-snapshotting on every chunk would churn
+// the UI while teammates are actively streaming.
+func swarmEventAffectsSidebar(ev swarm.Event) bool {
+	switch ev.Type {
+	case "team_created", "team_restored", "team_deleted", "team_board_updated",
+		"teammate_spawned", "teammate_shutdown", "teammate_working",
+		"teammate_idle", "teammate_error":
+		return true
+	}
+	return false
+}
+
+// refreshSwarmTeamsSnapshot re-caches the active team snapshots for the
+// sidebar panel. ListTeams takes a read lock and copies a handful of small
+// snapshots, so this is cheap enough to run per lifecycle event.
+func (m *Model) refreshSwarmTeamsSnapshot() {
+	if m.swarmMgr == nil {
+		return
+	}
+	m.swarmTeams = m.swarmMgr.ListTeams()
 }
 
 func (m Model) handleSubAgentDoneMsg(msg subAgentDoneMsg) (Model, tea.Cmd) {
