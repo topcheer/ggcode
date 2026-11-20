@@ -387,10 +387,13 @@ func (m *Model) sessionCostSnapshot() (float64, provider.TokenUsage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	history := m.session.UsageHistorySnapshot()
-	if c.sid == m.session.ID && c.n == len(history) {
+	// #5868: guard with the cheap length read FIRST. Taking the full
+	// snapshot on every call defeated the cache below: the per-frame copy
+	// was the top allocation site in the wild (111GB on one seat).
+	if c.sid == m.session.ID && c.n == m.session.UsageHistoryLen() {
 		return c.cost, c.usage
 	}
+	history := m.session.UsageHistorySnapshot()
 	var total float64
 	var agg provider.TokenUsage
 	for _, entry := range history {
@@ -425,7 +428,7 @@ func (m Model) sessionCostHint() string {
 		usage = m.sidebarSessionUsage()
 	}
 
-	if usage.Total() == 0 && len(m.session.UsageHistorySnapshot()) > 0 {
+	if usage.Total() == 0 && m.session.UsageHistoryLen() > 0 {
 		_, usage = m.sessionCostSnapshot()
 	}
 	totalTokens := usage.Total()

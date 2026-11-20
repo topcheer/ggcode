@@ -53,6 +53,21 @@ func (s *Session) UsageHistorySnapshot() []UsageEntry {
 	return s.usageHistorySnapshot()
 }
 
+// UsageHistoryLen reports the number of usage-history entries under the
+// stats lock. Render-path callers (composer cost hint fires on every TUI
+// frame) use this instead of UsageHistorySnapshot, whose full-slice copy
+// per frame was the top allocation site observed in memstats (111GB
+// cumulative on one seat, #5868).
+func (s *Session) UsageHistoryLen() int {
+	if s == nil {
+		return 0
+	}
+	s.endpointStatsMu.RLock()
+	n := len(s.UsageHistory)
+	s.endpointStatsMu.RUnlock()
+	return n
+}
+
 func (s *Session) usageHistorySnapshot() []UsageEntry {
 	s.endpointStatsMu.RLock()
 	snap := append([]UsageEntry(nil), s.UsageHistory...)
