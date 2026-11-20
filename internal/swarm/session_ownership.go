@@ -15,15 +15,39 @@ import (
 // PID/hostname lease machinery stays as a machine-level liveness guard,
 // but ownership itself is decided by ownerSessionID in the manifest.
 
-// SetOwnerSession binds this manager to a session ID. Called once from the
-// process bootstrap (root.go) with the active session's ID; teams created
-// after this stamp their manifest, and restore/visibility checks filter by
-// it. An empty owner session (unset) keeps legacy behavior: everything is
-// visible and restorable (pre-#5837 manifests, tests).
+// SetOwnerSession binds this manager to a session ID. Called when the
+// real session ID is adopted (REPL loadSession/createSession via
+// Manager.BindSessionAndRestore); teams created after this stamp their
+// manifest, and restore/visibility checks filter by it. An empty owner
+// session (unset) keeps legacy behavior: everything is visible and
+// restorable (pre-#5837 manifests, tests).
 func (m *Manager) SetOwnerSession(sessionID string) {
 	m.mu.Lock()
 	m.ownerSessionID = sessionID
 	m.mu.Unlock()
+}
+
+// ownerSession returns the bound session ID under m.mu.
+func (m *Manager) ownerSession() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ownerSessionID
+}
+
+// BindSessionAndRestore binds this manager AND the process prompt surface
+// to sessionID, then auto-restores that session's teams. This is the
+// adoption-time hook (#5837 residual): the bootstrap-time
+// ag.SessionID() is empty because the session is only created or loaded
+// inside the REPL run loop, so the bind must happen when the real session
+// ID becomes known. Re-binding on a mid-run session switch re-scopes
+// ownership; teams already active in this manager stay active.
+func (m *Manager) BindSessionAndRestore(sessionID string) []TeamSnapshot {
+	if sessionID == "" {
+		return nil
+	}
+	m.SetOwnerSession(sessionID)
+	SetProcessOwnerSession(sessionID)
+	return m.AutoRestoreSessionTeams()
 }
 
 type sessionOwnership int
@@ -67,7 +91,7 @@ func (m *Manager) FilterTeamsForSession(infos []PersistedTeamInfo) []PersistedTe
 		case ownershipOurs, ownershipLegacy:
 			out = append(out, info)
 		case ownershipForeign:
-			debug.Log("swarm", "team %s hidden from session %s (owned by %s)", info.TeamID, m.ownerSessionID, mf.OwnerSessionID)
+			debug.Log("swarm", "team %s hidden from session %s (owned by %s)", info.TeamID, m.ownerSession(), mf.OwnerSessionID)
 		}
 	}
 	return out
@@ -80,7 +104,11 @@ func (m *Manager) FilterTeamsForSession(infos []PersistedTeamInfo) []PersistedTe
 // Lease liveness still guards machine-level double-restore.
 func (m *Manager) AutoRestoreSessionTeams() []TeamSnapshot {
 	var restored []TeamSnapshot
-	for _, info := range SummarizePersistedTeams() {
+	// Scan THIS manager's board root (m.boardRoot()), not the process
+	// global util.ConfigDir(): a Manager with a BoardRoot override (tests,
+	// custom layouts) would otherwise silently find nothing to restore.
+	// sessionOwnershipFor below applies the per-manager session filter.
+	for _, info := range summarizePersistedTeamsUnder(m.boardRoot()) {
 		m.mu.Lock()
 		_, active := m.teams[info.TeamID]
 		m.mu.Unlock()
@@ -113,12 +141,13 @@ func (m *Manager) AutoRestoreSessionTeams() []TeamSnapshot {
 // stampOwnerSessionOnAdopt writes this session's ID into a legacy
 // manifest at explicit-restore time (one-time adoption).
 func (m *Manager) stampOwnerSessionOnAdopt(teamID string) {
-	if m.ownerSessionID == "" {
+	own := m.ownerSession()
+	if own == "" {
 		return
 	}
 	err := m.updateManifest(teamID, func(mf *TeamManifest) {
 		if mf.OwnerSessionID == "" {
-			mf.OwnerSessionID = m.ownerSessionID
+			mf.OwnerSessionID = own
 		}
 	})
 	if err != nil {

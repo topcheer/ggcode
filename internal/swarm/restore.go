@@ -17,9 +17,16 @@ import (
 // always an explicit decision.
 func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 	m.mu.Lock()
-	if _, active := m.teams[teamID]; active {
+	if team, active := m.teams[teamID]; active {
+		snap := team.snapshot()
 		m.mu.Unlock()
-		return TeamSnapshot{}, fmt.Errorf("team %q is already active in this manager", teamID)
+		// Idempotent for an already-active team: a team can only become
+		// active in this manager via CreateTeam (ours) or a prior
+		// session-gated restore, so re-restore returns its current
+		// state instead of erroring. Without this, the auto-restored
+		// teams of a resumed session (#5837) make team_restore - the
+		// action the prompt hint suggests - fail deterministically.
+		return snap, nil
 	}
 	m.mu.Unlock()
 

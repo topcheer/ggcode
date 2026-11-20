@@ -174,6 +174,11 @@ func (m *Manager) stampTeammateResult(teamID, tmID, result string, lastActive ti
 
 // findTeamManifestByName scans persisted manifests and matches on team name
 // (case-insensitive) or team ID. Used by the team_restore tool.
+// #5837: resolution is session-scoped - when several persisted teams share
+// the name, teams owned by this session (or legacy, adoptable) win over
+// foreign-session teams, so a foreign team can never shadow the caller's
+// own same-named team. A name that ONLY matches foreign teams resolves to
+// nothing visible and fails with the session-isolation error.
 func (m *Manager) findTeamManifestByName(name string) (*TeamManifest, error) {
 	teamsDir := filepath.Join(m.boardRoot(), "swarm", "teams")
 	entries, err := os.ReadDir(teamsDir)
@@ -181,6 +186,7 @@ func (m *Manager) findTeamManifestByName(name string) (*TeamManifest, error) {
 		return nil, fmt.Errorf("no persisted teams under %s: %w", teamsDir, err)
 	}
 	want := equalFoldSpace(name)
+	var foreign *TeamManifest
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -190,8 +196,17 @@ func (m *Manager) findTeamManifestByName(name string) (*TeamManifest, error) {
 			continue
 		}
 		if equalFoldSpace(mf.Name) == want || equalFoldSpace(mf.TeamID) == want {
+			if m.sessionOwnershipFor(mf) == ownershipForeign {
+				if foreign == nil {
+					foreign = mf
+				}
+				continue
+			}
 			return mf, nil
 		}
+	}
+	if foreign != nil {
+		return nil, fmt.Errorf("team %q belongs to another session; it is not visible or loadable from this session", foreign.TeamID)
 	}
 	return nil, fmt.Errorf("no persisted team matches %q", name)
 }

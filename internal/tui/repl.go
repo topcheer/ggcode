@@ -611,6 +611,14 @@ func (r *REPL) SetSessionCreatedCallback(cb func(sessionID string)) {
 	r.model.SetSessionCreatedCallback(cb)
 }
 
+// SessionCreatedCallback returns the currently registered session-created
+// callback (nil when none). Lets bootstrap code chain additional handlers
+// onto the session-adoption event without clobbering an existing one
+// (#5837: swarm session binding chains the webui runfile handler).
+func (r *REPL) SessionCreatedCallback() func(sessionID string) {
+	return r.model.sessionCreatedCallback
+}
+
 func (r *REPL) HandleSessionCreated(sessionID string) {
 	r.onSessionCreated(sessionID)
 }

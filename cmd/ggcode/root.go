@@ -1526,17 +1526,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	}, swarmAgentFactory, swarmToolBuilder)
 	// Persistent teams (#5829): enable teammate session journals.
 	swarmMgr.JournalsEnabled = true
-	// #5837: teams are session-scoped. Bind the manager to the active
-	// session and rebuild this session's persisted teams right away - a
-	// resuming session gets its teams back immediately, and other sessions
-	// in this workspace never see them.
-	if ag != nil {
-		swarmMgr.SetOwnerSession(ag.SessionID())
-		swarm.SetProcessOwnerSession(ag.SessionID())
-	}
-	for _, snap := range swarmMgr.AutoRestoreSessionTeams() {
-		debug.Log("swarm", "auto-restored session team %s (%s): %d member(s)", snap.ID, snap.Name, len(snap.Teammates))
-	}
+	// #5837: teams are session-scoped. The manager is bound to the real
+	// session ID at adoption time (below, chaining the session-created
+	// callback): at THIS point ag.SessionID() is still empty - the session
+	// is only created or loaded inside repl.Run (loadSession/createSession
+	// -> model.SetSession -> agent.SetSessionID). Binding here would pin
+	// the empty session (legacy mode: every team visible/restorable),
+	// silently disabling cross-session isolation and auto-restore.
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
 	// #5657-followup item 7: backfill the team view source for the plan
 	// face closure (declared before the introspector is wired).
@@ -1916,6 +1912,22 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		})
 	}
 	trace.Mark("start webui")
+
+	// #5837 residual: bind the swarm manager to the REAL session ID at
+	// adoption time. model.SetSession fires the session-created callback
+	// from both loadSession (resume) and createSession (fresh), before the
+	// first user turn - so teammate_list is available from the first
+	// moment of a resumed session. Chain whatever callback the webui
+	// block above registered (runfile upkeep) instead of clobbering it.
+	prevSessionCB := repl.SessionCreatedCallback()
+	repl.SetSessionCreatedCallback(func(sessionID string) {
+		if prevSessionCB != nil {
+			prevSessionCB(sessionID)
+		}
+		for _, snap := range swarmMgr.BindSessionAndRestore(sessionID) {
+			debug.Log("swarm", "auto-restored session team %s (%s): %d member(s)", snap.ID, snap.Name, len(snap.Teammates))
+		}
+	})
 
 	if resumeID != "" && resumeID != "__new__" {
 		repl.SetResumeID(resumeID)
