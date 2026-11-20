@@ -45,6 +45,24 @@ func (a *Agent) permissionDeniedMessage(toolName string) string {
 }
 
 func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
+	return a.executeToolWithPermissionGate(ctx, tc, nil)
+}
+
+// approvedToolHeartbeatInterval spaces the liveness events emitted while a
+// user-approved tool executes (#5843): long approved tasks must keep the
+// streaming channel visibly alive instead of presenting a frozen UI.
+// Package-level so tests can shorten it.
+var approvedToolHeartbeatInterval = 30 * time.Second
+
+// executeToolWithPermissionGate is the streaming-aware approval gate (#5843).
+// onEvent, when non-nil, is the run's live stream callback: a user-approved
+// execution acknowledges its start and emits a slow-tool heartbeat on it, so
+// post-approval long tasks never switch the UI into a silent blocking mode.
+// The gate is also an interrupt checkpoint: input queued while the approval
+// prompt was open is drained the moment the gate resolves (delivered to the
+// model at the next turn), and a retraction typed during the wait cancels
+// the execution outright instead of running an unwanted long task.
+func (a *Agent) executeToolWithPermissionGate(ctx context.Context, tc provider.ToolCallDelta, onEvent func(provider.StreamEvent)) tool.Result {
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
@@ -53,6 +71,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	policy := a.policy
 	onApproval := a.onApproval
 	a.mu.RUnlock()
+	userApproved := false
 	if policy != nil {
 		decision, err := policy.Check(tc.Name, tc.Arguments)
 
@@ -122,6 +141,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 				if a.approvalMemory != nil {
 					a.approvalMemory.RecordApproval(tc.Name, tc.Arguments)
 				}
+				userApproved = true
 			} else {
 
 				return tool.Result{
@@ -132,8 +152,32 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 		}
 	}
 
+	if userApproved {
+		// #5843 approval-boundary checkpoint: the approval wait kept the
+		// input queue open on the TUI side; drain it the moment the gate
+		// resolves so queued guidance reaches the model at the next turn
+		// instead of waiting for a later iteration boundary. A retraction
+		// queued during the wait cancels the execution outright.
+		if injected, kind := a.injectPendingInterruptions(0); injected && kind == InterruptionRetractStop {
+			a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "user retracted the task while the approval gate was open", 0, "")
+			debug.Log("approval-gate", "retraction arrived during approval gate for %s: skipping execution", tc.Name)
+			return tool.Result{
+				Content: fmt.Sprintf("Execution of %q was cancelled: the user retracted the task while the approval request was pending. The tool was not executed.", tc.Name),
+				IsError: true,
+			}
+		}
+		if onEvent != nil {
+			onEvent(provider.StreamEvent{
+				Type: provider.StreamEventSystem,
+				Text: fmt.Sprintf("%s approved - executing now; live progress continues and queued input stays deliverable.", tc.Name),
+			})
+		}
+	}
+
 	toolStart := time.Now()
+	stopHeartbeat := a.startApprovedToolHeartbeat(onEvent, tc.Name, userApproved)
 	result := a.executeToolWithTimeout(ctx, tc)
+	stopHeartbeat()
 	toolDur := time.Since(toolStart)
 
 	if toolDur > slowToolThreshold {
@@ -157,6 +201,48 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 		ToolDuration: toolDur,
 	})
 	return result
+}
+
+// startApprovedToolHeartbeat emits a periodic liveness event on the run's
+// stream while a user-approved tool executes (#5843). Long approved tasks
+// otherwise produce minutes of silence on tools without progress callbacks,
+// which users read as a frozen UI with nowhere to send input. Returns a stop
+// func that must be called when the execution window ends.
+func (a *Agent) startApprovedToolHeartbeat(onEvent func(provider.StreamEvent), toolName string, active bool) (stop func()) {
+	if !active || onEvent == nil || approvedToolHeartbeatInterval <= 0 {
+		return func() {}
+	}
+	done := make(chan struct{})
+	safego.Go("agent.approvedToolHeartbeat", func() {
+		ticker := time.NewTicker(approvedToolHeartbeatInterval)
+		defer ticker.Stop()
+		start := time.Now()
+		for {
+			select {
+			case <-done:
+				return
+			case t := <-ticker.C:
+				if doneClosed(done) {
+					return
+				}
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: fmt.Sprintf("%s still running (%v elapsed) - the UI stays live; queued input is delivered at the next checkpoint.", toolName, t.Sub(start).Round(time.Second)),
+				})
+			}
+		}
+	})
+	var stopOnce sync.Once
+	return func() { stopOnce.Do(func() { close(done) }) }
+}
+
+func doneClosed(done chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
 }
 
 const defaultToolTimeout = 5 * time.Minute
