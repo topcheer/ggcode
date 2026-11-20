@@ -19,9 +19,22 @@ func anyPanelOpen(m Model) bool {
 
 func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
 
+	// #5861 field fix: the drain window (opened while an approval gate is
+	// up, so the user can queue an interjection) must NOT eat the approval
+	// keys themselves - in the field the gate stayed up for minutes with
+	// y/Enter/a/Tab all swallowed, freezing the run. Approval-action keys
+	// fall through to the approval handler below; everything else is
+	// drained as before.
 	if !m.inputDrainUntil.IsZero() && time.Now().Before(m.inputDrainUntil) {
-
-		return m, nil
+		if m.pendingApproval == nil {
+			return m, nil
+		}
+		switch msg.String() {
+		case "y", "n", "a", "enter", "esc", "up", "down", "tab", "shift+tab", "k", "j":
+			// fall through to the approval handler
+		default:
+			return m, nil
+		}
 	}
 	if msg.String() != "ctrl+c" {
 		m.resetExitConfirm()
