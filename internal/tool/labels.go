@@ -509,6 +509,10 @@ func SwarmTaskCreateResultMarkdown(result string) string {
 	if description == "" {
 		return result
 	}
+	// #5866: task briefs frequently carry literal "\n" two-char sequences
+	// (hand-written contracts, copy-pasted JSON strings). Render them as real
+	// line breaks so the multi-step brief stays readable.
+	description = strings.ReplaceAll(description, `\n`, "\n")
 	return description
 }
 

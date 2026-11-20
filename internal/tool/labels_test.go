@@ -973,3 +973,17 @@ func TestDescribeToolResultMultiFile(t *testing.T) {
 		t.Errorf("summary = %q", pres.Summary)
 	}
 }
+
+func TestSwarmTaskCreateResultMarkdownRendersBrief(t *testing.T) {
+	raw := `{"ID":"task-5","Subject":"iOS: quota live refresh","Description":"iOS 配额实时刷新：\n现状：AuthManager 更新于 /auth/refresh。\n要做的：\n1. 新增活跃期轮询\n2. 每回合终态刷一次","Status":"pending"}`
+	got := SwarmTaskCreateResultMarkdown(raw)
+	if strings.Contains(got, `"ID"`) || strings.Contains(got, "Subject") {
+		t.Fatalf("expected plain brief, got raw JSON: %q", got[:80])
+	}
+	if !strings.Contains(got, "现状：AuthManager") || strings.Count(got, "\n") < 3 {
+		t.Fatalf("real newlines expected in brief, got: %q", got)
+	}
+	if strings.Contains(got, `\n`) {
+		t.Fatalf("literal \\n must be rendered as line break, got: %q", got)
+	}
+}
