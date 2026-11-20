@@ -526,6 +526,10 @@ func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolRes
 	}
 
 	switch toolName {
+	case "swarm_task_create", "swarm_task_claim", "swarm_task_complete":
+		if pres, ok := describeSwarmTaskResult(trimmed); ok {
+			return pres, true
+		}
 	case "task_create", "task_get", "task_update":
 		if pres, ok := describeTaskObjectResult(toolName, rawArgs, trimmed); ok {
 			return pres, true
@@ -1025,6 +1029,63 @@ func describeTaskObjectResult(toolName, rawArgs, trimmed string) (ToolResultPres
 	return ToolResultPresentation{
 		Summary:     summary,
 		Payload:     formatTaskPayload(tk),
+		PayloadMode: "task_fields",
+	}, true
+}
+
+// swarmTaskResultView mirrors swarm task.Task JSON, which serializes
+// exported Go fields without tags — PascalCase keys ("ID", "Subject",
+// "Description", ...). lowercase-tag views cannot read it (#5866).
+type swarmTaskResultView struct {
+	ID          string            `json:"ID"`
+	Subject     string            `json:"Subject"`
+	Description string            `json:"Description"`
+	Status      string            `json:"Status"`
+	Owner       string            `json:"Owner"`
+	Metadata    map[string]string `json:"Metadata"`
+}
+
+// renderSwarmBrief normalizes literal \n two-char sequences in hand-written
+// briefs to real line breaks (#5866).
+func renderSwarmBrief(desc string) string {
+	return strings.ReplaceAll(desc, `\n`, "\n")
+}
+
+func describeSwarmTaskResult(trimmed string) (ToolResultPresentation, bool) {
+	var tk swarmTaskResultView
+	if err := json.Unmarshal([]byte(trimmed), &tk); err != nil {
+		return ToolResultPresentation{}, false
+	}
+	assignee := tk.Owner
+	if assignee == "" && tk.Metadata != nil {
+		assignee = tk.Metadata["assignee"]
+	}
+	verb := "Task"
+	if strings.Contains(trimmed, `"Status":"completed"`) || strings.Contains(trimmed, `"Status":"done"`) {
+		verb = "Completed"
+	}
+	summary := verb + " " + tk.ID
+	if tk.Subject != "" {
+		summary += " \u00ab" + tk.Subject + "\u00bb"
+	}
+	if tk.Status != "" || assignee != "" {
+		summary += " (" + tk.Status
+		if assignee != "" {
+			if tk.Status != "" {
+				summary += " -> "
+			}
+			summary += assignee
+		}
+		summary += ")"
+	}
+	var payload strings.Builder
+	if tk.Description != "" {
+		payload.WriteString(renderSwarmBrief(strings.TrimSpace(tk.Description)))
+		payload.WriteString("\n")
+	}
+	return ToolResultPresentation{
+		Summary:     summary,
+		Payload:     payload.String(),
 		PayloadMode: "task_fields",
 	}, true
 }

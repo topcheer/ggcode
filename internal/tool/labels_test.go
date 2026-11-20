@@ -987,3 +987,19 @@ func TestSwarmTaskCreateResultMarkdownRendersBrief(t *testing.T) {
 		t.Fatalf("literal \\n must be rendered as line break, got: %q", got)
 	}
 }
+
+// #5866 layer 2: generic DescribeToolResult must render swarm task JSON
+// (PascalCase keys) field-by-field with real line breaks in the brief.
+func TestDescribeSwarmTaskResultRendersFields(t *testing.T) {
+	raw := `{"ID":"task-5","Subject":"iOS: quota live refresh","Description":"iOS quota refresh:\n1. poll while active\n2. refresh on turn end","Status":"pending","Owner":"","Metadata":{"assignee":"tm-4"},"CreatedAt":"2026-11-20T21:20:57+08:00"}`
+	pres, ok := DescribeToolResult("swarm_task_create", `{}`, raw, false)
+	if !ok {
+		t.Fatal("generic layer must handle swarm_task_create")
+	}
+	if !strings.Contains(pres.Summary, "task-5") || !strings.Contains(pres.Summary, "tm-4") {
+		t.Fatalf("summary must carry id+assignee, got %q", pres.Summary)
+	}
+	if !strings.Contains(pres.Payload, "1. poll while active") || strings.Contains(pres.Payload, `\n`) {
+		t.Fatalf("payload must render brief with real breaks, got %q", pres.Payload)
+	}
+}

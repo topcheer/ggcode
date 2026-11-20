@@ -339,7 +339,13 @@ func suppressToolResult(toolName, rawArgs, result string, isError bool) string {
 		return tool.TeamCreateResultText(result)
 	case "teammate_spawn":
 		return formatTeammateSpawnResult(result)
-	case "swarm_task_create":
+	case "swarm_task_create", "swarm_task_claim", "swarm_task_complete":
+		if present, ok := tool.DescribeToolResult(toolName, rawArgs, result, isError); ok {
+			if present.Payload != "" {
+				return present.Summary + "\n" + present.Payload
+			}
+			return present.Summary
+		}
 		return tool.SwarmTaskCreateResultMarkdown(result)
 	case "task_create", "task_get", "task_update", "task_list", "task_stop", "task_output",
 		"cron_create", "cron_delete", "cron_list", "cron_update", "cron_pause", "cron_resume", "cron_get":
