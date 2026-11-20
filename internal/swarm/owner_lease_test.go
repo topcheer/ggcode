@@ -14,6 +14,7 @@ func newLeaseTestManager(t *testing.T, boardRoot string) *Manager {
 	t.Helper()
 	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
 	m.BoardRoot = boardRoot
+	m.SetOwnerSession("test-sess-" + t.Name())
 	return m
 }
 

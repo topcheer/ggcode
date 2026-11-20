@@ -30,7 +30,6 @@ type sessionOwnership int
 
 const (
 	ownershipOurs    sessionOwnership = iota // owned by this session (auto-restore + manage)
-	ownershipLegacy                          // no ownerSessionID on disk yet (adoptable via explicit restore)
 	ownershipForeign                         // owned by a different session: invisible, unrestorable
 )
 
@@ -44,9 +43,12 @@ func (m *Manager) sessionOwnershipFor(mf *TeamManifest) sessionOwnership {
 	if own == "" {
 		return ownershipOurs
 	}
+	// #5852 user ruling: no legacy concept - unstamped manifests are
+	// foreign by definition (the normal flow always stamps).
+	if mf.OwnerSessionID == "" {
+		return ownershipForeign
+	}
 	switch {
-	case mf.OwnerSessionID == "":
-		return ownershipLegacy
 	case mf.OwnerSessionID == own:
 		return ownershipOurs
 	default:
@@ -64,7 +66,7 @@ func (m *Manager) FilterTeamsForSession(infos []PersistedTeamInfo) []PersistedTe
 			continue
 		}
 		switch m.sessionOwnershipFor(mf) {
-		case ownershipOurs, ownershipLegacy:
+		case ownershipOurs:
 			out = append(out, info)
 		case ownershipForeign:
 			debug.Log("swarm", "team %s hidden from session %s (owned by %s)", info.TeamID, m.ownerSessionID, mf.OwnerSessionID)
@@ -110,22 +112,6 @@ func (m *Manager) AutoRestoreSessionTeams() []TeamSnapshot {
 		restored = append(restored, snap)
 	}
 	return restored
-}
-
-// stampOwnerSessionOnAdopt writes this session's ID into a legacy
-// manifest at explicit-restore time (one-time adoption).
-func (m *Manager) stampOwnerSessionOnAdopt(teamID string) {
-	if m.ownerSessionID == "" {
-		return
-	}
-	err := m.updateManifest(teamID, func(mf *TeamManifest) {
-		if mf.OwnerSessionID == "" {
-			mf.OwnerSessionID = m.ownerSessionID
-		}
-	})
-	if err != nil {
-		debug.Log("swarm", "session adoption stamp for %s failed: %v", teamID, err)
-	}
 }
 
 // forceAdoptOwnerSession rebinds a stranded foreign team to this session

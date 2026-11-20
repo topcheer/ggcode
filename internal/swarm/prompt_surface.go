@@ -46,17 +46,20 @@ func SummarizePersistedTeams() []PersistedTeamInfo {
 // (unclaimed) ones. Foreign-session teams are invisible (#5837). An empty
 // session ID keeps the unfiltered legacy behavior.
 func SummarizeVisibleTeams(sessionID string) []PersistedTeamInfo {
-	all := summarizePersistedTeamsUnder(util.ConfigDir())
+	// Teams persist in the GLOBAL store; scoping is purely logical
+	// (#5852 user ruling): workspace+session. Strict session equality -
+	// no unclaimed visibility, no empty-session passthrough.
 	if sessionID == "" {
-		return all
+		return nil
 	}
-	out := make([]PersistedTeamInfo, 0, len(all))
-	for _, info := range all {
-		mf, err := readManifestFile(filepath.Join(util.ConfigDir(), "swarm", "teams", info.TeamID, "manifest.json"))
+	root := util.ConfigDir()
+	out := make([]PersistedTeamInfo, 0)
+	for _, info := range summarizePersistedTeamsUnder(root) {
+		mf, err := readManifestFile(filepath.Join(root, "swarm", "teams", info.TeamID, "manifest.json"))
 		if err != nil {
 			continue
 		}
-		if mf.OwnerSessionID == "" || mf.OwnerSessionID == sessionID {
+		if mf.OwnerSessionID == sessionID {
 			out = append(out, info)
 		}
 	}
