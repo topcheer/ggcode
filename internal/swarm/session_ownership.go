@@ -2,6 +2,8 @@ package swarm
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -93,32 +95,59 @@ func (m *Manager) AutoRestoreSessionTeams() []TeamSnapshot {
 	var restored []TeamSnapshot
 	// Scan the manager's own board root (honors Manager.BoardRoot overrides
 	// and test roots) instead of the process-global ConfigDir scan.
-	for _, info := range summarizePersistedTeamsUnder(m.boardRoot()) {
+	root := m.boardRoot()
+	scanned := 0
+	// #5859: the restore chain must never be silent. Every skip has a
+	// reason, and the SUMMARY line lands in the ring buffer even when the
+	// scan is empty (an empty store at startup is itself a signal).
+	skips := map[string]int{}
+	restoredIDs := []string{}
+	for _, info := range summarizePersistedTeamsUnder(root) {
+		scanned++
 		m.mu.Lock()
 		_, active := m.teams[info.TeamID]
 		m.mu.Unlock()
 		if active {
+			skips["active-in-memory"]++
 			continue
 		}
 		mf, err := m.loadManifest(info.TeamID)
 		if err != nil {
+			skips["manifest-unreadable"]++
+			debug.Log("swarm", "session auto-restore skips %s (manifest: %v)", info.TeamID, err)
 			continue
 		}
 		if m.sessionOwnershipFor(mf) != ownershipOurs {
+			skips["foreign-session"]++
 			continue
 		}
 		switch v := m.checkOwnerLease(info.TeamID); v {
 		case leaseAliveForeign, leaseDirMissing:
+			skips["lease-"+v.String()]++
 			debug.Log("swarm", "session auto-restore skips %s (lease %s)", info.TeamID, v)
 			continue
 		case leaseLegacy, leaseDead, leaseOurs:
 		}
 		snap, err := m.RestoreTeam(info.TeamID)
 		if err != nil {
+			skips["restore-failed"]++
 			debug.Log("swarm", "session auto-restore of %s failed: %v", info.TeamID, err)
 			continue
 		}
 		restored = append(restored, snap)
+		restoredIDs = append(restoredIDs, snap.ID)
+	}
+	parts := make([]string, 0, len(skips))
+	for k, v := range skips {
+		parts = append(parts, fmt.Sprintf("%s=%d", k, v))
+	}
+	sort.Strings(parts)
+	if len(parts) > 0 {
+		debug.Log("swarm", "AUTO-RESTORE SUMMARY: store=%s scanned=%d restored=%d (%v) skipped: %s",
+			root, scanned, len(restored), restoredIDs, strings.Join(parts, ","))
+	} else {
+		debug.Log("swarm", "AUTO-RESTORE SUMMARY: store=%s scanned=%d restored=%d (%v)",
+			root, scanned, len(restored), restoredIDs)
 	}
 	return restored
 }

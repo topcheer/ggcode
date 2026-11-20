@@ -1543,7 +1543,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	// guard), then auto-restore. Store = GLOBAL (#5853 ruling): no
 	// workspace BoardRoot override.
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
-	swarmMgr.SetOwnerSession(ag.SessionID())
+	if repl != nil {
+		if sid := repl.CurrentSessionID(); sid != "" {
+			swarmMgr.SetOwnerSession(sid)
+		} else {
+			swarmMgr.SetOwnerSession(ag.SessionID())
+		}
+	} else {
+		swarmMgr.SetOwnerSession(ag.SessionID())
+	}
 	for _, snap := range swarmMgr.AutoRestoreSessionTeams() {
 		debug.Log("swarm", "auto-restored session team %s (%s): %d member(s)", snap.ID, snap.Name, len(snap.Teammates))
 	}
