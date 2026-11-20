@@ -37,6 +37,9 @@ func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 	// otherwise a crashed instance's teams are stranded forever (the
 	// user's "dead instance lease blocks restore" symptom). A LIVE owner's
 	// foreign team stays refused.
+	if mf.OwnerSessionID == "" {
+		return TeamSnapshot{}, fmt.Errorf("team %q has no session ownership stamp; refusing (abnormal data)", teamID)
+	}
 	if m.sessionOwnershipFor(mf) == ownershipForeign {
 		switch v := m.checkOwnerLease(teamID); v {
 		case leaseDead, leaseLegacy:
@@ -45,8 +48,6 @@ func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 		default:
 			return TeamSnapshot{}, fmt.Errorf("team %q belongs to another session; it is not visible or loadable from this session", teamID)
 		}
-	} else {
-		m.stampOwnerSessionOnAdopt(teamID)
 	}
 
 	switch v := m.checkOwnerLease(teamID); v {
