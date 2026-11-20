@@ -18,8 +18,42 @@ import (
 func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 	m.mu.Lock()
 	if _, active := m.teams[teamID]; active {
-		m.mu.Unlock()
-		return TeamSnapshot{}, fmt.Errorf("team %q is already active in this manager", teamID)
+		// Field symptom (user screenshot, burrow/android-port): a team
+		// torn down mid-review leaves every member in ShuttingDown while
+		// the team entry stays in the map - "already active" then blocks
+		// team_restore forever. A team whose members are ALL shutting
+		// down is a dead-state husk: evict it and restore fresh from the
+		// manifest (journals intact). Any live (idle/working) member
+		// keeps the refusal.
+		team := m.teams[teamID]
+		dead := true
+		team.mu.Lock()
+		for _, tm := range team.Teammates {
+			tm.mu.Lock()
+			if tm.Status != TeammateShuttingDown {
+				dead = false
+			}
+			tm.mu.Unlock()
+			if !dead {
+				break
+			}
+		}
+		team.mu.Unlock()
+		if !dead {
+			m.mu.Unlock()
+			return TeamSnapshot{}, fmt.Errorf("team %q is already active in this manager", teamID)
+		}
+		debug.Log("swarm", "restore of %s: evicting dead-state husk (all members shutting_down)", teamID)
+		for _, tm := range team.Teammates {
+			if tm.cancel != nil {
+				tm.cancel()
+			}
+			tm.mu.Lock()
+			tm.Status = TeammateShuttingDown
+			tm.mu.Unlock()
+			delete(m.results, tm.ID)
+		}
+		delete(m.teams, teamID)
 	}
 	m.mu.Unlock()
 

@@ -157,9 +157,8 @@ func (m *Model) cancelActiveRun() {
 		m.cancelFunc()
 	}
 
-	if m.subAgentMgr != nil || m.swarmMgr != nil {
+	if m.subAgentMgr != nil {
 		subMgr := m.subAgentMgr
-		swarmMgr := m.swarmMgr
 		prog := m.program
 		m.subAgentsCanceling = true
 		debug.Log("cancel", "cancelActiveRun: setting subAgentsCanceling=true, starting async CancelAll")
@@ -174,10 +173,11 @@ func (m *Model) cancelActiveRun() {
 				// user-initiated submission re-arms the queue.
 				subMgr.SilenceIdleReports()
 			}
-			if swarmMgr != nil {
-				swarmMgr.CancelAll()
-				debug.Log("cancel", "async CancelAll: swarm teammates cancelled")
-			}
+			// #5856 user ruling: persistent-team members are NOT part of
+			// the main agent run - cancelling the run must NOT cascade into
+			// the swarm (that tore down a mid-review team in the field).
+			// Team lifecycle is explicit-only: teammate_shutdown /
+			// team_delete / process exit.
 			debug.Log("cancel", "cancelActiveRun: async CancelAll complete, clearing subAgentsCanceling")
 			if prog != nil {
 				prog.Send(subAgentsCancelDoneMsg{})
@@ -349,6 +349,17 @@ func (m *Model) drainPendingInterrupt(runID int) []provider.ContentBlock {
 
 	if override != nil {
 		m.setNextTunnelUserMessageOverride(*override)
+	}
+	// #5843-parity: an interjection is a first-class user message. Local
+	// parity: appendUserMessage records it in the session (history,
+	// title, preview, store) exactly like a normal submission - without
+	// this the mid-run input vanished from history after restart.
+	// Remote parity: pushTunnelUserMessage mirrors it to tunnel sessions.
+	// Hidden interjections (scheduled prompts) stay invisible by design:
+	// no session record, no tunnel mirror - same semantics as before.
+	if text != "" && !hidden {
+		m.appendUserMessage(text)
+		m.pushTunnelUserMessage(text)
 	}
 
 	// #5842: images attached to a mid-run interjection must travel WITH the
