@@ -8,9 +8,10 @@ import (
 //
 // The Manager knows its session, but prompt building has no Manager
 // instance. SetProcessOwnerSession is called once at process bootstrap
-// (root.go, right after Manager.SetOwnerSession) so SummarizePersistedTeams
-// can filter to this session's (plus adoptable legacy) teams without
-// threading a session ID through the prompt-building call chain.
+// (root.go, right after the swarm manager is constructed with the
+// confirmed session id, #5860) so SummarizePersistedTeams can filter to
+// this session's namespace without threading a session ID through the
+// prompt-building call chain.
 var (
 	procSessionMu sync.RWMutex
 	procOwnerSess string
