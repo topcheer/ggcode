@@ -726,6 +726,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	agentruntime.RegisterRecallCompactedTool(registry, ag)
 	core.SetConfigAgent(ag)
 
+	// Review B-2 (sa-1 full audit): the persistent-teams prompt surface
+	// filters by the process-level owner session. Set it AS SOON as the
+	// agent exists - before the first prompt rebuild (~L802) - so the
+	// surface is session-filtered from the first visible turn. The initial
+	// pre-agent prompt stays unfiltered only until that first rebuild.
+	swarm.SetProcessOwnerSession(ag.SessionID())
+
 	// Memory v2: resident memory curator. It watches memory save/delete
 	// events and runs a debounced headless curation pass (tag, merge,
 	// archive stale temporal facts) through the same store APIs the
@@ -1526,14 +1533,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	}, swarmAgentFactory, swarmToolBuilder)
 	// Persistent teams (#5829): enable teammate session journals.
 	swarmMgr.JournalsEnabled = true
-	// #5837: teams are session-scoped. Bind the manager to the active
-	// session and rebuild this session's persisted teams right away - a
-	// resuming session gets its teams back immediately, and other sessions
-	// in this workspace never see them.
-	if ag != nil {
-		swarmMgr.SetOwnerSession(ag.SessionID())
-		swarm.SetProcessOwnerSession(ag.SessionID())
-	}
+	// #5837: teams are session-scoped; bind the manager and rebuild this
+	// session's persisted teams right away (process-level prompt filter is
+	// set earlier, right after agent creation - see Review B-2 note).
+	swarmMgr.SetOwnerSession(ag.SessionID())
 	for _, snap := range swarmMgr.AutoRestoreSessionTeams() {
 		debug.Log("swarm", "auto-restored session team %s (%s): %d member(s)", snap.ID, snap.Name, len(snap.Teammates))
 	}

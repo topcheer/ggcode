@@ -75,6 +75,22 @@ func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 	// stale `mf` back would erase those session bindings and break
 	// journal replay on the next restore (#5831 E2E finding).
 
+	// Review B-1 (sa-1 full audit): the per-process teammate-ID counter
+	// starts at 0, but restored teammates keep their original IDs
+	// (tm-1..tm-N). Without raising the counter, the FIRST SpawnTeammate
+	// after a restore would mint "tm-1" again - silently replacing the
+	// restored member (goroutine still running, manifest entry
+	// overwritten, journal binding lost). Lift nextTeamID above the
+	// largest restored teammate ID.
+	team.mu.Lock()
+	for id := range team.Teammates {
+		var n int
+		if _, err := fmt.Sscanf(id, "tm-%d", &n); err == nil && n > m.nextTeamID {
+			m.nextTeamID = n
+		}
+	}
+	team.mu.Unlock()
+
 	m.emit(Event{Type: "team_restored", TeamID: teamID, Timestamp: time.Now()})
 	return team.snapshot(), nil
 }

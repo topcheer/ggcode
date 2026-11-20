@@ -3,6 +3,7 @@ package swarm
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // #5837: teams belong to their creating SESSION. Cross-session isolation:
@@ -87,6 +88,33 @@ func TestLegacyTeamAdoptedOnExplicitRestore(t *testing.T) {
 	m3.SetOwnerSession("sess-Y")
 	if err := m3.SessionOwnsTeam(s.ID); err == nil {
 		t.Fatal("post-adoption, foreign session must be denied")
+	}
+}
+
+// Review B-5: #5839 changed the lease liveness contract (same-host dead
+// PID is dead REGARDLESS of heartbeat freshness) without a dedicated
+// test. Pin it.
+func TestSameHostDeadPIDFreshHeartbeatIsDead(t *testing.T) {
+	root := t.TempDir()
+	m1 := newLeaseTestManager(t, root)
+	m2 := newLeaseTestManager(t, root)
+
+	s := m1.CreateTeam("freshttl", "leader-1")
+	if _, err := m1.SpawnTeammate(s.ID, "eve", "", nil); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+
+	dead := ownerLease{
+		BootID:    "fresh-but-dead",
+		PID:       4194304,
+		Hostname:  m1.hostname,
+		Heartbeat: time.Now(),
+	}
+	if err := writeOwnerLeaseFile(m1.ownerLeasePath(s.ID), &dead); err != nil {
+		t.Fatalf("write lease: %v", err)
+	}
+	if v := m2.checkOwnerLease(s.ID); v != leaseDead {
+		t.Fatalf("same-host dead PID with fresh heartbeat must be leaseDead, got %v", v)
 	}
 }
 
