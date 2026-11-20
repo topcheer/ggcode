@@ -80,7 +80,9 @@ func (m *Manager) FilterTeamsForSession(infos []PersistedTeamInfo) []PersistedTe
 // Lease liveness still guards machine-level double-restore.
 func (m *Manager) AutoRestoreSessionTeams() []TeamSnapshot {
 	var restored []TeamSnapshot
-	for _, info := range SummarizePersistedTeams() {
+	// Scan the manager's own board root (honors Manager.BoardRoot overrides
+	// and test roots) instead of the process-global ConfigDir scan.
+	for _, info := range summarizePersistedTeamsUnder(m.boardRoot()) {
 		m.mu.Lock()
 		_, active := m.teams[info.TeamID]
 		m.mu.Unlock()
@@ -123,6 +125,23 @@ func (m *Manager) stampOwnerSessionOnAdopt(teamID string) {
 	})
 	if err != nil {
 		debug.Log("swarm", "session adoption stamp for %s failed: %v", teamID, err)
+	}
+}
+
+// forceAdoptOwnerSession rebinds a stranded foreign team to this session
+// (#5847 option B): used by RestoreTeam when the owning session's instance
+// is provably dead. Idempotent; no-op when no session is bound.
+func (m *Manager) forceAdoptOwnerSession(teamID string) {
+	if m.ownerSessionID == "" {
+		return
+	}
+	err := m.updateManifest(teamID, func(mf *TeamManifest) {
+		if mf.OwnerSessionID != m.ownerSessionID {
+			mf.OwnerSessionID = m.ownerSessionID
+		}
+	})
+	if err != nil {
+		debug.Log("swarm", "forced session adoption stamp for %s failed: %v", teamID, err)
 	}
 }
 
