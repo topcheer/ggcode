@@ -454,6 +454,7 @@ type Agent struct {
 	onVerifyProgress         func(text string)
 	onVerifyResult           func(VerifyResult)
 	onToolProgress           func(toolID, toolName, output string)
+	midTool                  midToolInterruptState
 	mu                       sync.RWMutex
 }
 type providerAwareContextManager interface {
@@ -1564,6 +1565,9 @@ func (a *Agent) runStreamEpilogue(ctx context.Context, content []provider.Conten
 }
 
 func (a *Agent) injectPendingInterruptions(iter int) (bool, InterruptionKind) {
+	if injected, kind := a.flushStagedMidToolInterruptions(iter); injected {
+		return injected, kind
+	}
 	a.mu.RLock()
 	fn := a.onInterrupt
 	a.mu.RUnlock()
@@ -1571,32 +1575,13 @@ func (a *Agent) injectPendingInterruptions(iter int) (bool, InterruptionKind) {
 		return false, InterruptionAddition
 	}
 	blocks := fn()
-
-	nonBlank := false
-	for _, b := range blocks {
-		if b.Type == "text" && strings.TrimSpace(b.Text) == "" {
-			continue
-		}
-		nonBlank = true
-		break
-	}
-	if !nonBlank {
+	if !interruptionBlocksNonBlank(blocks) {
 		return false, InterruptionAddition
 	}
 	kind := classifyInterruption(firstTextBlock(blocks))
 	debug.Log("agent", "injecting mid-run user guidance (kind=%s)", kind)
 
-	content := []provider.ContentBlock{{
-		Type: "text",
-		Text: interruptionPreamble(kind),
-	}}
-	content = append(content, blocks...)
-	a.contextManager.Add(provider.Message{
-		Role:    "user",
-		Content: content,
-	})
-
-	a.constraintAmnesia.recordConstraints(firstTextBlock(blocks), iter)
+	a.addInterruptionMessage(blocks, kind, iter)
 	return true, kind
 }
 

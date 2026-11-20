@@ -457,11 +457,20 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
 
+	toolCtx, toolCancel := context.WithCancel(ctx)
+	cancelEntry := a.registerMidToolCancel(toolCancel)
+	defer func() {
+		a.unregisterMidToolCancel(cancelEntry)
+		toolCancel()
+	}()
+	ctx = toolCtx
+
 	if a.onToolProgress != nil && ctx.Value(tool.ToolProgressKey{}) == nil {
 		fn := a.onToolProgress
 		toolID := tc.ID
 		ctx = context.WithValue(ctx, tool.ToolProgressKey{}, tool.ToolProgressFunc(
 			func(_, toolName, output string) {
+				a.midToolInterruptCheckpoint(toolName)
 				fn(toolID, toolName, output)
 			},
 		))
