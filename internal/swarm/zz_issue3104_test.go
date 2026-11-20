@@ -17,7 +17,7 @@ func injectTeammate(m *Manager, teamID string, tm *Teammate) {
 }
 
 func TestIssue3104BroadcastSkipsShuttingDownTeammate(t *testing.T) {
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	team := m.CreateTeam("t3104a", "leader-1")
 	healthy := &Teammate{ID: "tm-ok", Name: "ok", Status: TeammateIdle, Inbox: make(chan MailMessage, 4)}
 	dying := &Teammate{ID: "tm-dying", Name: "dying", Status: TeammateShuttingDown, Inbox: make(chan MailMessage, 4)}
@@ -42,7 +42,7 @@ func TestIssue3104BroadcastSkipsShuttingDownTeammate(t *testing.T) {
 
 func TestIssue3104BroadcastSkipsCancelledCtxTeammate(t *testing.T) {
 
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	team := m.CreateTeam("t3104b", "leader-1")
 	ctx, cancel := context.WithCancel(context.Background())
 	zombie := &Teammate{ID: "tm-zombie", Name: "zombie", Status: TeammateWorking, Inbox: make(chan MailMessage, 4)}
@@ -66,7 +66,7 @@ func TestIssue3104BroadcastSkipsCancelledCtxTeammate(t *testing.T) {
 }
 
 func TestIssue3104BroadcastStillDeliversToWorkingAndIdle(t *testing.T) {
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	team := m.CreateTeam("t3104c", "leader-1")
 	idle := &Teammate{ID: "tm-idle", Name: "i", Status: TeammateIdle, Inbox: make(chan MailMessage, 4)}
 	working := &Teammate{ID: "tm-work", Name: "w", Status: TeammateWorking, Inbox: make(chan MailMessage, 4)}

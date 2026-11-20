@@ -3,6 +3,7 @@ package swarm
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -60,43 +61,6 @@ func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 	mf, err := m.loadManifest(teamID)
 	if err != nil {
 		return TeamSnapshot{}, fmt.Errorf("team %q has no persisted manifest: %w", teamID, err)
-	}
-
-	// #5837: session-scoped ownership gates the restore itself - a team
-	// owned by a different session is never loadable from here; a legacy
-	// (unclaimed) team is adopted at explicit-restore time.
-	// #5847 (option B, autopilot ruling): a foreign session's team whose
-	// owner lease is PROVABLY dead (same-host dead PID, or heartbeat long
-	// expired on a foreign host) is adoptable via this explicit restore -
-	// otherwise a crashed instance's teams are stranded forever (the
-	// user's "dead instance lease blocks restore" symptom). A LIVE owner's
-	// foreign team stays refused.
-	if mf.OwnerSessionID == "" {
-		return TeamSnapshot{}, fmt.Errorf("team %q has no session ownership stamp; refusing (abnormal data)", teamID)
-	}
-	if m.sessionOwnershipFor(mf) == ownershipForeign {
-		switch v := m.checkOwnerLease(teamID); v {
-		case leaseDead, leaseLegacy:
-			debug.Log("swarm", "restore of %s: owner session gone (lease %s); adopting the stranded team into this session", teamID, v)
-			m.forceAdoptOwnerSession(teamID)
-		default:
-			return TeamSnapshot{}, fmt.Errorf("team %q belongs to another session; it is not visible or loadable from this session", teamID)
-		}
-	}
-
-	switch v := m.checkOwnerLease(teamID); v {
-	case leaseAliveForeign:
-		debug.Log("swarm", "WARN restore of %s refused: board owned by a LIVE instance (lease alive); stop the other instance or use a different team", teamID)
-		return TeamSnapshot{}, fmt.Errorf("team %q is owned by a live instance (owner lease alive); restore refused", teamID)
-	case leaseLegacy:
-		debug.Log("swarm", "WARN restore of %s: directory has no owner.json (legacy pre-persistent-teams board); treating as dead owner and inheriting", teamID)
-	case leaseDead:
-		debug.Log("swarm", "restore of %s: owner lease dead, inheriting and re-stamping", teamID)
-	case leaseOurs, leaseDirMissing:
-		// Same-boot resume or missing dir (board empty, journals may exist).
-	}
-	if err := m.stampOwnerLease(teamID); err != nil {
-		debug.Log("swarm", "owner re-stamp for %s failed: %v", teamID, err)
 	}
 
 	team := &Team{
@@ -243,4 +207,40 @@ func (m *Manager) restoreTeammate(team *Team, mt *ManifestTeammate) {
 		TeammateName: tm.Name,
 		Timestamp:    time.Now(),
 	})
+}
+
+// AutoRestoreSessionTeams (#5860 rewrite): with the confirmed session id
+// as the directory namespace, restoring is a plain listdir of
+// swarm/teams/<sessionID>/ - every directory there IS ours by construction.
+// No ownership stamps, no lease taxonomy, no foreign filtering. The
+// summary line always lands in the debug ring (empty scan included).
+func (m *Manager) AutoRestoreSessionTeams() []TeamSnapshot {
+	var restored []TeamSnapshot
+	sid := m.SessionNamespace()
+	root := m.sessionTeamsDir()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		debug.Log("swarm", "AUTO-RESTORE SUMMARY: store=%s scanned=0 restored=0 (no namespace dir yet)", root)
+		return nil
+	}
+	scanned := 0
+	failed := 0
+	ids := []string{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		scanned++
+		snap, err := m.RestoreTeam(e.Name())
+		if err != nil {
+			failed++
+			debug.Log("swarm", "auto-restore of %s failed: %v", e.Name(), err)
+			continue
+		}
+		restored = append(restored, snap)
+		ids = append(ids, snap.ID)
+	}
+	debug.Log("swarm", "AUTO-RESTORE SUMMARY: session=%s store=%s scanned=%d restored=%d (%v) failed=%d",
+		sid, root, scanned, len(restored), ids, failed)
+	return restored
 }

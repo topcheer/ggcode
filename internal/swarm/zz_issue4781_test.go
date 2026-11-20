@@ -5,7 +5,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -13,7 +12,7 @@ import (
 
 func zz4781Manager(t *testing.T) *Manager {
 	t.Helper()
-	m := NewManager(config.SwarmConfig{}, nil,
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil,
 		func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
 			return &mockAgentRunner{
 				runStreamFn: func(ctx context.Context, _ string, _ func(provider.StreamEvent)) error {
@@ -88,13 +87,9 @@ func TestIssue4781_CrossSeatWinnerVisibleToSecondManager(t *testing.T) {
 		t.Fatalf("seatA claim: %v", err)
 	}
 
-	// #5829: seatB never mints seatA's team ID; the shared board is entered
-	// via an explicit restore (dead-owner lease simulates the handover).
+	// #5860 namespace model: the shared board is entered via an explicit
+	// restore (same-session namespace; the directory IS the ownership).
 	seatB := zz4781Manager(t)
-	stale := ownerLease{BootID: "seat-b-boot", PID: 4194304, Hostname: "restarted-host", Heartbeat: time.Now().Add(-2 * ownerLeaseTTL)}
-	if err := writeOwnerLeaseFile(seatB.ownerLeasePath(teamA.ID), &stale); err != nil {
-		t.Fatalf("age lease: %v", err)
-	}
 	if _, err := seatB.RestoreTeam(teamA.ID); err != nil {
 		t.Fatalf("seatB restore: %v", err)
 	}

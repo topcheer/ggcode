@@ -90,7 +90,8 @@ func newPersistentTestManager(t *testing.T, boardRoot, sessionRoot string) *Mana
 	factory := func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
 		return &journaledFakeAgent{}
 	}
-	m := NewManager(config.SwarmConfig{PollInterval: 30 * time.Millisecond}, nil, factory, nil)
+	m := NewManager(config.SwarmConfig{PollInterval: 30 * time.Millisecond},
+		"sess-t", nil, factory, nil)
 	m.BoardRoot = boardRoot
 	m.SessionRoot = sessionRoot
 	m.JournalsEnabled = true
@@ -159,11 +160,6 @@ func TestTeamKillRestorePreservesMemory(t *testing.T) {
 	// restarted host (the first owner's PID no longer answers and its
 	// heartbeat is stale) by aging the lease.
 	m2 := newPersistentTestManager(t, boardRoot, sessionRoot)
-	stale := ownerLease{BootID: "restarted-from", PID: 4194304, Hostname: "restarted-host", Heartbeat: time.Now().Add(-2 * ownerLeaseTTL)}
-	if err := writeOwnerLeaseFile(m2.ownerLeasePath(s.ID), &stale); err != nil {
-		t.Fatalf("age lease: %v", err)
-	}
-
 	snap, err := m2.RestoreTeam(s.ID)
 	if err != nil {
 		t.Fatalf("RestoreTeam: %v", err)
@@ -248,10 +244,6 @@ func TestTeammateJournalNamingAndFooter(t *testing.T) {
 	// Kill-style: strip the footer -> restore still works but the journal
 	// reads as crashed (no clean footer).
 	m2 := newPersistentTestManager(t, boardRoot, sessionRoot)
-	stale := ownerLease{BootID: "gone-boot", PID: 4194304, Hostname: "restarted-host", Heartbeat: time.Now().Add(-2 * ownerLeaseTTL)}
-	if err := writeOwnerLeaseFile(m2.ownerLeasePath(s.ID), &stale); err != nil {
-		t.Fatalf("age lease: %v", err)
-	}
 	if _, err := m2.RestoreTeamByName("footerteam"); err != nil {
 		t.Fatalf("RestoreTeamByName: %v", err)
 	}

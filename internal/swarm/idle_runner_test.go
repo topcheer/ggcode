@@ -50,7 +50,7 @@ func newTestManager() *Manager {
 		InboxSize:           16,
 		TeammateTimeout:     5 * time.Second,
 		PollInterval:        50 * time.Millisecond,
-	}, nil, nil, nil)
+	}, "sess-t", nil, nil, nil)
 }
 
 func TestIdleRunner_ReceivesTask(t *testing.T) {

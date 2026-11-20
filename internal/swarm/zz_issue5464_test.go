@@ -38,9 +38,10 @@ type stubPolicy struct{ permission.PermissionPolicy }
 
 func TestSpawnTeammateWiresPermissionPolicy(t *testing.T) {
 	runner := &policyAwareRunner{}
-	m := NewManager(config.SwarmConfig{MaxTeammatesPerTeam: 4}, nil, func(prov provider.Provider, tools interface{}, sp string, mt int) AgentRunner {
-		return runner
-	}, nil)
+	m := NewManager(config.SwarmConfig{MaxTeammatesPerTeam: 4},
+		"sess-t", nil, func(prov provider.Provider, tools interface{}, sp string, mt int) AgentRunner {
+			return runner
+		}, nil)
 	m.SetPermissionPolicyGetter(func() permission.PermissionPolicy {
 		return stubPolicy{}
 	})
@@ -66,9 +67,10 @@ func TestSpawnTeammateWiresPermissionPolicy(t *testing.T) {
 
 func TestSpawnTeammateNoGetterLeavesRunnerUntouched(t *testing.T) {
 	runner := &policyAwareRunner{}
-	m := NewManager(config.SwarmConfig{MaxTeammatesPerTeam: 4}, nil, func(prov provider.Provider, tools interface{}, sp string, mt int) AgentRunner {
-		return runner
-	}, nil)
+	m := NewManager(config.SwarmConfig{MaxTeammatesPerTeam: 4},
+		"sess-t", nil, func(prov provider.Provider, tools interface{}, sp string, mt int) AgentRunner {
+			return runner
+		}, nil)
 
 	team := m.CreateTeam("t1", "leader")
 
@@ -83,9 +85,10 @@ func TestSpawnTeammateNoGetterLeavesRunnerUntouched(t *testing.T) {
 }
 
 func TestSpawnTeammateBareRunnerNoPanic(t *testing.T) {
-	m := NewManager(config.SwarmConfig{MaxTeammatesPerTeam: 4}, nil, func(prov provider.Provider, tools interface{}, sp string, mt int) AgentRunner {
-		return &bareRunner{}
-	}, nil)
+	m := NewManager(config.SwarmConfig{MaxTeammatesPerTeam: 4},
+		"sess-t", nil, func(prov provider.Provider, tools interface{}, sp string, mt int) AgentRunner {
+			return &bareRunner{}
+		}, nil)
 	m.SetPermissionPolicyGetter(func() permission.PermissionPolicy {
 		return stubPolicy{}
 	})

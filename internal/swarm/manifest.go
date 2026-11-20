@@ -36,13 +36,12 @@ type ManifestTeammate struct {
 
 // TeamManifest is the persisted team descriptor.
 type TeamManifest struct {
-	TeamID         string             `json:"teamID"`
-	Name           string             `json:"name"`
-	LeaderID       string             `json:"leaderID"`
-	OwnerSessionID string             `json:"ownerSessionID,omitempty"`
-	CreatedAt      time.Time          `json:"createdAt"`
-	UpdatedAt      time.Time          `json:"updatedAt"`
-	Teammates      []ManifestTeammate `json:"teammates"`
+	TeamID    string             `json:"teamID"`
+	Name      string             `json:"name"`
+	LeaderID  string             `json:"leaderID"`
+	CreatedAt time.Time          `json:"createdAt"`
+	UpdatedAt time.Time          `json:"updatedAt"`
+	Teammates []ManifestTeammate `json:"teammates"`
 }
 
 func (m *Manager) manifestPath(teamID string) string {
@@ -87,7 +86,6 @@ func (m *Manager) writeManifestLocked(teamID string, mf *TeamManifest) error {
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
-	m.refreshOwnerHeartbeat(teamID)
 	return nil
 }
 
@@ -175,7 +173,8 @@ func (m *Manager) stampTeammateResult(teamID, tmID, result string, lastActive ti
 // findTeamManifestByName scans persisted manifests and matches on team name
 // (case-insensitive) or team ID. Used by the team_restore tool.
 func (m *Manager) findTeamManifestByName(name string) (*TeamManifest, error) {
-	teamsDir := filepath.Join(m.boardRoot(), "swarm", "teams")
+	// #5860: scan THIS session's namespace only.
+	teamsDir := m.sessionTeamsDir()
 	entries, err := os.ReadDir(teamsDir)
 	if err != nil {
 		return nil, fmt.Errorf("no persisted teams under %s: %w", teamsDir, err)

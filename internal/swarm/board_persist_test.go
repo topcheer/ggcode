@@ -14,7 +14,7 @@ import (
 
 func newBoardTestManager(t *testing.T) *Manager {
 	t.Helper()
-	m := NewManager(config.SwarmConfig{}, nil,
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil,
 		func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
 			return &mockAgentRunner{
 				runStreamFn: func(ctx context.Context, _ string, _ func(provider.StreamEvent)) error {
@@ -26,7 +26,6 @@ func newBoardTestManager(t *testing.T) *Manager {
 		func(_ []string) interface{} { return nil },
 	)
 	t.Cleanup(m.Shutdown)
-	m.SetOwnerSession("test-sess-" + t.Name())
 	return m
 }
 
@@ -65,13 +64,10 @@ func TestBoardPersistenceRoundTrip(t *testing.T) {
 		t.Fatalf("board snapshot never landed at %s", boardFile)
 	}
 
-	// Restart: a fresh manager never inherits a foreign board implicitly
-	// (#5829) - simulate the dead owner of a restarted host and restore.
+	// Restart (#5860 namespace model): a fresh manager on the SAME
+	// session namespace restores the team directly - the directory IS
+	// the ownership, no lease to age out.
 	m2 := newBoardTestManager(t)
-	stale := ownerLease{BootID: "restarted-from", PID: 4194304, Hostname: "restarted-host", Heartbeat: time.Now().Add(-2 * ownerLeaseTTL)}
-	if err := writeOwnerLeaseFile(m2.ownerLeasePath(team.ID), &stale); err != nil {
-		t.Fatalf("age lease: %v", err)
-	}
 	if _, err := m2.RestoreTeam(team.ID); err != nil {
 		t.Fatalf("RestoreTeam(restart): %v", err)
 	}

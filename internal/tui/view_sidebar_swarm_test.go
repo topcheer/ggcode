@@ -64,7 +64,7 @@ func TestHandleSwarmTunnelEventMsg_RefreshesSnapshot(t *testing.T) {
 	mgr := swarm.NewManager(config.SwarmConfig{
 		MaxTeammatesPerTeam: 4,
 		InboxSize:           8,
-	}, nil, nil, nil)
+	}, "sess-t", nil, nil, nil)
 	mgr.BoardRoot = t.TempDir()
 	defer mgr.Shutdown()
 

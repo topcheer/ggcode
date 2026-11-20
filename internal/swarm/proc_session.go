@@ -1,7 +1,6 @@
 package swarm
 
 import (
-	"path/filepath"
 	"sync"
 )
 
@@ -23,25 +22,6 @@ func SetProcessOwnerSession(sessionID string) {
 	procSessionMu.Lock()
 	procOwnerSess = sessionID
 	procSessionMu.Unlock()
-}
-
-// SetProcessWorkspace records the active workspace for the prompt-surface
-// team scan (#5851-followup): teams live under <workspace>/.ggcode/swarm.
-var procWorkspace string
-
-func SetProcessWorkspace(dir string) {
-	procSessionMu.Lock()
-	procWorkspace = dir
-	procSessionMu.Unlock()
-}
-
-func processWorkspaceRoot() string {
-	procSessionMu.RLock()
-	defer procSessionMu.RUnlock()
-	if procWorkspace == "" {
-		return ""
-	}
-	return procWorkspace + string(filepath.Separator) + ".ggcode"
 }
 
 // processOwnerSession returns the recorded session ID ("" when unset).

@@ -41,7 +41,7 @@ func TestTeammateListShowsLastActive(t *testing.T) {
 }
 
 func TestTeammateResultsShowsLastActive(t *testing.T) {
-	mgr := swarm.NewManager(config.SwarmConfig{}, nil, func(provider.Provider, interface{}, string, int) swarm.AgentRunner {
+	mgr := swarm.NewManager(config.SwarmConfig{}, "sess-t", nil, func(provider.Provider, interface{}, string, int) swarm.AgentRunner {
 		return lastActiveAgent{}
 	}, nil)
 	team := mgr.CreateTeam("active-team", "leader-1")

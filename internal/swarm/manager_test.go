@@ -67,6 +67,7 @@ func testManager(t *testing.T) (*Manager, *mockAgent) {
 	ma := newMockAgent()
 	m := NewManager(
 		config.SwarmConfig{},
+		"sess-t",
 		nil,
 		func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
 			return ma
@@ -443,7 +444,7 @@ func TestManager_ConcurrentSpawn(t *testing.T) {
 
 func TestManager_SpawnTeammate_NilFactory(t *testing.T) {
 	cfg := config.SwarmConfig{MaxTeammatesPerTeam: 3}
-	m := NewManager(cfg, nil, nil, nil)
+	m := NewManager(cfg, "sess-t", nil, nil, nil)
 	defer m.Shutdown()
 
 	team := m.CreateTeam("test", "leader")
@@ -468,7 +469,7 @@ func TestManager_SpawnTeammate_NilProvider(t *testing.T) {
 	factory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) AgentRunner {
 		return nil
 	}
-	m := NewManager(cfg, nil, factory, nil)
+	m := NewManager(cfg, "sess-t", nil, factory, nil)
 	defer m.Shutdown()
 
 	team := m.CreateTeam("test", "leader")
@@ -484,7 +485,7 @@ func TestManager_SpawnTeammate_NilProvider(t *testing.T) {
 
 func TestManager_NextTeamIDRaceFree(t *testing.T) {
 	cfg := config.SwarmConfig{MaxTeammatesPerTeam: 100}
-	m := NewManager(cfg, nil, nil, nil)
+	m := NewManager(cfg, "sess-t", nil, nil, nil)
 	defer m.Shutdown()
 
 	team := m.CreateTeam("test", "leader")
@@ -540,7 +541,7 @@ func TestManager_SpawnTeammate_WithFactory(t *testing.T) {
 			},
 		}
 	}
-	m := NewManager(cfg, nil, factory, nil)
+	m := NewManager(cfg, "sess-t", nil, factory, nil)
 	defer m.Shutdown()
 
 	team := m.CreateTeam("test", "leader")
@@ -592,7 +593,7 @@ func TestManager_SpawnTeammate_WithFactory(t *testing.T) {
 func TestManager_SpawnTeammate_ForwardsUsageHandler(t *testing.T) {
 	cfg := config.SwarmConfig{MaxTeammatesPerTeam: 3, InboxSize: 16}
 	agent := &usageAwareMockAgent{mockAgent: newMockAgent()}
-	m := NewManager(cfg, nil, func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) AgentRunner {
+	m := NewManager(cfg, "sess-t", nil, func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) AgentRunner {
 		return agent
 	}, nil)
 	defer m.Shutdown()
@@ -656,6 +657,7 @@ func TestManager_CancelAll(t *testing.T) {
 	ma := newMockAgent()
 	m := NewManager(
 		config.SwarmConfig{},
+		"sess-t",
 		nil,
 		func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
 			return ma
@@ -974,7 +976,7 @@ func TestManager_ShutdownTeammateFreesResult(t *testing.T) {
 }
 
 func TestGetTeammateResultAfterShutdown(t *testing.T) {
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	team := m.CreateTeam("result-team", "leader-1")
 	tm, err := m.SpawnTeammate(team.ID, "worker-1", "", nil)
 	if err != nil {
