@@ -24,8 +24,16 @@ func TestSuppressToolResultFormatsTeamCreate(t *testing.T) {
 func TestSuppressToolResultFormatsSwarmTaskCreate(t *testing.T) {
 	result := `{"ID":"task-1","Subject":"Fix tunnel replay","Description":"## Plan\n1. Repair replay\n2. Reseed snapshot"}`
 	got := suppressToolResult("swarm_task_create", "", result, false)
-	if got != "## Plan\n1. Repair replay\n2. Reseed snapshot" {
-		t.Fatalf("expected extracted swarm task markdown, got %q", got)
+	// #5866: generic field-by-field rendering -- id/subject summary line +
+	// description payload with real line breaks (raw JSON must not leak).
+	if !strings.Contains(got, "task-1") || !strings.Contains(got, "Fix tunnel replay") {
+		t.Fatalf("expected id+subject summary, got %q", got)
+	}
+	if !strings.Contains(got, "## Plan\n1. Repair replay") {
+		t.Fatalf("expected description payload with real breaks, got %q", got)
+	}
+	if strings.HasPrefix(strings.TrimSpace(got), "{") {
+		t.Fatalf("raw JSON leaked into rendering: %q", got[:60])
 	}
 }
 
