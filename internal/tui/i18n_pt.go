@@ -647,6 +647,20 @@ func ptCatalog(key string) string {
 		return "Arquivos:"
 	case "panel.im":
 		return "IM"
+	case "panel.swarm":
+		return "Equipes Swarm"
+	case "swarm.team_summary":
+		return "%d membros · %d tarefas"
+	case "swarm.status.idle":
+		return "inativo"
+	case "swarm.status.working":
+		return "trabalhando"
+	case "swarm.status.shutting_down":
+		return "parando"
+	case "swarm.more_members":
+		return "+%d mais"
+	case "swarm.more_teams":
+		return "+%d equipes a mais"
 	case "panel.usage":
 		return "Uso"
 	case "usage.refreshing":

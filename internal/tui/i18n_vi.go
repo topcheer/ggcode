@@ -26,6 +26,20 @@ func viCatalog(key string) string {
 		return "Sử dụng phiên"
 	case "panel.im":
 		return "IM"
+	case "panel.swarm":
+		return "Nhóm Swarm"
+	case "swarm.team_summary":
+		return "%d thành viên · %d nhiệm vụ"
+	case "swarm.status.idle":
+		return "nhàn rỗi"
+	case "swarm.status.working":
+		return "đang làm"
+	case "swarm.status.shutting_down":
+		return "đang dừng"
+	case "swarm.more_members":
+		return "+%d nữa"
+	case "swarm.more_teams":
+		return "+%d nhóm nữa"
 	case "panel.usage":
 		return "Sử dụng"
 	case "usage.refreshing":

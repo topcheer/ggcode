@@ -26,6 +26,20 @@ func jaCatalog(key string) string {
 		return "セッション使用量"
 	case "panel.im":
 		return "IM"
+	case "panel.swarm":
+		return "Swarm チーム"
+	case "swarm.team_summary":
+		return "%d メンバー · %d タスク"
+	case "swarm.status.idle":
+		return "待機中"
+	case "swarm.status.working":
+		return "作業中"
+	case "swarm.status.shutting_down":
+		return "停止中"
+	case "swarm.more_members":
+		return "他 %d 名"
+	case "swarm.more_teams":
+		return "他 %d チーム"
 	case "panel.usage":
 		return "使用量"
 	case "usage.refreshing":

@@ -28,6 +28,20 @@ func enCatalog(key string) string {
 		return "Session usage"
 	case "panel.im":
 		return "IM"
+	case "panel.swarm":
+		return "Swarm Teams"
+	case "swarm.team_summary":
+		return "%d members · %d tasks"
+	case "swarm.status.idle":
+		return "idle"
+	case "swarm.status.working":
+		return "working"
+	case "swarm.status.shutting_down":
+		return "stopping"
+	case "swarm.more_members":
+		return "+%d more members"
+	case "swarm.more_teams":
+		return "+%d more teams"
 	case "panel.usage":
 		return "Usage"
 	case "usage.refreshing":

@@ -26,6 +26,20 @@ func esCatalog(key string) string {
 		return "Uso de sesión"
 	case "panel.im":
 		return "IM"
+	case "panel.swarm":
+		return "Equipos Swarm"
+	case "swarm.team_summary":
+		return "%d miembros · %d tareas"
+	case "swarm.status.idle":
+		return "inactivo"
+	case "swarm.status.working":
+		return "trabajando"
+	case "swarm.status.shutting_down":
+		return "deteniéndose"
+	case "swarm.more_members":
+		return "+%d más"
+	case "swarm.more_teams":
+		return "+%d equipos más"
 	case "panel.usage":
 		return "Uso"
 	case "usage.refreshing":

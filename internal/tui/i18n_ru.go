@@ -23,6 +23,20 @@ func ruCatalog(key string) string {
 		return "Использование сессии"
 	case "panel.im":
 		return "IM"
+	case "panel.swarm":
+		return "Swarm-команды"
+	case "swarm.team_summary":
+		return "%d участников · %d задач"
+	case "swarm.status.idle":
+		return "ожидает"
+	case "swarm.status.working":
+		return "работает"
+	case "swarm.status.shutting_down":
+		return "останавливается"
+	case "swarm.more_members":
+		return "ещё %d"
+	case "swarm.more_teams":
+		return "ещё %d команд"
 	case "panel.usage":
 		return "Использование"
 	case "usage.refreshing":

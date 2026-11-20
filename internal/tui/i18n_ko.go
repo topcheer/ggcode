@@ -26,6 +26,20 @@ func koCatalog(key string) string {
 		return "세션 사용량"
 	case "panel.im":
 		return "IM"
+	case "panel.swarm":
+		return "Swarm 팀"
+	case "swarm.team_summary":
+		return "멤버 %d명 · 작업 %d개"
+	case "swarm.status.idle":
+		return "대기 중"
+	case "swarm.status.working":
+		return "작업 중"
+	case "swarm.status.shutting_down":
+		return "중지 중"
+	case "swarm.more_members":
+		return "+%d명 더"
+	case "swarm.more_teams":
+		return "+%d개 팀 더"
 	case "panel.usage":
 		return "사용량"
 	case "usage.refreshing":

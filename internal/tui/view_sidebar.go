@@ -33,7 +33,11 @@ func (m Model) renderSidebar() string {
 	}
 	vendor, _, model := m.currentSelection()
 
-	body := strings.Join([]string{
+	// #5851: the swarm team panel rides between the usage and IM
+	// sections and disappears entirely (no stray blank lines) when no
+	// team is active.
+	swarmSection := m.renderSidebarSwarmSection()
+	parts := []string{
 		"",
 		renderSidebarLogo(m.sidebarWidth()-4, sidebarHomepageURL),
 		"",
@@ -46,13 +50,19 @@ func (m Model) renderSidebar() string {
 		m.renderSidebarSessionUsageSection(),
 		m.renderSidebarVendorUsageSection(),
 		m.renderSidebarUpdateSection(),
+	}
+	if swarmSection != "" {
+		parts = append(parts, "", swarmSection)
+	}
+	parts = append(parts,
 		"",
 		m.renderSidebarIMSection(),
 		"",
 		m.renderSidebarMCPSection(),
 		"",
 		m.renderSidebarA2ASection(),
-	}, "\n")
+	)
+	body := strings.Join(parts, "\n")
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

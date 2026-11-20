@@ -23,6 +23,20 @@ func deCatalog(key string) string {
 		return "Sitzungsnutzung"
 	case "panel.im":
 		return "IM"
+	case "panel.swarm":
+		return "Swarm-Teams"
+	case "swarm.team_summary":
+		return "%d Mitglieder · %d Aufgaben"
+	case "swarm.status.idle":
+		return "inaktiv"
+	case "swarm.status.working":
+		return "arbeitet"
+	case "swarm.status.shutting_down":
+		return "wird beendet"
+	case "swarm.more_members":
+		return "+%d weitere"
+	case "swarm.more_teams":
+		return "+%d weitere Teams"
 	case "panel.usage":
 		return "Nutzung"
 	case "usage.refreshing":

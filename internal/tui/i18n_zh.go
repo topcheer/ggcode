@@ -72,6 +72,20 @@ func zhCatalog(key string) string {
 		return "审阅文件修改"
 	case "panel.im":
 		return "IM"
+	case "panel.swarm":
+		return "Swarm 团队"
+	case "swarm.team_summary":
+		return "%d 名成员 · %d 个任务"
+	case "swarm.status.idle":
+		return "空闲"
+	case "swarm.status.working":
+		return "工作中"
+	case "swarm.status.shutting_down":
+		return "停止中"
+	case "swarm.more_members":
+		return "还有 %d 名成员"
+	case "swarm.more_teams":
+		return "还有 %d 个团队"
 	case "label.vendor":
 		return "供应商"
 	case "label.endpoint":

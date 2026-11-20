@@ -26,6 +26,20 @@ func frCatalog(key string) string {
 		return "Utilisation session"
 	case "panel.im":
 		return "IM"
+	case "panel.swarm":
+		return "Équipes Swarm"
+	case "swarm.team_summary":
+		return "%d membres · %d tâches"
+	case "swarm.status.idle":
+		return "inactif"
+	case "swarm.status.working":
+		return "en travail"
+	case "swarm.status.shutting_down":
+		return "arrêt en cours"
+	case "swarm.more_members":
+		return "+%d de plus"
+	case "swarm.more_teams":
+		return "+%d équipes de plus"
 	case "panel.usage":
 		return "Usage"
 	case "usage.refreshing":
