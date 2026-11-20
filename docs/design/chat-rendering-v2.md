@@ -4,6 +4,8 @@
 
 ### Current Issues
 
+0. **Per-frame allocation rule (hard convention, evidenced 2026-11-20)**: render-path functions run on EVERY frame — they must not allocate per frame, copy whole collections, or compile regexes inline. Two production incidents fixed the same day: composer cost hint copied the full UsageHistory each frame (`usageHistorySnapshot` = 111GB cumulative alloc / GC storms on one seat, fixed 1c344039d), and tool panel renders re-compiled regexes each frame (`regexp/syntax` = 2.6-2.7GB per seat, fixed 8be998aa6, bench 5.1x/-98.4%/-89% allocs). Pattern: hoist to package vars / guard copies with cheap len checks (#5867, #5831).
+
 1. **O(N²) streaming bug**: Each chunk appends duplicate entries to chatEntries (fixed in ea6aa8f but architecture still fragile)
 2. **No virtual scrolling**: `ChatEntryList.Render()` traverses ALL entries every frame — 1000 messages = 1000 renders per frame
 3. **Tool calls grouped poorly**: Activity groups with 📦 headers, max 5 items visible, hidden count summary — hard to follow individual tool progress
