@@ -94,12 +94,19 @@ func TestIssue5864_ApprovalOutranksTeammatePanel(t *testing.T) {
 	if m.pendingApproval != nil {
 		t.Fatal("Enter with approval pending + teammate panel open must resolve the approval (was: panel swallowed the key -> freeze)")
 	}
-	select {
-	case d := <-ch:
-		if d == permission.Cancelled {
-			t.Fatalf("unexpected decision %v", d)
+	deadline := time.Now().Add(500 * time.Millisecond) // decision arrives via safego.Go (async), same CI race as the other pins
+	for {
+		select {
+		case d := <-ch:
+			if d == permission.Cancelled {
+				t.Fatalf("unexpected decision %v", d)
+			}
+			return
+		default:
+			if time.Now().After(deadline) {
+				t.Fatal("decision must be delivered; pre-fix the gate hung forever")
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-	default:
-		t.Fatal("decision must be delivered; pre-fix the gate hung forever")
 	}
 }
