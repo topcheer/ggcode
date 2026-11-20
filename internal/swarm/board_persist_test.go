@@ -26,6 +26,7 @@ func newBoardTestManager(t *testing.T) *Manager {
 		func(_ []string) interface{} { return nil },
 	)
 	t.Cleanup(m.Shutdown)
+	m.SetOwnerSession("test-sess-" + t.Name())
 	return m
 }
 
