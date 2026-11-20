@@ -66,6 +66,28 @@ func SummarizeVisibleTeams(sessionID string) []PersistedTeamInfo {
 	return out
 }
 
+// SummarizeMigratableTeams scans the GLOBAL store for pre-scoping teams:
+// persisted manifests with no owner-session stamp (#5857). Such teams are
+// real data created before stamps existed; the strict session filter keeps
+// them invisible and adoption only fires on an explicit team_restore, so
+// this summary feeds the prompt hint telling the user (and the agent)
+// which old teams can still be migrated. Foreign-stamped teams are never
+// reported: they belong to another session and stay invisible (#5853).
+func SummarizeMigratableTeams() []PersistedTeamInfo {
+	root := util.ConfigDir()
+	out := make([]PersistedTeamInfo, 0)
+	for _, info := range summarizePersistedTeamsUnder(root) {
+		mf, err := readManifestFile(filepath.Join(root, "swarm", "teams", info.TeamID, "manifest.json"))
+		if err != nil {
+			continue
+		}
+		if mf.OwnerSessionID == "" {
+			out = append(out, info)
+		}
+	}
+	return out
+}
+
 // summarizePersistedTeamsUnder scans <root>/swarm/teams (test entry for
 // arbitrary board roots).
 func summarizePersistedTeamsUnder(root string) []PersistedTeamInfo {

@@ -206,15 +206,28 @@ func buildNamedAgentHint(workingDir string) string {
 // knew the tool name).
 func buildPersistentTeamsHint() string {
 	teams := swarm.SummarizePersistedTeams()
-	if len(teams) == 0 {
+	migratable := swarm.SummarizeMigratableTeams()
+	if len(teams) == 0 && len(migratable) == 0 {
 		return ""
 	}
 	var sb strings.Builder
 	sb.WriteString("## Persistent Teams\n")
-	sb.WriteString("The following persistent teams exist on disk (cross-restart; member journals intact). ")
-	sb.WriteString("When the user mentions, asks about, or asks to resume/resume one of these teams, call `team_restore` with its name to bring it back, then `teammate_list` / `swarm_task_list` to resume managing it.\n\n")
-	for _, t := range teams {
-		sb.WriteString(fmt.Sprintf("- **%s** (%s): %d member(s), last active %s\n", t.Name, t.TeamID, t.Members, t.LastActive.Format("2006-01-02 15:04")))
+	if len(teams) > 0 {
+		sb.WriteString("The following persistent teams exist on disk (cross-restart; member journals intact). ")
+		sb.WriteString("When the user mentions, asks about, or wants to resume one of these teams, call `team_restore` with its name to bring it back, then `teammate_list` / `swarm_task_list` to resume managing it.\n\n")
+		for _, t := range teams {
+			sb.WriteString(fmt.Sprintf("- **%s** (%s): %d member(s), last active %s\n", t.Name, t.TeamID, t.Members, t.LastActive.Format("2006-01-02 15:04")))
+		}
+	}
+	if len(migratable) > 0 {
+		// #5857: pre-scoping teams stuck in the global store, invisible
+		// to the strict session filter until an explicit restore migrates
+		// (adopts) them into this session.
+		sb.WriteString(fmt.Sprintf("\n%d older team(s) created before session scoping were detected in the global store and are not bound to any session yet.\n", len(migratable)))
+		sb.WriteString("When the user mentions or wants one of them, call `team_restore` with its name: restoring performs a one-shot migration that adopts the team into the current session.\n\n")
+		for _, t := range migratable {
+			sb.WriteString(fmt.Sprintf("- **%s** (%s): %d member(s), last active %s (needs migration)\n", t.Name, t.TeamID, t.Members, t.LastActive.Format("2006-01-02 15:04")))
+		}
 	}
 	return sb.String()
 }

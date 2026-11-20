@@ -175,7 +175,14 @@ func (m *Manager) stampTeammateResult(teamID, tmID, result string, lastActive ti
 // findTeamManifestByName scans persisted manifests and matches on team name
 // (case-insensitive) or team ID. Used by the team_restore tool.
 func (m *Manager) findTeamManifestByName(name string) (*TeamManifest, error) {
-	teamsDir := filepath.Join(m.boardRoot(), "swarm", "teams")
+	return findTeamManifestUnder(m.boardRoot(), name)
+}
+
+// findTeamManifestUnder scans <root>/swarm/teams for a persisted team
+// matching name (case-insensitive) or team ID - the store-agnostic scan
+// behind findTeamManifestByName and the #5857 global-store fallback.
+func findTeamManifestUnder(root, name string) (*TeamManifest, error) {
+	teamsDir := filepath.Join(root, "swarm", "teams")
 	entries, err := os.ReadDir(teamsDir)
 	if err != nil {
 		return nil, fmt.Errorf("no persisted teams under %s: %w", teamsDir, err)
@@ -185,7 +192,7 @@ func (m *Manager) findTeamManifestByName(name string) (*TeamManifest, error) {
 		if !e.IsDir() {
 			continue
 		}
-		mf, err := m.loadManifest(e.Name())
+		mf, err := readManifestFile(filepath.Join(teamsDir, e.Name(), "manifest.json"))
 		if err != nil {
 			continue
 		}

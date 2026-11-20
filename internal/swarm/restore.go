@@ -8,6 +8,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // RestoreTeam is the authoritative board-entry path for a persisted team
@@ -59,7 +60,17 @@ func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 
 	mf, err := m.loadManifest(teamID)
 	if err != nil {
-		return TeamSnapshot{}, fmt.Errorf("team %q has no persisted manifest: %w", teamID, err)
+		// #5857: pre-scoping teams stuck in the global store. When this
+		// manager runs a scoped board root that lacks the team but the
+		// global store holds it, an explicit restore migrates the team
+		// directory here first (one-shot; the global copy is removed for
+		// single-store uniqueness).
+		if m.migrateGlobalTeam(teamID) {
+			mf, err = m.loadManifest(teamID)
+		}
+		if err != nil {
+			return TeamSnapshot{}, fmt.Errorf("team %q has no persisted manifest: %w", teamID, err)
+		}
 	}
 
 	// #5837: session-scoped ownership gates the restore itself - a team
@@ -71,8 +82,24 @@ func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 	// otherwise a crashed instance's teams are stranded forever (the
 	// user's "dead instance lease blocks restore" symptom). A LIVE owner's
 	// foreign team stays refused.
+	// #5857 (follow-up to the #5853 strict ruling): an unstamped manifest
+	// is a PRE-SCOPING team - real data created before owner stamps
+	// existed, not abnormal data. It stays invisible to the session
+	// surface and to auto-restore (strict equality there is unchanged),
+	// but an EXPLICIT restore is the one-shot migration channel: adopt
+	// the team into this session. The owner lease still gates
+	// machine-level double-restore below - a live instance holding the
+	// board keeps the refusal.
 	if mf.OwnerSessionID == "" {
-		return TeamSnapshot{}, fmt.Errorf("team %q has no session ownership stamp; refusing (abnormal data)", teamID)
+		switch m.checkOwnerLease(teamID) {
+		case leaseAliveForeign:
+			debug.Log("swarm", "WARN restore of %s refused: unstamped pre-scoping team held by a live instance", teamID)
+			return TeamSnapshot{}, fmt.Errorf("team %q predates session stamps and its board is held by a live instance; stop that instance before migrating it", teamID)
+		default:
+			debug.Log("swarm", "restore of %s: unstamped pre-scoping team; explicit restore adopts it into this session (#5857 one-shot migration)", teamID)
+			m.forceAdoptOwnerSession(teamID)
+			mf.OwnerSessionID = m.boundOwnerSession()
+		}
 	}
 	if m.sessionOwnershipFor(mf) == ownershipForeign {
 		switch v := m.checkOwnerLease(teamID); v {
@@ -148,7 +175,21 @@ func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 func (m *Manager) RestoreTeamByName(name string) (TeamSnapshot, error) {
 	mf, err := m.findTeamManifestByName(name)
 	if err != nil {
-		return TeamSnapshot{}, err
+		// #5857: the name may only resolve in the global store (a
+		// pre-scoping team this manager's scoped store has never seen).
+		// An explicit restore is then a migration request; a blocked
+		// migration (live instance / another session's stamp) surfaces a
+		// pointed error instead of a bare "no match".
+		gmf, gerr := findTeamManifestUnder(util.ConfigDir(), name)
+		if gerr == nil {
+			if !m.migrateGlobalTeam(gmf.TeamID) {
+				return TeamSnapshot{}, fmt.Errorf("team %q exists in the global store but cannot be migrated into this store (a live instance or another session's ownership blocks it)", gmf.TeamID)
+			}
+			mf, err = m.loadManifest(gmf.TeamID)
+		}
+		if err != nil {
+			return TeamSnapshot{}, err
+		}
 	}
 	return m.RestoreTeam(mf.TeamID)
 }

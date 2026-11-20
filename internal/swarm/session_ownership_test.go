@@ -85,13 +85,31 @@ func TestUnstampedManifestIsForeign(t *testing.T) {
 	if err := m2.SessionOwnsTeam(s.ID); err == nil {
 		t.Fatal("unstamped manifest must be foreign (refused)")
 	}
-	if _, err := m2.RestoreTeam(s.ID); err == nil {
-		t.Fatal("unstamped manifest must be unrestorable")
-	}
 	for _, info := range SummarizeVisibleTeams("sess-other") {
 		if info.TeamID == s.ID {
 			t.Fatal("unstamped manifest surfaced to a foreign session")
 		}
+	}
+	// #5857 supersedes the old hard refusal: the strict surface guards
+	// above stay, but an EXPLICIT restore is the one-shot migration
+	// channel for pre-scoping teams - it adopts the team into the
+	// restoring session and stamps it.
+	snap, err := m2.RestoreTeam(s.ID)
+	if err != nil {
+		t.Fatalf("explicit restore must migrate-adopt an unstamped pre-scoping team: %v", err)
+	}
+	if snap.ID != s.ID {
+		t.Fatalf("unexpected snapshot %+v", snap)
+	}
+	mf, err := m2.loadManifest(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mf.OwnerSessionID != "sess-other" {
+		t.Fatalf("adoption must stamp the restoring session, got %q", mf.OwnerSessionID)
+	}
+	if err := m2.SessionOwnsTeam(s.ID); err != nil {
+		t.Fatalf("adopted team must be manageable from the adopting session: %v", err)
 	}
 }
 
