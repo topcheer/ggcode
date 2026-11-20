@@ -4,6 +4,20 @@ Team state survives process and host restarts. A team created in one ggcode
 session can be restored in a later one with its task board, membership, and
 each teammate's conversation memory intact.
 
+## Session ownership (#5837/#5838/#5839)
+
+Teams belong to the **session** that created them (`ownerSessionID` in the
+manifest):
+
+- **Own session resuming** (same session ID, new process): teams are rebuilt
+  automatically at startup (`AutoRestoreSessionTeams`) - no manual
+  `team_restore` needed.
+- **A different session** in the same workspace: the team is invisible and
+  unrestorable from that session (cross-session isolation).
+- **Legacy teams** created before session binding (no `ownerSessionID`) are
+  visible to every session; an explicit `team_restore` adopts them and
+  stamps the adopting session.
+
 ## What persists
 
 | Layer | Location | Notes |
@@ -43,10 +57,14 @@ lands on an existing directory — inheriting a foreign board is always an
 explicit `team_restore` decision.
 
 Each team directory carries an owner lease (`owner.json`: boot ID, PID,
-hostname, heartbeat refreshed on every persist). `team_restore` refuses a
-team whose owner is alive (same-host PID probe, or heartbeat fresher than 5
-minutes); a dead or legacy (pre-owner.json) lease is inherited and
-re-stamped.
+hostname, heartbeat refreshed on every persist) as a **machine-level liveness guard**. Restore
+is refused only while the lease holder is provably alive: on the same host,
+a live PID (different from this process) means alive, and a **dead PID
+means the owner is gone regardless of how fresh the heartbeat is**; the
+heartbeat freshness fallback (5 minutes) applies only to foreign hosts,
+where no PID probe is possible. Self-PID leases (an exec-style restart
+keeps the PID while minting a new boot ID) and dead/legacy leases are
+inherited and re-stamped.
 
 ## Teammate journals and session lists
 
