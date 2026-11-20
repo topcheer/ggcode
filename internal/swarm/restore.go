@@ -9,6 +9,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/task"
 )
 
 // RestoreTeam is the authoritative board-entry path for a persisted team
@@ -102,6 +103,37 @@ func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 		}
 	}
 	team.mu.Unlock()
+
+	// Clean-restart sweep: freeze every non-terminal board task so the
+	// restored teammates wake up idle instead of auto-claiming work the
+	// previous process was doing (the "teammate redoing old tasks after
+	// restart" complaint). in_progress tasks roll back to pending +
+	// interrupted_by=restore; already-pending legacy tasks get the same
+	// marker. The leader re-arms any of them explicitly via task_update
+	// (clearing interrupted_by) or a fresh swarm_task_create.
+	if board := m.GetTaskManager(teamID); board != nil {
+		pending := task.StatusPending
+		for _, tk := range board.List() {
+			if tk.Status == task.StatusCompleted {
+				continue
+			}
+			meta := map[string]string{}
+			for k, v := range tk.Metadata {
+				meta[k] = v
+			}
+			meta["interrupted_by"] = "restore"
+			owner := ""
+			if _, err := board.Update(tk.ID, task.UpdateOptions{
+				Status:   &pending,
+				Owner:    &owner,
+				Metadata: meta,
+			}); err != nil {
+				debug.Log("swarm", "restore freeze of %s/%s failed: %v", teamID, tk.ID, err)
+			} else {
+				debug.Log("swarm", "restore froze %s/%s (interrupted_by=restore) - leader must re-arm", teamID, tk.ID)
+			}
+		}
+	}
 
 	m.emit(Event{Type: "team_restored", TeamID: teamID, Timestamp: time.Now()})
 	return team.snapshot(), nil
