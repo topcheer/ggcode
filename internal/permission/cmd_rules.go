@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -19,6 +20,33 @@ type CommandRuleSet struct {
 	denyPats  []string
 }
 
+// maxCommandPatternLen guards compileCommandPattern against runaway
+// patterns. Field incident (2026-11-21, fleet-wide 2.5GB startup RSS):
+// permission_rules.json accumulated two mojibake blobs (12.5MB and
+// 1.2MB, UTF-8 double-encoding cascades) that compiled into ~540MB of
+// regexp/syntax instructions PER SEAT - 80% of heap at boot. Real
+// command patterns are short (<= a few hundred bytes); anything past
+// 8KB is corruption, not intent.
+const maxCommandPatternLen = 8 << 10
+
+// compiledPatternCache memoizes pattern -> *regexp.Regexp process-wide.
+// The same rules file is compiled once per agent (main + every restored
+// teammate); regexp.Regexp is safe for concurrent use, so sharing one
+// compiled object per pattern removes the per-agent duplication too.
+var compiledPatternCache sync.Map // string -> *regexp.Regexp
+
+func compileCommandPatternCached(pattern string) (*regexp.Regexp, error) {
+	if re, ok := compiledPatternCache.Load(pattern); ok {
+		return re.(*regexp.Regexp), nil
+	}
+	re, err := compileCommandPattern(pattern)
+	if err != nil {
+		return nil, err
+	}
+	compiledPatternCache.Store(pattern, re)
+	return re, nil
+}
+
 func NewCommandRuleSet() *CommandRuleSet {
 	return &CommandRuleSet{}
 }
@@ -26,7 +54,7 @@ func NewCommandRuleSet() *CommandRuleSet {
 func NewCommandRuleSetFromLists(allow, deny []string) *CommandRuleSet {
 	rs := &CommandRuleSet{}
 	for _, p := range allow {
-		if re, err := compileCommandPattern(p); err == nil {
+		if re, err := compileCommandPatternCached(p); err == nil {
 			rs.allow = append(rs.allow, re)
 			rs.allowPats = append(rs.allowPats, p)
 		} else {
@@ -34,7 +62,7 @@ func NewCommandRuleSetFromLists(allow, deny []string) *CommandRuleSet {
 		}
 	}
 	for _, p := range deny {
-		if re, err := compileCommandPattern(p); err == nil {
+		if re, err := compileCommandPatternCached(p); err == nil {
 			rs.deny = append(rs.deny, re)
 			rs.denyPats = append(rs.denyPats, p)
 		} else {
@@ -81,7 +109,7 @@ func (rs *CommandRuleSet) AddAllowPattern(pattern string) {
 	if rs == nil || strings.TrimSpace(pattern) == "" {
 		return
 	}
-	re, err := compileCommandPattern(pattern)
+	re, err := compileCommandPatternCached(pattern)
 	if err != nil {
 		debug.Log("permission", "invalid command pattern %q: %v", pattern, err)
 		return
@@ -103,7 +131,7 @@ func (rs *CommandRuleSet) AddDenyPattern(pattern string) {
 	if rs == nil || strings.TrimSpace(pattern) == "" {
 		return
 	}
-	re, err := compileCommandPattern(pattern)
+	re, err := compileCommandPatternCached(pattern)
 	if err != nil {
 		debug.Log("permission", "invalid command pattern %q: %v", pattern, err)
 		return
@@ -186,6 +214,10 @@ func compileCommandPattern(pattern string) (*regexp.Regexp, error) {
 	if pattern == "" {
 		return nil, ErrEmptyPattern
 	}
+	if len(pattern) > maxCommandPatternLen {
+		debug.Log("permission", "REFUSING to compile command pattern of %d bytes (max %d) - mojibake/corruption guard, fleet 2.5GB-startup incident 2026-11-21", len(pattern), maxCommandPatternLen)
+		return nil, ErrPatternTooLong
+	}
 
 	control := `[^;|&` + "`" + `$()<>\n\r\\]*`
 	trailingOnly := strings.HasSuffix(pattern, "*") &&
@@ -222,6 +254,8 @@ func compileCommandPattern(pattern string) (*regexp.Regexp, error) {
 }
 
 var ErrEmptyPattern = &patternError{"command pattern is empty"}
+
+var ErrPatternTooLong = &patternError{"command pattern exceeds " + strconv.Itoa(maxCommandPatternLen) + " bytes (mojibake/corruption guard)"}
 
 type patternError struct{ msg string }
 
