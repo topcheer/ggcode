@@ -28,6 +28,14 @@ func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 		return TeamSnapshot{}, fmt.Errorf("team %q has no persisted manifest: %w", teamID, err)
 	}
 
+	// #5837: session-scoped ownership gates the restore itself - a team
+	// owned by a different session is never loadable from here; a legacy
+	// (unclaimed) team is adopted at explicit-restore time.
+	if m.sessionOwnershipFor(mf) == ownershipForeign {
+		return TeamSnapshot{}, fmt.Errorf("team %q belongs to another session; it is not visible or loadable from this session", teamID)
+	}
+	m.stampOwnerSessionOnAdopt(teamID)
+
 	switch v := m.checkOwnerLease(teamID); v {
 	case leaseAliveForeign:
 		debug.Log("swarm", "WARN restore of %s refused: board owned by a LIVE instance (lease alive); stop the other instance or use a different team", teamID)
