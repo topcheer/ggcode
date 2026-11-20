@@ -1525,7 +1525,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		}
 		return cloned
 	}
-	swarmMgr := swarm.NewManagerWithProviderGetter(cfg.Swarm, prov, func() provider.Provider {
+	swarmMgr := swarm.NewManagerWithProviderGetter(cfg.Swarm, resumeID, prov, func() provider.Provider {
 		if ag != nil {
 			return ag.Provider()
 		}
@@ -1543,7 +1543,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	// guard), then auto-restore. Store = GLOBAL (#5853 ruling): no
 	// workspace BoardRoot override.
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
-	swarmMgr.SetOwnerSession(ag.SessionID())
 	for _, snap := range swarmMgr.AutoRestoreSessionTeams() {
 		debug.Log("swarm", "auto-restored session team %s (%s): %d member(s)", snap.ID, snap.Name, len(snap.Teammates))
 	}
@@ -1910,7 +1909,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			}
 		}
 
-		repl.SetSessionCreatedCallback(repl.HandleSessionCreated)
+		// #5860: the session-created callback (fires on EVERY SetSession,
+		// including resume) is the single confirmation point.
+		repl.SetSessionCreatedCallback(func(sessionID string) {
+			swarmMgr.ConfirmSession(sessionID)
+			repl.HandleSessionCreated(sessionID)
+		})
 
 		defer func() {
 			runfile.Remove(repl.CurrentSessionID())

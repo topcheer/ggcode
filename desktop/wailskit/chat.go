@@ -898,6 +898,11 @@ func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
 	if ag != nil && sid != "" {
 
 		defer func() { ag.SetSessionID(sid) }()
+		defer func() {
+			if b.swarmMgr != nil {
+				b.swarmMgr.ConfirmSession(sid)
+			}
+		}()
 	}
 	b.usageTurnIndex = state.UsageTurnIndex
 	b.lastMetricDigestTurn = state.LastMetricDigestTurn
@@ -1566,7 +1571,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		}
 		return cloned
 	}
-	swarms := agentruntime.NewSwarmManager(b.cfg.Swarm, p, b.registry, nil, swarmFactory, toolBuilder)
+	swarms := agentruntime.NewSwarmManager(b.cfg.Swarm, b.CurrentSessionID(), p, b.registry, nil, swarmFactory, toolBuilder)
 	// #5464: teammates must be permission-gated like the primary agent
 	// (L1315 policy above) - thread the active policy through.
 	swarms.SetPermissionPolicyGetter(func() permission.PermissionPolicy {

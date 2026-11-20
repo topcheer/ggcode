@@ -9,7 +9,7 @@ import (
 )
 
 func TestIssue2788_CancelledTeammateRejectsDelivery(t *testing.T) {
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	team := m.CreateTeam("team-2788", "leader-1")
 	tm, err := m.SpawnTeammate(team.ID, "worker-1", "", nil)
 	if err != nil {
@@ -44,7 +44,7 @@ func TestIssue2788_CancelledTeammateRejectsDelivery(t *testing.T) {
 }
 
 func TestIssue2788_LiveTeammateStillReceives(t *testing.T) {
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	team := m.CreateTeam("team-2788b", "leader-1")
 	tm, err := m.SpawnTeammate(team.ID, "worker-2", "", nil)
 	if err != nil {
@@ -58,7 +58,7 @@ func TestIssue2788_LiveTeammateStillReceives(t *testing.T) {
 }
 
 func TestIssue2788_ErrorPathsPreserved(t *testing.T) {
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	team := m.CreateTeam("team-2788c", "leader-1")
 	tm, err := m.SpawnTeammate(team.ID, "worker-3", "", nil)
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 func newE2EManager() *Manager {
 	return NewManager(
 		config.SwarmConfig{MaxTeammatesPerTeam: 10, InboxSize: 64, TeammateTimeout: 5 * time.Second},
+		"sess-t",
 		nil,
 		func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
 			return &mockAgentRunner{
@@ -500,7 +501,7 @@ func TestE2E_InboxFull(t *testing.T) {
 		TeammateTimeout:     5 * time.Second,
 	}
 
-	m := NewManager(cfg, nil,
+	m := NewManager(cfg, "sess-t", nil,
 		func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
 			return &mockAgentRunner{
 				runStreamFn: func(ctx context.Context, _ string, onEvent func(provider.StreamEvent)) error {

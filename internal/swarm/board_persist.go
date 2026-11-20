@@ -26,12 +26,22 @@ func (m *Manager) boardRoot() string {
 	return util.ConfigDir()
 }
 
+// #5860: teams/<sessionID>/<teamID>/ - the confirmed session id is the
+// namespace; the directory is the ownership.
+func (m *Manager) sessionTeamsDir() string {
+	return filepath.Join(m.boardRoot(), "swarm", "teams", m.SessionNamespace())
+}
+
+func (m *Manager) teamDir(teamID string) string {
+	return filepath.Join(m.sessionTeamsDir(), teamID)
+}
+
 func (m *Manager) boardPersistPath(teamID string) string {
-	return filepath.Join(m.boardRoot(), "swarm", "teams", teamID, "board.json")
+	return filepath.Join(m.teamDir(teamID), "board.json")
 }
 
 func (m *Manager) boardLockPath(teamID string) string {
-	return filepath.Join(m.boardRoot(), "swarm", "teams", teamID, "board.lock")
+	return filepath.Join(m.teamDir(teamID), "board.lock")
 }
 
 func (m *Manager) ClaimTaskSingleWinner(teamID, taskID, owner string) (*task.Task, error) {
@@ -96,9 +106,6 @@ func (m *Manager) persistTeamBoardNow(teamID string, tm *task.Manager) error {
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
-	// #5829: every persist refreshes the owner lease heartbeat so another
-	// instance sees this owner as alive.
-	m.refreshOwnerHeartbeat(teamID)
 	return nil
 }
 
@@ -113,13 +120,6 @@ func (m *Manager) persistTeamBoardAsync(teamID string, tm *task.Manager) {
 }
 
 func (m *Manager) loadTeamBoard(teamID string) *task.Manager {
-	// #5829: never silently load a board owned by a live foreign instance.
-	// The authoritative foreign-board entry path is RestoreTeam (explicit,
-	// lease-checked); this guard covers any implicit load path.
-	if v := m.checkOwnerLease(teamID); v == leaseAliveForeign {
-		debug.Log("swarm", "WARN board load for %s refused: owner lease alive (foreign instance is running); starting empty", teamID)
-		return task.NewManager()
-	}
 	tm := m.loadTeamBoardRaw(teamID)
 
 	rolled := 0

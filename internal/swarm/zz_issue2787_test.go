@@ -9,7 +9,7 @@ import (
 )
 
 func TestIssue2787_ResultSurvivesShutdownTeammate(t *testing.T) {
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	team := m.CreateTeam("team-2787", "leader-1")
 	tm, err := m.SpawnTeammate(team.ID, "worker-1", "", nil)
 	if err != nil {
@@ -32,7 +32,7 @@ func TestIssue2787_ResultSurvivesShutdownTeammate(t *testing.T) {
 }
 
 func TestIssue2787_UncollectedPeerSurvivesUnrelatedShutdown(t *testing.T) {
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	team := m.CreateTeam("team-2787-peer", "leader-1")
 
 	tmA, err := m.SpawnTeammate(team.ID, "worker-a", "", nil)
@@ -65,7 +65,7 @@ func TestIssue2787_UncollectedPeerSurvivesUnrelatedShutdown(t *testing.T) {
 }
 
 func TestIssue2787_ResultsFIFOBound(t *testing.T) {
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	m.mu.Lock()
 	for i := 0; i < maxStoredResults+10; i++ {
 		m.storeResultLocked(fmt.Sprintf("tm-%03d", i), fmt.Sprintf("r%d", i))
@@ -88,7 +88,7 @@ func TestIssue2787_ResultsFIFOBound(t *testing.T) {
 }
 
 func TestIssue2787_ResultsUpdateKeepsFIFOPosition(t *testing.T) {
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	m.mu.Lock()
 	m.storeResultLocked("tm-a", "first")
 	m.storeResultLocked("tm-b", "b1")
@@ -107,7 +107,7 @@ func TestIssue2787_ResultsUpdateKeepsFIFOPosition(t *testing.T) {
 }
 
 func TestIssue2787_DeleteTeamStillReclaims(t *testing.T) {
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	team := m.CreateTeam("team-2787-del", "leader-1")
 	tm, err := m.SpawnTeammate(team.ID, "worker-del", "", nil)
 	if err != nil {

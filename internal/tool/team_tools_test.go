@@ -14,6 +14,7 @@ func swarmTestManager(t *testing.T) *swarm.Manager {
 	t.Helper()
 	return swarm.NewManager(
 		config.SwarmConfig{},
+		"sess-t",
 		nil,
 		nil,
 		nil,

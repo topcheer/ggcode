@@ -7,8 +7,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"crypto/rand"
+	"encoding/hex"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -93,28 +96,58 @@ type Manager struct {
 	streamBatchDone chan struct{}
 	shutdownOnce    sync.Once
 
-	// Persistent teams (#5829): bootID/hostname identify this instance in
-	// team-dir owner leases; journalStoreCache caches the journal session
-	// store (journalMu-guarded); manifestMu serializes manifest writes.
-	// #5837: ownerSessionID binds teams to their creating SESSION (cross-
-	// session isolation) - ownership is session-scoped, not PID-scoped.
-	bootID            string
-	hostname          string
-	ownerSessionID    string
+	// Persistent teams (#5829). #5860 rewrite: the CONFIRMED session id is
+	// the single namespace - teams live under swarm/teams/<sessionID>/ and
+	// every read/write goes through it. No lease taxonomy, no ownership
+	// stamp field, no auto-mint: the directory IS the ownership. sessionID
+	// is set once (constructor for resumed sessions, ConfirmSession once
+	// for fresh sessions); teams cannot be created before it is confirmed.
+	sessionID         atomic.Value // string; set once, read lock-free
 	journalMu         sync.Mutex
 	journalStoreCache *session.JSONLStore
 	manifestMu        sync.Mutex
 }
 
-func NewManager(cfg config.SwarmConfig, prov provider.Provider, factory AgentFactory, builder ToolBuilder) *Manager {
-	return newManager(cfg, prov, nil, factory, builder)
+func NewManager(cfg config.SwarmConfig, sessionID string, prov provider.Provider, factory AgentFactory, builder ToolBuilder) *Manager {
+	return newManager(cfg, sessionID, prov, nil, factory, builder)
 }
 
-func NewManagerWithProviderGetter(cfg config.SwarmConfig, prov provider.Provider, getter func() provider.Provider, factory AgentFactory, builder ToolBuilder) *Manager {
-	return newManager(cfg, prov, getter, factory, builder)
+func NewManagerWithProviderGetter(cfg config.SwarmConfig, sessionID string, prov provider.Provider, getter func() provider.Provider, factory AgentFactory, builder ToolBuilder) *Manager {
+	return newManager(cfg, sessionID, prov, getter, factory, builder)
 }
 
-func newManager(cfg config.SwarmConfig, prov provider.Provider, getter func() provider.Provider, factory AgentFactory, builder ToolBuilder) *Manager {
+// ConfirmSession sets the confirmed session id exactly once (fresh-session
+// path: the id is minted when the first message creates the session). A
+// second, DIFFERENT confirmation is a programming error and panics loudly.
+func (m *Manager) ConfirmSession(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cur, _ := m.sessionID.Load().(string); cur == sessionID {
+		return
+	}
+	if cur, _ := m.sessionID.Load().(string); cur != "" {
+		panic("swarm: session re-confirmed with a different id: " + cur + " -> " + sessionID)
+	}
+	m.sessionID.Store(sessionID)
+}
+
+// SessionNamespace reads the confirmed session id lock-free: it is set
+// exactly once (constructor or ConfirmSession) and never mutated after,
+// and taking m.mu here inverted the lock order against Shutdown's
+// m.mu -> manifestMu path from a teammate loop (#5860 deadlock pin).
+func (m *Manager) SessionNamespace() string {
+	v, _ := m.sessionID.Load().(string)
+	return v
+}
+
+func newManager(cfg config.SwarmConfig, sessionID string, prov provider.Provider, getter func() provider.Provider, factory AgentFactory, builder ToolBuilder) *Manager {
+	if sessionID != "" && !validSessionID(sessionID) {
+		panic("swarm: invalid session id: " + sessionID)
+	}
+	// sessionID stored via atomic.Value in the struct literal below
 	if cfg.MaxTeammatesPerTeam <= 0 {
 		cfg.MaxTeammatesPerTeam = 16
 	}
@@ -130,29 +163,25 @@ func newManager(cfg config.SwarmConfig, prov provider.Provider, getter func() pr
 	// teammate_early_compact_ratio: 0 can disable the early trigger
 	// (a manager-side zero-default would make that indistinguishable).
 	rootCtx, rootCancel := context.WithCancel(context.Background())
-	hostname, _ := os.Hostname()
-	return &Manager{
-		teams:          make(map[string]*Team),
-		provider:       prov,
-		providerGetter: getter,
-		cfg:            cfg,
-		agentFactory:   factory,
-		toolBuilder:    builder,
-		results:        make(map[string]string),
-		rootCtx:        rootCtx,
-		rootCancel:     rootCancel,
-		bootID:         randomHex(8),
-		hostname:       hostname,
-		// #5852 user ruling: unstamped teams must never exist. Auto-mint a
-		// session so library-level naked use never produces unstamped
-		// manifests; production callers override via SetOwnerSession.
-		ownerSessionID:  "auto-" + randomHex(8),
+	mgr := &Manager{
+		teams:           make(map[string]*Team),
+		provider:        prov,
+		providerGetter:  getter,
+		cfg:             cfg,
+		agentFactory:    factory,
+		toolBuilder:     builder,
+		results:         make(map[string]string),
+		rootCtx:         rootCtx,
+		rootCancel:      rootCancel,
 		streamTextBuf:   make(map[string]*strings.Builder),
 		streamRsnBuf:    make(map[string]*strings.Builder),
 		streamBatchDone: make(chan struct{}),
 	}
+	if sessionID != "" {
+		mgr.sessionID.Store(sessionID)
+	}
+	return mgr
 }
-
 func (m *Manager) SetUsageHandler(fn func(provider.TokenUsage)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -235,25 +264,17 @@ func (m *Manager) CreateTeam(name, leaderID string) TeamSnapshot {
 	m.mu.Unlock()
 
 	// P0: own the directory from birth. P2: persist the manifest so the
-	// team is restorable. Failures degrade to in-memory-only (WARN).
-	if err := m.stampOwnerLease(id); err != nil {
-		debug.Log("swarm", "owner lease stamp for %s failed: %v (team runs in-memory only)", id, err)
+	// #5860: no session confirmed yet (fresh session before its first
+	// message) = teams cannot be created. Loud, not silent.
+	if m.SessionNamespace() == "" {
+		panic("swarm: team_create before the session was confirmed")
 	}
-	// #5858 defense in depth: the manifest must never be written with an
-	// empty ownership stamp. Re-mint if every earlier binding path failed.
-	m.mu.Lock()
-	if m.ownerSessionID == "" {
-		m.ownerSessionID = "auto-" + randomHex(8)
-	}
-	stamp := m.ownerSessionID
-	m.mu.Unlock()
 	if err := m.writeManifest(id, &TeamManifest{
-		OwnerSessionID: stamp,
-		TeamID:         id,
-		Name:           name,
-		LeaderID:       leaderID,
-		CreatedAt:      team.CreatedAt,
-		Teammates:      []ManifestTeammate{},
+		TeamID:    id,
+		Name:      name,
+		LeaderID:  leaderID,
+		CreatedAt: team.CreatedAt,
+		Teammates: []ManifestTeammate{},
 	}); err != nil {
 		debug.Log("swarm", "manifest write for %s failed: %v", id, err)
 	}
@@ -1085,4 +1106,49 @@ func (m *Manager) TeammateEventsSince(tmID string, fromIdx int) ([]TeammateEvent
 	}
 	m.mu.Unlock()
 	return nil, 0, false
+}
+
+// randomHex recovered from the deleted owner_lease.go (#5860).
+func randomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%0*x", n*2, time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
+
+// newTeamID recovered from the deleted owner_lease.go (#5860): random
+// team-<6hex>, collision-checked in memory and on disk.
+func (m *Manager) newTeamID() string {
+	for attempt := 0; attempt < 8; attempt++ {
+		id := "team-" + randomHex(3)
+		m.mu.Lock()
+		_, inMem := m.teams[id]
+		m.mu.Unlock()
+		if inMem {
+			continue
+		}
+		if _, err := os.Stat(m.teamDir(id)); err == nil {
+			debug.Log("swarm", "newTeamID: %s collides with an existing directory, retrying", id)
+			continue
+		}
+		return id
+	}
+	return "team-" + randomHex(8)
+}
+
+// validSessionID: timestamps with an optional trailing token (the session
+// store's "<date>-<time>-<hex>" family plus plain run IDs).
+func validSessionID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if c == '-' || c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			continue
+		}
+		return false
+	}
+	return true
 }

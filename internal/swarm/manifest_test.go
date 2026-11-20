@@ -15,7 +15,7 @@ import (
 // P2 pin: manifest round-trip (create -> serialize -> load -> equality).
 func TestManifestRoundTrip(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	m.BoardRoot = root
 	m.SessionRoot = t.TempDir()
 	m.JournalsEnabled = true
@@ -68,7 +68,7 @@ func TestManifestRoundTrip(t *testing.T) {
 // the file is never left corrupt.
 func TestManifestConcurrentWritesSerialized(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	m.BoardRoot = root
 
 	s := m.CreateTeam("concurrent-team", "leader")
@@ -106,7 +106,7 @@ func TestManifestConcurrentWritesSerialized(t *testing.T) {
 // P2 pin: DeleteTeam removes the manifest (and the whole team dir).
 func TestDeleteTeamRemovesManifest(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	m := NewManager(config.SwarmConfig{}, "sess-t", nil, nil, nil)
 	m.BoardRoot = root
 
 	s := m.CreateTeam("doomed", "leader")

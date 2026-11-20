@@ -44,7 +44,7 @@ func (a *earlyCompactRecorder) get() (float64, bool) {
 
 func newEarlyCompactManager(t *testing.T, cfg config.SwarmConfig, rec *earlyCompactRecorder) (*Manager, TeamSnapshot) {
 	t.Helper()
-	m := NewManager(cfg, nil, func(provider.Provider, interface{}, string, int) AgentRunner {
+	m := NewManager(cfg, "sess-t", nil, func(provider.Provider, interface{}, string, int) AgentRunner {
 		return rec
 	}, nil)
 	m.BoardRoot = t.TempDir()
@@ -175,16 +175,18 @@ func newDoneMailTeam(t *testing.T, pollInterval time.Duration, worker *scriptedA
 		InboxSize:           16,
 		TeammateTimeout:     30 * time.Second,
 		PollInterval:        pollInterval,
-	}, nil, func(provider.Provider, interface{}, string, int) AgentRunner {
-		mu.Lock()
-		defer mu.Unlock()
-		if !leaderSpawned {
-			leaderSpawned = true
-			return leaderAgent
-		}
-		return worker
-	}, nil)
+	},
+		"sess-t", nil, func(provider.Provider, interface{}, string, int) AgentRunner {
+			mu.Lock()
+			defer mu.Unlock()
+			if !leaderSpawned {
+				leaderSpawned = true
+				return leaderAgent
+			}
+			return worker
+		}, nil)
 	m.BoardRoot = t.TempDir()
+	m.SessionRoot = t.TempDir() // journal store isolation (#5860 tests)
 	teamSnap := m.CreateTeam("done-team", "leader-1")
 
 	leadSnap, err := m.SpawnTeammate(teamSnap.ID, "leader", "white", nil)
@@ -360,12 +362,13 @@ func TestLastActiveAtAdvancesAfterTaskExecution(t *testing.T) {
 		InboxSize:           16,
 		TeammateTimeout:     30 * time.Second,
 		PollInterval:        5 * time.Second,
-	}, nil, func(provider.Provider, interface{}, string, int) AgentRunner {
-		mu.Lock()
-		defer mu.Unlock()
-		workerSpawned = true
-		return worker
-	}, nil)
+	},
+		"sess-t", nil, func(provider.Provider, interface{}, string, int) AgentRunner {
+			mu.Lock()
+			defer mu.Unlock()
+			workerSpawned = true
+			return worker
+		}, nil)
 	m.BoardRoot = t.TempDir()
 	defer m.Shutdown()
 	_ = workerSpawned

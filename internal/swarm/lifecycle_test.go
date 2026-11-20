@@ -15,7 +15,7 @@ func TestNotifyIdleRunnersDoesNotPanic(t *testing.T) {
 		InboxSize:           16,
 		TeammateTimeout:     5 * time.Second,
 	}
-	m := NewManager(cfg, nil,
+	m := NewManager(cfg, "sess-t", nil,
 		func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
 			return &mockAgentRunner{
 				runStreamFn: func(ctx context.Context, _ string, _ func(provider.StreamEvent)) error {
@@ -45,7 +45,7 @@ func TestBroadcastToTeamDropsOnFullInbox(t *testing.T) {
 		InboxSize:           2,
 		TeammateTimeout:     5 * time.Second,
 	}
-	m := NewManager(cfg, nil,
+	m := NewManager(cfg, "sess-t", nil,
 		func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
 			return &mockAgentRunner{
 
