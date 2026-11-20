@@ -225,7 +225,7 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			result = cmdCached
 		} else {
 			execStart := time.Now()
-			result = a.executeToolWithPermission(ctx, tc)
+			result = a.executeToolWithPermissionGate(ctx, tc, onEvent)
 			if isWaitClassTool(tc.Name) {
 				runStats.addWaitTime(time.Since(execStart))
 			}

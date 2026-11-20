@@ -321,11 +321,17 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	}
 
 	if m.pendingApproval != nil {
+		// #5843: the approval wait must keep the input drain open. Letter
+		// shortcuts (y/n/a/j/k) act on the approval only while the composer
+		// is empty; once the user starts typing they become ordinary input,
+		// and any other key falls through to the composer so text can be
+		// queued on the interrupt channel while the gate is open.
+		composerBusy := strings.TrimSpace(m.input.Value()) != ""
 		switch msg.String() {
-		case "up", "k":
+		case "up":
 			m.approvalCursor = (m.approvalCursor - 1 + len(m.approvalOptions)) % len(m.approvalOptions)
 			return m, nil
-		case "down", "j":
+		case "down":
 			m.approvalCursor = (m.approvalCursor + 1) % len(m.approvalOptions)
 			return m, nil
 		case "tab":
@@ -334,22 +340,52 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		case "shift+tab":
 			m.approvalCursor = (m.approvalCursor - 1 + len(m.approvalOptions)) % len(m.approvalOptions)
 			return m, nil
-		case "enter", "right":
+		case "k":
+			if !composerBusy {
+				m.approvalCursor = (m.approvalCursor - 1 + len(m.approvalOptions)) % len(m.approvalOptions)
+				return m, nil
+			}
+		case "j":
+			if !composerBusy {
+				m.approvalCursor = (m.approvalCursor + 1) % len(m.approvalOptions)
+				return m, nil
+			}
+		case "enter":
+			if composerBusy {
+				m.queueApprovalGateSubmission()
+				return m, nil
+			}
 			opt := m.approvalOptions[m.approvalCursor]
 			if opt.shortcut == "a" {
 				return m, m.handleApprovalAllowAlways()
 			}
 			return m, m.handleApproval(opt.decision)
+		case "right":
+			if !composerBusy {
+				opt := m.approvalOptions[m.approvalCursor]
+				if opt.shortcut == "a" {
+					return m, m.handleApprovalAllowAlways()
+				}
+				return m, m.handleApproval(opt.decision)
+			}
 		case "y", "Y":
-			return m, m.handleApproval(permission.Allow)
+			if !composerBusy {
+				return m, m.handleApproval(permission.Allow)
+			}
 		case "n", "N":
-			return m, m.handleApproval(permission.Deny)
+			if !composerBusy {
+				return m, m.handleApproval(permission.Deny)
+			}
 		case "a", "A":
-			return m, m.handleApprovalAllowAlways()
+			if !composerBusy {
+				return m, m.handleApprovalAllowAlways()
+			}
 		case "esc", "ctrl+c":
 			return m, m.handleApproval(permission.Deny)
 		}
-		return m, nil
+		// Everything else (typing and editor keys) falls through to the
+		// composer: user input keeps somewhere to go during the approval
+		// wait (#5843).
 	}
 
 	if m.pendingDiffConfirm != nil {
@@ -672,6 +708,22 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	}
 	return m, combineCmds(spinnerCmd, cmd)
 
+}
+
+// queueApprovalGateSubmission moves the composer text onto the pending
+// submission queue (the interrupt channel) while an approval gate is open,
+// so user input stays deliverable during the approval wait (#5843). The
+// approval itself remains pending: empty-composer enter or the y/n/a
+// shortcuts still answer it.
+func (m *Model) queueApprovalGateSubmission() {
+	text := strings.TrimSpace(m.input.Value())
+	if text == "" {
+		return
+	}
+	m.input.Reset()
+	m.history = append(m.history, text)
+	m.historyIdx = len(m.history)
+	m.queuePendingSubmission(text)
 }
 
 func deleteFromCursorToEnd(ta *textarea.Model) {

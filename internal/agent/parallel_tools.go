@@ -210,6 +210,18 @@ func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.To
 				if a.approvalMemory != nil {
 					a.approvalMemory.RecordApproval(tc.Name, tc.Arguments)
 				}
+				// #5843: mirror the approval-boundary checkpoint for the
+				// parallel pre-executed path - a retraction queued while the
+				// gate was open drops the speculative result instead of
+				// handing it to the model.
+				if injected, kind := a.injectPendingInterruptions(0); injected && kind == InterruptionRetractStop {
+					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "user retracted the task while the approval gate was open (parallel)", 0, "")
+					debug.Log("approval-gate", "retraction arrived during approval gate for %s (parallel): dropping pre-executed result", tc.Name)
+					return tool.Result{
+						Content: fmt.Sprintf("Execution of %q was cancelled: the user retracted the task while the approval request was pending. The result was discarded.", tc.Name),
+						IsError: true,
+					}
+				}
 			} else {
 				return tool.Result{
 					Content: fmt.Sprintf("Permission denied for tool %q. No approval handler available (running in non-interactive mode).", tc.Name),
