@@ -17,6 +17,11 @@ manifest):
 - **Legacy teams** created before session binding (no `ownerSessionID`) are
   visible to every session; an explicit `team_restore` adopts them and
   stamps the adopting session.
+- **Stranded teams** whose owning session's instance is provably dead
+  (dead PID on the same host, or heartbeat long expired on a foreign
+  host) are adoptable the same way: an explicit `team_restore` rebinds
+  ownership to the restoring session (#5847 option B). A LIVE owner's
+  foreign team stays refused.
 
 ## What persists
 
