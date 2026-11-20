@@ -3,6 +3,7 @@ package swarm
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // #5837: teams belong to their creating SESSION. Cross-session isolation:
@@ -22,6 +23,15 @@ func TestSessionOwnershipIsolation(t *testing.T) {
 		t.Fatalf("spawn: %v", err)
 	}
 
+	// A REAL live foreign owner runs under a DIFFERENT PID (same-process
+	// managers share the test PID, which the self-PID short-circuit in
+	// alive() deliberately treats as inheritable - the exec-restart case).
+	// Stamp PID 1 (init, always alive) with a fresh heartbeat.
+	live := ownerLease{BootID: "live-foreign-boot", PID: 1, Hostname: mine.hostname, Heartbeat: time.Now()}
+	if err := writeOwnerLeaseFile(mine.ownerLeasePath(s.ID), &live); err != nil {
+		t.Fatalf("write live lease: %v", err)
+	}
+
 	// Foreign session: restore must refuse with the session-isolation error.
 	if _, err := other.RestoreTeam(s.ID); err == nil || !strings.Contains(err.Error(), "another session") {
 		t.Fatalf("foreign restore should refuse with session error, got: %v", err)
@@ -36,6 +46,13 @@ func TestSessionOwnershipIsolation(t *testing.T) {
 	// Owning session resuming (a NEW manager bound to the same session ID,
 	// i.e. the post-restart process): restore succeeds and the manifest
 	// carries the session.
+	// Before the own-session resume, the live foreign process exits too
+	// (the real restart): stamp the dead-lease shape it leaves behind.
+	dead := ownerLease{BootID: "live-foreign-boot", PID: 4194304, Hostname: mine.hostname, Heartbeat: time.Now().Add(-4 * ownerLeaseTTL)}
+	if err := writeOwnerLeaseFile(mine.ownerLeasePath(s.ID), &dead); err != nil {
+		t.Fatalf("write dead lease: %v", err)
+	}
+
 	mine2 := newLeaseTestManager(t, root)
 	mine2.SetOwnerSession("sess-A")
 	if _, err := mine2.RestoreTeam(s.ID); err != nil {

@@ -31,10 +31,23 @@ func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
 	// #5837: session-scoped ownership gates the restore itself - a team
 	// owned by a different session is never loadable from here; a legacy
 	// (unclaimed) team is adopted at explicit-restore time.
+	// #5847 (option B, autopilot ruling): a foreign session's team whose
+	// owner lease is PROVABLY dead (same-host dead PID, or heartbeat long
+	// expired on a foreign host) is adoptable via this explicit restore -
+	// otherwise a crashed instance's teams are stranded forever (the
+	// user's "dead instance lease blocks restore" symptom). A LIVE owner's
+	// foreign team stays refused.
 	if m.sessionOwnershipFor(mf) == ownershipForeign {
-		return TeamSnapshot{}, fmt.Errorf("team %q belongs to another session; it is not visible or loadable from this session", teamID)
+		switch v := m.checkOwnerLease(teamID); v {
+		case leaseDead, leaseLegacy:
+			debug.Log("swarm", "restore of %s: owner session gone (lease %s); adopting the stranded team into this session", teamID, v)
+			m.forceAdoptOwnerSession(teamID)
+		default:
+			return TeamSnapshot{}, fmt.Errorf("team %q belongs to another session; it is not visible or loadable from this session", teamID)
+		}
+	} else {
+		m.stampOwnerSessionOnAdopt(teamID)
 	}
-	m.stampOwnerSessionOnAdopt(teamID)
 
 	switch v := m.checkOwnerLease(teamID); v {
 	case leaseAliveForeign:
