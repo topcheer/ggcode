@@ -732,6 +732,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	// surface is session-filtered from the first visible turn. The initial
 	// pre-agent prompt stays unfiltered only until that first rebuild.
 	swarm.SetProcessOwnerSession(ag.SessionID())
+	swarm.SetProcessWorkspace(ag.WorkingDir())
 
 	// Memory v2: resident memory curator. It watches memory save/delete
 	// events and runs a debounced headless curation pass (tag, merge,
@@ -1541,6 +1542,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		debug.Log("swarm", "auto-restored session team %s (%s): %d member(s)", snap.ID, snap.Name, len(snap.Teammates))
 	}
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
+	// #5851-followup: workspace-scoped team store. New teams persist under
+	// <workspace>/.ggcode/swarm/teams (per-workspace semantics; the global
+	// ~/.ggcode/swarm/teams stays as a legacy pool for explicit adoption).
+	if wd := ag.WorkingDir(); wd != "" {
+		swarmMgr.BoardRoot = filepath.Join(wd, ".ggcode")
+	}
 	// #5657-followup item 7: backfill the team view source for the plan
 	// face closure (declared before the introspector is wired).
 	teamRef = swarmMgr
