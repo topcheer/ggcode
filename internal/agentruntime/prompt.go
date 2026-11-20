@@ -12,6 +12,7 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -165,6 +166,10 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		prompt += "\n\n" + namedAgentInfo
 	}
 
+	if teamsHint := buildPersistentTeamsHint(); teamsHint != "" {
+		prompt += "\n\n" + teamsHint
+	}
+
 	// #5446 prompt-budget ledger: per-stage char sizes (~4 chars/token) so
 	// slimming work cuts where the bytes actually are.
 	debug.Log("prompt-budget", "total=%d (~%dtok) base=%d skills=%d remote=%d sharedws=%d automem=%d namedagents=%d snapshot{%s}",
@@ -190,6 +195,26 @@ func buildNamedAgentHint(workingDir string) string {
 			modelInfo = fmt.Sprintf(" (model: %s)", tmpl.Model)
 		}
 		sb.WriteString(fmt.Sprintf("- **%s**: %s%s\n", tmpl.Name, tmpl.Description, modelInfo))
+	}
+	return sb.String()
+}
+
+// buildPersistentTeamsHint surfaces on-disk persistent swarm teams into the
+// system prompt so a fresh (or restarted) instance knows they exist BEFORE
+// the user mentions them - the "user mentions it, agent pulls it up" loop
+// (#5829 follow-up; previously the teams were invisible until one already
+// knew the tool name).
+func buildPersistentTeamsHint() string {
+	teams := swarm.SummarizePersistedTeams()
+	if len(teams) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("## Persistent Teams\n")
+	sb.WriteString("The following persistent teams exist on disk (cross-restart; member journals intact). ")
+	sb.WriteString("When the user mentions, asks about, or asks to resume/resume one of these teams, call `team_restore` with its name to bring it back, then `teammate_list` / `swarm_task_list` to resume managing it.\n\n")
+	for _, t := range teams {
+		sb.WriteString(fmt.Sprintf("- **%s** (%s): %d member(s), last active %s\n", t.Name, t.TeamID, t.Members, t.LastActive.Format("2006-01-02 15:04")))
 	}
 	return sb.String()
 }

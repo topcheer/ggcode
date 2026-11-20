@@ -205,6 +205,17 @@ func (l *ownerLease) alive(hostname string) bool {
 	}
 	// Same-host PID probe is authoritative while it succeeds.
 	if l.Hostname == hostname && l.PID > 0 {
+		// Self-PID short-circuit (exec-restart self-deadlock): the restart
+		// tool replaces the binary via exec, which PRESERVES the PID while
+		// the new image's Manager mints a fresh bootID. The on-disk lease
+		// then carries our own PID with a foreign bootID, and the probe
+		// below finds "a live process" — us — forever refusing restore.
+		// A lease whose PID is the caller's own PID can only be our own
+		// exec predecessor (or a coincidental PID reuse after this lease's
+		// TTL already expired elsewhere); either way it is inheritable.
+		if l.PID == os.Getpid() {
+			return false
+		}
 		if pidAlive(l.PID) {
 			return true
 		}
