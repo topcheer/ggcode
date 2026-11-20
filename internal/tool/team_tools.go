@@ -343,6 +343,13 @@ func (t TeammateResultsTool) Execute(_ context.Context, input json.RawMessage) (
 	}
 
 	if args.TeammateID != "" {
+		// #dup-report fix: prefer the per-task archived result (what THIS
+		// task actually produced) over the teammate's session-level last
+		// output, which any later unrelated work overwrites. Fall back to
+		// the legacy session result when no board archive exists.
+		if taskID, taskResult, ok := t.Manager.GetTeammateTaskResult(args.TeamID, args.TeammateID); ok {
+			return Result{Content: fmt.Sprintf("Result from %s (task %s, archived):\n%s\n", args.TeammateID, taskID, taskResult)}, nil
+		}
 		result, ok := t.Manager.GetTeammateResult(args.TeamID, args.TeammateID)
 		if !ok {
 			return Result{Content: fmt.Sprintf("No result available for teammate %s.\n", args.TeammateID)}, nil

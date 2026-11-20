@@ -879,6 +879,33 @@ func (m *Manager) GetTeamResults(teamID string) map[string]string {
 	return out
 }
 
+// GetTeammateTaskResult returns the archived result of tmID's most
+// recently completed board task (persistTaskResult stores it in the
+// task Metadata). Callers should prefer this over the session-level
+// LastResult: a teammate that finished further work after the task you
+// are asking about would otherwise return that newer (unrelated)
+// output - the misattribution behind duplicate-looking reports.
+func (m *Manager) GetTeammateTaskResult(teamID, tmID string) (taskID, result string, ok bool) {
+	m.mu.Lock()
+	team, exists := m.teams[teamID]
+	m.mu.Unlock()
+	if !exists || team.Tasks == nil {
+		return "", "", false
+	}
+	var bestAt time.Time
+	for _, tk := range team.Tasks.List() {
+		if tk.Owner != tmID || tk.Status != task.StatusCompleted {
+			continue
+		}
+		r := strings.TrimSpace(tk.Metadata[resultMetaKey])
+		if r == "" || !tk.UpdatedAt.After(bestAt) {
+			continue
+		}
+		bestAt, taskID, result, ok = tk.UpdatedAt, tk.ID, r, true
+	}
+	return taskID, result, ok
+}
+
 func (m *Manager) teammateGoverned(tmID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
