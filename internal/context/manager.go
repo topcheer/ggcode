@@ -617,6 +617,7 @@ func (m *Manager) UpdateFirstSystemMessage(msg provider.Message) {
 			}
 			oldTokens := m.countTokens(existing)
 			newTokens := m.countTokens(msg)
+			recordPrefixDrift("rewrite", existing, msg, oldTokens, newTokens, m.version, m.nonTailMutSeq)
 			m.messages[i] = msg
 			m.tokens += newTokens - oldTokens
 			m.version++
@@ -626,6 +627,7 @@ func (m *Manager) UpdateFirstSystemMessage(msg provider.Message) {
 		}
 	}
 	newTokens := m.countTokens(msg)
+	recordPrefixDrift("insert", provider.Message{}, msg, 0, newTokens, m.version, m.nonTailMutSeq)
 	m.messages = append([]provider.Message{msg}, m.messages...)
 	m.version++
 	m.nonTailMutSeq++
