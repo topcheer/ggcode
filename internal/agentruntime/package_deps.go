@@ -30,7 +30,7 @@ func buildPackageDepsSection(root string) string {
 	}
 
 	deadline := time.Now().Add(depGraphTimeBudget)
-	pkgDirs := collectGoPackageDirs(root, deadline)
+	pkgDirs, _ := collectGoPackageDirs(root, deadline)
 	if len(pkgDirs) == 0 {
 		return ""
 	}

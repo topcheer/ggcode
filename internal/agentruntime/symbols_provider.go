@@ -68,7 +68,8 @@ func (w workspaceSymbols) Symbols(lang, query string, limit int) ([]tool.Package
 	}
 
 	if lang == "" || lang == "go" {
-		addLang("go", collectGoPackageDirs(w.root, deadline), extractPackageSymbols)
+		goDirs, _ := collectGoPackageDirs(w.root, deadline)
+		addLang("go", goDirs, extractPackageSymbols)
 	}
 	if lang == "" || lang == "ts" {
 		if hasTSSource(w.root) {
