@@ -153,6 +153,15 @@ func NewGeminiProviderWithBaseURL(apiKey string, model string, maxTokens int, ba
 			Transport: transport,
 		},
 	}
+	// Pin the API version explicitly: the SDK default flipped from "v1beta"
+	// to "v1" in genai v1.78.0, which silently changes request paths
+	// (/v1beta/models/... -> /v1/models/...) for self-hosted gateways that
+	// only implement the v1beta surface. Depending on the implicit default
+	// made TestNewProvider_PassesGeminiBaseURL red on the first CI run
+	// against v1.79.x (the "linux-only" failure was really a
+	// v1.79-only failure - CI was the only environment that actually
+	// resolved the new version).
+	clientConfig.HTTPOptions.APIVersion = "v1beta"
 	if trimmed := strings.TrimSpace(baseURL); trimmed != "" {
 		clientConfig.HTTPOptions.BaseURL = trimmed
 	}
