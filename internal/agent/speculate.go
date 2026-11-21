@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -400,6 +401,10 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 	if len(predictions) == 0 {
 		return
 	}
+	// Ring-noise control (#5883-family diagnosis aid): the old per-tool
+	// "no arg prediction for X, skipping" fired ~5 lines per iteration and
+	// crowded the 2000-entry debug ring. Aggregate instead.
+	var noPrediction []string
 
 	for _, predicted := range predictions {
 
@@ -411,7 +416,7 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 		predArgs := predictArgs(predicted, lastTool, lastArgs)
 		if predArgs == nil {
 			s.releaseSpecSlot()
-			debug.Log("speculate", "no arg prediction for %s after %s, skipping", predicted, lastTool)
+			noPrediction = append(noPrediction, predicted)
 			continue
 		}
 
@@ -462,6 +467,10 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 			s.mu.Unlock()
 			debug.Log("speculate", "speculatively executed %s in %v (cached for future use)", toolName, dur)
 		}(predicted, predArgs)
+	}
+	if len(noPrediction) > 0 {
+		debug.Log("speculate", "no arg prediction for %d/%d predicted tools after %s: %s",
+			len(noPrediction), len(predictions), lastTool, strings.Join(noPrediction, ", "))
 	}
 }
 

@@ -63,6 +63,14 @@ func (m Model) handleUsageSidebarRefreshMsg() (Model, tea.Cmd) {
 			return usageSidebarRefreshMsg{}
 		})
 	}
+	// Ring-noise control: stacked refresh ticks used to fire the probe (and
+	// its log line) several times within the same second while a probe was
+	// already in flight. Skip instead — the next tick re-checks anyway.
+	if m.usageSidebarStatus == "probing..." {
+		return m, tea.Tick(usageSidebarRefreshInterval, func(time.Time) tea.Msg {
+			return usageSidebarRefreshMsg{}
+		})
+	}
 	m.usageSidebarStatus = "probing..."
 	debug.Log("usage", "auto-probe firing for active endpoint")
 	return m, m.fetchAllUsageCmd()
