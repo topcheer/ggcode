@@ -180,8 +180,10 @@ func collectGoPackageDirs(root string, deadline time.Time) ([]string, bool) {
 	var dirs []string
 	truncatedHit := false
 
-	if dirHasGoFiles(root) {
+	if has, ok := dirHasGoFiles(root); has {
 		dirs = append(dirs, root)
+	} else if !ok {
+		truncatedHit = true
 	}
 
 	level1, err := os.ReadDir(root)
@@ -206,8 +208,11 @@ func collectGoPackageDirs(root string, deadline time.Time) ([]string, bool) {
 		}
 
 		dir1 := filepath.Join(root, e1.Name())
-		if dirHasGoFiles(dir1) {
+		if has, ok := dirHasGoFiles(dir1); has {
 			dirs = append(dirs, dir1)
+		} else if !ok {
+			// #5892 round-10: same fourth-entrance seal at level 1.
+			truncatedHit = true
 		}
 
 		level2, err := os.ReadDir(dir1)
@@ -229,8 +234,11 @@ func collectGoPackageDirs(root string, deadline time.Time) ([]string, bool) {
 				continue
 			}
 			dir2 := filepath.Join(dir1, e2.Name())
-			if dirHasGoFiles(dir2) {
+			if has, ok := dirHasGoFiles(dir2); has {
 				dirs = append(dirs, dir2)
+			} else if !ok {
+				// #5892 round-10: same fourth-entrance seal at level 2.
+				truncatedHit = true
 			}
 		}
 	}
@@ -238,10 +246,13 @@ func collectGoPackageDirs(root string, deadline time.Time) ([]string, bool) {
 	return dirs, truncatedHit
 }
 
-func dirHasGoFiles(dir string) bool {
+func dirHasGoFiles(dir string) (has, ok bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false
+		// #5892 round-10: indistinguishable from "no .go files" was the
+		// fourth silent-drop entrance - a transient i/o failure here
+		// dropped the whole directory with no truncation signal.
+		return false, false
 	}
 	for _, e := range entries {
 		name := e.Name()
@@ -249,10 +260,10 @@ func dirHasGoFiles(dir string) bool {
 			continue
 		}
 		if strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return false, true
 }
 
 func extractPackageSymbols(dir string) ([]string, int, bool) {

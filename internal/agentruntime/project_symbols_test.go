@@ -225,15 +225,15 @@ func TestHasGoSource(t *testing.T) {
 
 func TestDirHasGoFiles(t *testing.T) {
 	dir := t.TempDir()
-	if dirHasGoFiles(dir) {
+	if has, _ := dirHasGoFiles(dir); has {
 		t.Error("expected false for empty dir")
 	}
 	mustWrite(t, dir+"/"+"test_only_test.go", "package x\n")
-	if dirHasGoFiles(dir) {
+	if has, _ := dirHasGoFiles(dir); has {
 		t.Error("expected false for dir with only test files")
 	}
 	mustWrite(t, dir+"/"+"real.go", "package x\n")
-	if !dirHasGoFiles(dir) {
+	if has, _ := dirHasGoFiles(dir); !has {
 		t.Error("expected true for dir with .go file")
 	}
 }
