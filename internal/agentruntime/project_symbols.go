@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -44,9 +45,11 @@ func buildGoPackageSymbolsSection(root string) string {
 	}
 
 	var summaries []pkgSummary
+	truncated := false
 	for _, dir := range pkgDirs {
 		if time.Now().After(deadline) {
 			// Ring-noise control: budget-hit fired on every periodic refresh; dropped.
+			truncated = true
 			_ = summaries
 			break
 		}
@@ -76,6 +79,19 @@ func buildGoPackageSymbolsSection(root string) string {
 		return ""
 	}
 
+	if truncated {
+		// #5892 round-2: a budget-truncated scan yields load-dependent
+		// partial counts; emitting it made the head's symbols segment
+		// flip between 2244/2287 symbols with machine load, rewriting the
+		// whole cached prefix for no real change. Fall back to the last
+		// COMPLETE scan (stale but stable); only complete scans update it.
+		if cached := lastCompleteGoSymbolsSection(root); cached != "" {
+			return cached
+		}
+		// No prior complete scan: emitting a truncated snapshot once is
+		// still better than nothing; the next complete scan replaces it.
+	}
+
 	sort.Slice(summaries, func(i, j int) bool {
 		return summaries[i].relPath < summaries[j].relPath
 	})
@@ -101,7 +117,30 @@ func buildGoPackageSymbolsSection(root string) string {
 	}
 	sb.WriteString("\nQuery the `symbols` tool (matches package paths and symbol names) for a package's exports; use lsp_workspace_symbols/lsp_definition for positions.\n")
 
-	return strings.TrimRight(sb.String(), "\n")
+	text := strings.TrimRight(sb.String(), "\n")
+	if !truncated {
+		storeCompleteGoSymbolsSection(root, text)
+	}
+	return text
+}
+
+// lastCompleteGoSymbolsSection caches the most recent complete (non-
+// truncated) symbols section per workspace root.
+var completeGoSymbolsCache = struct {
+	mu     sync.Mutex
+	byRoot map[string]string
+}{byRoot: map[string]string{}}
+
+func lastCompleteGoSymbolsSection(root string) string {
+	completeGoSymbolsCache.mu.Lock()
+	defer completeGoSymbolsCache.mu.Unlock()
+	return completeGoSymbolsCache.byRoot[root]
+}
+
+func storeCompleteGoSymbolsSection(root, text string) {
+	completeGoSymbolsCache.mu.Lock()
+	defer completeGoSymbolsCache.mu.Unlock()
+	completeGoSymbolsCache.byRoot[root] = text
 }
 
 func hasGoSource(root string) bool {

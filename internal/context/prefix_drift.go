@@ -210,9 +210,19 @@ func openPrefixDriftFileLocked(dir string) error {
 		}
 	}
 	for i := 0; i+prefixDriftKeepFiles <= len(names); i++ {
-		_ = os.Remove(filepath.Join(dir, names[i]))
+		victim := filepath.Join(dir, names[i])
+		if victim == prefixDriftPath {
+			// #5893 audit finding: never remove the file this process still
+			// holds open - cross-process rotation used to unlink live sinks
+			// (data silently lost to a dangling fd).
+			continue
+		}
+		_ = os.Remove(victim)
 	}
-	path := filepath.Join(dir, fmt.Sprintf("drift-%d-%d.jsonl", os.Getpid(), time.Now().Unix()))
+	// Timestamp-major naming (drift-<unixts>-<pid>) so lexicographic order
+	// approximates age order across processes; the pid-major form used to
+	// let a long-lived low-pid process's active file sort "oldest".
+	path := filepath.Join(dir, fmt.Sprintf("drift-%d-%d.jsonl", time.Now().Unix(), os.Getpid()))
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
