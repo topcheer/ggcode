@@ -449,6 +449,7 @@ type Agent struct {
 	keyedInstrAudit          []KeyedInstructionAuditLine
 	baseSystemPrompt         string
 	lastInjectedSystemPrompt string
+	stableSystemSections     []string
 	harnessFPLast            string
 	temporalAnchor           time.Time
 	onVerifyProgress         func(text string)
@@ -512,6 +513,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		contextManager:         ctxpkg.NewManager(initialContextWindow(p)),
 		projectMemory:          make(map[string]struct{}),
 		baseSystemPrompt:       systemPrompt,
+		stableSystemSections:   []string{},
 		shutdownCtx:            ctx,
 		shutdownCancel:         cancel,
 		overseer:               newOverseerState(),
@@ -912,6 +914,23 @@ func (a *Agent) SetContextManager(cm ctxpkg.ContextManager) {
 
 func (a *Agent) AddMessage(msg provider.Message) {
 	a.contextManager.Add(msg)
+}
+
+// AppendStableSystemSection adds text to the stable system head. #5892
+// round-2: project-memory hints used to be AddMessage'd as system-role
+// messages - on an empty message list that lands at the head position as
+// a BARE system message, which the first canonical assembly then rewrote
+// (one full prefix invalidation per agent lifetime, main agent and every
+// sub-agent/teammate alike). Routing stable content through the assembly
+// path keeps a single head writer.
+func (a *Agent) AppendStableSystemSection(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	a.mu.Lock()
+	a.stableSystemSections = append(a.stableSystemSections, text)
+	a.lastInjectedSystemPrompt = ""
+	a.mu.Unlock()
 }
 
 func (a *Agent) ReconcileToolCalls() bool {

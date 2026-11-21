@@ -5,7 +5,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/memory"
-	"github.com/topcheer/ggcode/internal/provider"
 )
 
 func ApplyProjectMemoryToAgent(agentInst *agent.Agent, workingDir string) ([]string, error) {
@@ -20,10 +19,10 @@ func ApplyProjectMemoryToAgent(agentInst *agent.Agent, workingDir string) ([]str
 
 	hint := memory.BuildProjectMemoryHint(files, workingDir)
 	if hint != "" {
-		agentInst.AddMessage(provider.Message{
-			Role:    "system",
-			Content: []provider.ContentBlock{{Type: "text", Text: hint}},
-		})
+		// #5892 round-2: stable content rides the assembled head; a bare
+		// system-role AddMessage lands at the head position on an empty
+		// message list and forces a full-rewrite on first assembly.
+		agentInst.AppendStableSystemSection(hint)
 	}
 	return files, nil
 }

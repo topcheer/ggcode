@@ -29,9 +29,13 @@ func (a *Agent) maybeInjectStableSystemHead() {
 
 	a.mu.Lock()
 	base := a.baseSystemPrompt
+	stableSections := append([]string(nil), a.stableSystemSections...)
 	a.mu.Unlock()
 
 	var headParts []string
+	for _, s := range stableSections {
+		headParts = append(headParts, s)
+	}
 
 	if a.currentMode().IsCruiseMode() {
 		if goal := a.getAutopilotGoal(); goal != "" {
