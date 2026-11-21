@@ -17,7 +17,8 @@ type ConfigPolicy struct {
 	rules           map[string]Decision
 	sandbox         *PathSandbox
 	readOnlySandbox *PathSandbox
-	detector        *DangerousDetector
+	detector        *DangerousDetector // fleet compiled lazily on first dangerous check (#5876)
+	detectorOnce    sync.Once
 	mode            PermissionMode
 	cmdRules        *CommandRuleSet
 	networkDetector bool
@@ -40,11 +41,18 @@ func NewConfigPolicyWithModeAndReadOnlyDirs(rules map[string]Decision, allowedDi
 		rules:           rules,
 		sandbox:         NewPathSandbox(allowedDirs),
 		readOnlySandbox: newOptionalPathSandbox(readOnlyDirs),
-		detector:        NewDangerousDetector(),
 		mode:            mode,
 		cmdRules:        NewCommandRuleSet(),
 		networkDetector: true,
 	}
+}
+
+// dangerousDetector compiles the dangerous-command fleet on first use instead
+// of at policy construction (#5876 phase-1): ConfigPolicy is built at session
+// start in every mode, but many sessions never hit a dangerous check.
+func (p *ConfigPolicy) dangerousDetector() *DangerousDetector {
+	p.detectorOnce.Do(func() { p.detector = NewDangerousDetector() })
+	return p.detector
 }
 
 func (p *ConfigPolicy) SetCommandRuleSet(rs *CommandRuleSet) {
@@ -140,7 +148,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		if isCommandTool(toolName) {
 
 			for _, cmd := range extractCommandsForTool(toolName, input) {
-				if p.detector.IsExtremelyDangerous(cmd) {
+				if p.dangerousDetector().IsExtremelyDangerous(cmd) {
 					return Ask, nil
 				}
 
@@ -193,7 +201,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 		if isCommandTool(toolName) {
 			for _, cmd := range extractCommandsForTool(toolName, input) {
-				if p.detector.IsExtremelyDangerous(cmd) {
+				if p.dangerousDetector().IsExtremelyDangerous(cmd) {
 					return Ask, nil
 				}
 				if p.networkDetector && IsNetworkExfiltrate(cmd) {
@@ -218,7 +226,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		if isCommandTool(toolName) {
 
 			for _, cmd := range extractCommandsForTool(toolName, input) {
-				if p.detector.IsExtremelyDangerous(cmd) {
+				if p.dangerousDetector().IsExtremelyDangerous(cmd) {
 					return Ask, nil
 				}
 
@@ -281,13 +289,13 @@ func imActionIsBenign(input json.RawMessage) bool {
 }
 
 func (p *ConfigPolicy) IsDangerous(command string) bool {
-	return p.detector.IsDangerous(command)
+	return p.dangerousDetector().IsDangerous(command)
 }
 
 func (p *ConfigPolicy) BlocksAutoApprove(toolName string, input json.RawMessage) bool {
 	if isCommandTool(toolName) {
 		for _, cmd := range extractCommandsForTool(toolName, input) {
-			if p.detector.IsDangerous(cmd) || IsNetworkExfiltrate(cmd) {
+			if p.dangerousDetector().IsDangerous(cmd) || IsNetworkExfiltrate(cmd) {
 				return true
 			}
 		}

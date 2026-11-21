@@ -19,6 +19,7 @@ type RuntimeStatusProvider interface {
 	RuntimeMaxTokens() int
 	RuntimeIMAdapters() []RuntimeIMAdapterInfo
 	RuntimeMobile() RuntimeMobileInfo
+	RuntimeEtunnel() RuntimeEtunnelInfo
 }
 
 type RuntimeIMAdapterInfo struct {
@@ -34,6 +35,15 @@ type RuntimeMobileInfo struct {
 	RelayURL    string `json:"relay_url,omitempty"`
 	SessionID   string `json:"session_id,omitempty"`
 	ConnectCode string `json:"connect_code,omitempty"`
+}
+
+// RuntimeEtunnelInfo reports the standalone etunnel share channel
+// (/et on|off|show): the public https URL mapping this session's webui
+// when the tunnel is active. Distinct from the mobile tunnel above.
+type RuntimeEtunnelInfo struct {
+	Active    bool   `json:"active"`
+	URL       string `json:"url,omitempty"`
+	Subdomain string `json:"subdomain,omitempty"`
 }
 
 type RuntimeTool struct {
@@ -123,6 +133,17 @@ func (f runtimeStatusFormatter) String() string {
 		}
 	} else {
 		b = append(b, "  Mobile: not connected\n"...)
+	}
+
+	et := p.RuntimeEtunnel()
+	if et.Active {
+		b = append(b, "  Etunnel: active\n"...)
+		if et.URL != "" {
+			b = append(b, fmt.Sprintf("    URL: %s\n", et.URL)...)
+		}
+		if et.Subdomain != "" {
+			b = append(b, fmt.Sprintf("    Subdomain: %s\n", et.Subdomain)...)
+		}
 	}
 
 	b = append(b, fmt.Sprintf("  Timestamp: %s\n", time.Now().Format(time.RFC3339))...)

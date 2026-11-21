@@ -393,19 +393,19 @@ func TestScanStagedDiffForIssues_SecretNotStarvedByTodos(t *testing.T) {
 }
 
 func TestPythonFileReNoSubstringMatches(t *testing.T) {
-	if pythonFileRe.MatchString("src/mypythonlib.js") {
+	if diffTables().pythonFileRe.MatchString("src/mypythonlib.js") {
 		t.Error("substring 'python' must not match")
 	}
-	if pythonFileRe.MatchString("utils/python_tools.ts") {
+	if diffTables().pythonFileRe.MatchString("utils/python_tools.ts") {
 		t.Error("'python_tools' segment prefix must not match")
 	}
-	if !pythonFileRe.MatchString("app.py") {
+	if !diffTables().pythonFileRe.MatchString("app.py") {
 		t.Error(".py suffix must match")
 	}
-	if !pythonFileRe.MatchString("lib/python/mod.js") {
+	if !diffTables().pythonFileRe.MatchString("lib/python/mod.js") {
 		t.Error("'python' path segment must match")
 	}
-	if !pythonFileRe.MatchString("python/main.py") {
+	if !diffTables().pythonFileRe.MatchString("python/main.py") {
 		t.Error("leading 'python' segment must match")
 	}
 }

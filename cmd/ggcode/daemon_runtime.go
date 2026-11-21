@@ -170,3 +170,10 @@ func (p *daemonRuntimeProvider) RuntimeMobile() tool.RuntimeMobileInfo {
 
 	return tool.RuntimeMobileInfo{}
 }
+
+// RuntimeEtunnel satisfies the extended RuntimeStatusProvider surface.
+// The daemon bridge has no etunnel (/et) surface today; sessions running
+// under the TUI own the TunnelCtl singleton.
+func (p *daemonRuntimeProvider) RuntimeEtunnel() tool.RuntimeEtunnelInfo {
+	return tool.RuntimeEtunnelInfo{}
+}

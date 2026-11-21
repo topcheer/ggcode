@@ -518,6 +518,23 @@ func (p *tuiRuntimeProvider) RuntimeMobile() tool.RuntimeMobileInfo {
 	return info
 }
 
+// RuntimeEtunnel reports the standalone etunnel share channel (/et on):
+// the public https URL mapping this session's webui. The tunnel state
+// lives in the webui TunnelCtl singleton (m.webuiTunnel).
+func (p *tuiRuntimeProvider) RuntimeEtunnel() tool.RuntimeEtunnelInfo {
+	var info tool.RuntimeEtunnelInfo
+	if ctl := p.repl.model.webuiTunnel; ctl != nil {
+		if u := ctl.TunnelURL(); u != "" {
+			info.Active = true
+			info.URL = u
+		}
+	}
+	if p.repl.model.config != nil {
+		info.Subdomain = p.repl.model.config.ETunnel.Subdomain
+	}
+	return info
+}
+
 func (r *REPL) SetIMManager(mgr *im.Manager) {
 	r.imManager = mgr
 	r.model.SetIMManager(mgr)
