@@ -1,6 +1,8 @@
 package agentruntime
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -222,5 +224,31 @@ func TestConfigAccess_SetModelProbeDoesNotBlockGet(t *testing.T) {
 	close(release)
 	if err := <-setDone; err != nil {
 		t.Fatalf("Set(model) failed: %v", err)
+	}
+}
+
+func TestConfigAccess_DeleteEtunnel(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "ggcode.yaml")
+	writeConfig(t, cfgPath, "")
+	if err := os.WriteFile(cfgPath, []byte("language: en\netunnel:\n    subdomain: meidcool\n    token: tok-1\n    plan: free\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	access := newTestAccess(t, cfgPath)
+
+	if err := access.Delete("etunnel"); err != nil {
+		t.Fatalf("Delete(etunnel): %v", err)
+	}
+	// 盘上节应消失（零值 + 全 omitempty）
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("meidcool")) || bytes.Contains(raw, []byte("etunnel:")) {
+		t.Errorf("etunnel node not cleared on disk:\n%s", raw)
+	}
+	// 再删应幂等成功（零值重复清理）
+	if err := access.Delete("etunnel"); err != nil {
+		t.Fatalf("second Delete(etunnel): %v", err)
 	}
 }

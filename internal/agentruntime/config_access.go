@@ -492,8 +492,14 @@ func (a *configAccess) Delete(key string) error {
 			return err
 		}
 		return nil
+	case key == "etunnel":
+		// /et setup|login 持久化的节（subdomain/token/plan/subdomains）。
+		// 清空后 /et on 回退匿名免费隧道；Free 计划名额被旧
+		// subdomain 占用（limit_reached）时这是唯一的工具化清理面。
+		a.cfg.ETunnel = config.ETunnelConfig{}
+		return a.cfg.SaveScoped(a.cfg.GetSaveScope())
 	default:
-		return fmt.Errorf("delete not supported for %q (only mcp_servers.<name> and im.adapters.<name>)", key)
+		return fmt.Errorf("delete not supported for %q (only mcp_servers.<name>, im.adapters.<name> and etunnel)", key)
 	}
 }
 
