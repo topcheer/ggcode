@@ -89,7 +89,7 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 				lastGitPath = normalizeGitDiffPath(m[2])
 			}
 		}
-		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
+		if m := diffTables().diffFileHeader.FindStringSubmatch(line); m != nil {
 
 			if p := diffHeaderPath(m); p != currentFile {
 				flush()
@@ -139,13 +139,13 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 			continue
 		}
 
-		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil &&
+		if m := diffTables().diffOldFileHeader.FindStringSubmatch(line); m != nil &&
 			i+1 < len(lines) && strings.HasPrefix(lines[i+1], "+++ ") {
 			lastOldFile = diffHeaderPath(m)
 			prevWasOldHeader = true
 			continue
 		}
-		if m := diffHunkHeader.FindStringSubmatch(line); m != nil {
+		if m := diffTables().diffHunkHeader.FindStringSubmatch(line); m != nil {
 			fmt.Sscanf(m[1], "%d", &newLineNum)
 			continue
 		}
