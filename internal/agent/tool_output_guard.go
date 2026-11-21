@@ -36,7 +36,8 @@ func guardToolOutput(content string, contextFill float64) string {
 
 func guardToolOutputReport(content string, contextFill float64) (string, guardReport) {
 	if contextFill < contextFillModerate {
-		debug.Log("context-guard", "no-truncation fill=%.2f len=%d", contextFill, len(content))
+		_ = contextFill // Ring-noise control: pass-through fired per tool result; only truncation events log.
+		_ = len(content)
 		return content, guardReport{Truncated: false, Fill: contextFill}
 	}
 

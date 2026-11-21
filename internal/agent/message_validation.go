@@ -94,7 +94,8 @@ func (a *Agent) ensureMessagesSendable(msgs []provider.Message) []provider.Messa
 	flushDeferred()
 
 	if repaired {
-		debug.Log("agent", "ensureMessagesSendable: repaired message list for provider compatibility")
+		// Ring-noise control: fired unconditionally every iteration; the repair
+		// itself is routine provider normalization with no signal.
 	}
 	if strippedImages > 0 {
 		debug.Log("agent", "ensureMessagesSendable: stripped images from %d tool_result blocks (vision not supported)", strippedImages)

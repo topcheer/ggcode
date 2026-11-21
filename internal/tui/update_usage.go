@@ -71,8 +71,7 @@ func (m Model) handleUsageSidebarRefreshMsg() (Model, tea.Cmd) {
 			return usageSidebarRefreshMsg{}
 		})
 	}
-	m.usageSidebarStatus = "probing..."
-	debug.Log("usage", "auto-probe firing for active endpoint")
+	m.usageSidebarStatus = "probing..." // kept: UI state. Ring-noise control: probe outcomes log separately; firing announcement dropped.
 	return m, m.fetchAllUsageCmd()
 }
 

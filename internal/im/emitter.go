@@ -153,7 +153,9 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 
 	switch event.Kind {
 	case OutboundEventText:
-		debug.Log("emitter", "emit im text len=%d", len(event.Text))
+		// Ring-noise control: EmitText above already logs len+caller; this
+		// bare-len line duplicated the same event.
+		_ = len(event.Text)
 	case OutboundEventStatus:
 		debug.Log("emitter", "emit im status=%q", truncateEmitter(event.Status, 80))
 	default:

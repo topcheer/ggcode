@@ -82,14 +82,19 @@ func ringHistoryImpl(n int, categoryFilter string) []RingEntry {
 	if n > avail {
 		n = avail
 	}
-	start := (ringHead - avail + ringCap) % ringCap
+	// Semantics fix: return the MOST RECENT n matching entries (documented
+	// behavior is "recent entries"), not the oldest n. Walk from the newest
+	// backwards, then restore chronological order for display.
 	out := make([]RingEntry, 0, n)
 	for i := 0; i < avail && len(out) < n; i++ {
-		entry := ringBuf[(start+i)%ringCap]
+		entry := ringBuf[(ringHead-1-i+2*ringCap)%ringCap]
 		if categoryFilter != "" && !strings.EqualFold(entry.Category, categoryFilter) {
 			continue
 		}
 		out = append(out, entry)
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
 	}
 	return out
 }
