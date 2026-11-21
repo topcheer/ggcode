@@ -1910,9 +1910,16 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		}
 
 		// #5860: the session-created callback (fires on EVERY SetSession,
-		// including resume) is the single confirmation point.
+		// including resume) is the single confirmation point. #5872: a
+		// DIFFERENT id here is a legitimate session switch (Ctrl+L / /session),
+		// not a programming error - re-bind instead of tripping the
+		// ConfirmSession panic guard.
 		repl.SetSessionCreatedCallback(func(sessionID string) {
-			swarmMgr.ConfirmSession(sessionID)
+			if prev := swarmMgr.SessionNamespace(); prev != "" && prev != sessionID {
+				swarmMgr.RebindSession(sessionID)
+			} else {
+				swarmMgr.ConfirmSession(sessionID)
+			}
 			repl.HandleSessionCreated(sessionID)
 		})
 
