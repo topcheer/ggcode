@@ -1493,10 +1493,12 @@ func (a *Agent) fireSessionStartHooks(sid string, hookCfg hooks.HookConfig, work
 		return fmt.Errorf("session start blocked by hook: %s", ssRes.Output)
 	}
 	if out := strings.TrimSpace(ssRes.Output); out != "" && a.contextManager != nil {
-		a.contextManager.Add(provider.Message{
-			Role:    "system",
-			Content: []provider.ContentBlock{{Type: "text", Text: "[Session start hooks]\n" + out}},
-		})
+		// #5892 round-3: hook output is session-stable content. Adding it as
+		// a system-role message on an empty list landed it at the head
+		// position, and the first canonical assembly then rewrote the whole
+		// prefix (one invalidation per agent lifetime, every sub-agent
+		// included). Ride the assembled head instead.
+		a.AppendStableSystemSection("[Session start hooks]\n" + out)
 		debug.Log("agent", "injected session-start hook output (%d chars)", len(out))
 	}
 	return nil
