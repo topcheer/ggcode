@@ -101,6 +101,14 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			a.fillCancelledToolResults(toolCalls[idx:], &toolResults)
 			return chatTurnFatal, err, msgs
 		}
+		if a.takeMidToolStop() {
+
+			debug.Log("agent", "Iteration %d: mid-tool retraction-stop: aborting remaining %d tool call(s)", iter+1, len(toolCalls)-idx)
+			a.fillCancelledToolResults(toolCalls[idx:], &toolResults)
+			a.flushStagedMidToolInterruptions(iter + 1)
+			a.recordIntervention(iter + 1)
+			return chatTurnFatal, context.Canceled, msgs
+		}
 		// #5635 P2: inflight face - mark this call as the main agent's
 		// current tool while it executes.
 		a.currentTool.begin(tc.Name, string(tc.Arguments))

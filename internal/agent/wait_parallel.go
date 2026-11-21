@@ -63,6 +63,7 @@ func (a *Agent) preExecuteWaitTools(ctx context.Context, toolCalls []provider.To
 				toolID := tc.ID
 				execCtx = context.WithValue(execCtx, tool.ToolProgressKey{}, tool.ToolProgressFunc(
 					func(_, toolName, output string) {
+						a.midToolInterruptCheckpoint(toolName)
 						fn(toolID, toolName, output)
 					},
 				))

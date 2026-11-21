@@ -19,6 +19,12 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 	// #5635 P2: reset the status-face counters so they always describe
 	// the live (or most recently finished) run.
 	a.runtimeStats.beginRun()
+
+	// #5842: let mid-tool interruption checkpoints acknowledge interjections
+	// through this run's stream while a tool is still executing.
+	a.setMidToolStreamEmitter(onEvent)
+	defer a.setMidToolStreamEmitter(nil)
+
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 
 		if st.sessionBudgetStop {
