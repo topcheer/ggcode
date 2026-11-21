@@ -262,3 +262,20 @@ func prefixDriftActivePath() string {
 	defer prefixDriftMu.Unlock()
 	return prefixDriftPath
 }
+
+// ResetPrefixDriftForTest clears the anchor-gate cache and closes any
+// open sink so a test can control HOME/anchor state deterministically.
+// Needed because the 2s stat cache otherwise carries a stale verdict
+// from whichever test in the package touched it first (CI failure on
+// #5895: earlier tests cached disabled under the real HOME).
+func ResetPrefixDriftForTest() {
+	prefixDriftMu.Lock()
+	defer prefixDriftMu.Unlock()
+	if prefixDriftFile != nil {
+		_ = prefixDriftFile.Close()
+		prefixDriftFile = nil
+	}
+	prefixDriftPath = ""
+	prefixDriftEnabled = false
+	prefixDriftLastCheck = time.Time{}
+}

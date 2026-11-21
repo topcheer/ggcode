@@ -289,6 +289,14 @@ func (m *Manager) Add(msg provider.Message) {
 		msg.ID = newMessageID()
 	}
 	msgTokens := m.countTokens(msg)
+	// #5892 round-3: a system-role Add on an empty message list lands at
+	// the head position - a bare head write that bypassed drift
+	// instrumentation entirely (the archive had no insert record for
+	// these). Surface every head-shaping write, not just the
+	// UpdateFirstSystemMessage ones.
+	if msg.Role == "system" && len(m.messages) == 0 && len(msg.Content) > 0 {
+		recordPrefixDrift("insert-bare-add", provider.Message{}, msg, 0, msgTokens, m.version, m.nonTailMutSeq)
+	}
 	m.messages = append(m.messages, msg)
 	if m.runAddedIDs == nil {
 		m.runAddedIDs = make(map[string]bool)
