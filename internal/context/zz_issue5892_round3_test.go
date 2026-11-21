@@ -25,6 +25,8 @@ func TestAddBareSystemHeadInstrumented(t *testing.T) {
 	if err := os.WriteFile(anchor, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	defer ResetPrefixDriftForTest()
+	ResetPrefixDriftForTest()
 
 	m := NewManager(128000)
 	m.Add(provider.Message{
