@@ -12,7 +12,7 @@ func TestIssue1493B_HealthyPathStillBinds(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/x\n\ngo 1.27\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dirs := collectGoPackageDirs(dir, time.Now().Add(symbolMapTimeBudget))
+	dirs, _ := collectGoPackageDirs(dir, time.Now().Add(symbolMapTimeBudget))
 	if len(dirs) == 0 || dirs[0] != dir {
 
 		t.Logf("collectGoPackageDirs(%s) = %v (no go files case)", dir, dirs)
@@ -37,10 +37,11 @@ func TestIssue1493C_Depth2LoopRespectsDeadline(t *testing.T) {
 		}
 	}
 
-	fresh := collectGoPackageDirs(root, time.Now().Add(symbolMapTimeBudget))
+	fresh, _ := collectGoPackageDirs(root, time.Now().Add(symbolMapTimeBudget))
 
-	expired := collectGoPackageDirs(root, time.Now().Add(-time.Hour))
-	if len(expired) > len(fresh) {
+	expired, trunc := collectGoPackageDirs(root, time.Now().Add(-time.Hour))
+	if len(expired) > len(fresh) || !trunc {
+		t.Fatalf("expired-deadline walk must be truncated and not out-harvest fresh (trunc=%v, %d vs %d)", trunc, len(expired), len(fresh))
 		t.Fatalf("expired-deadline walk (%d dirs) must not out-harvest fresh (%d)", len(expired), len(fresh))
 	}
 }

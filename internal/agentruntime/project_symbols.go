@@ -33,7 +33,7 @@ func buildGoPackageSymbolsSection(root string) string {
 
 	deadline := time.Now().Add(symbolMapTimeBudget)
 
-	pkgDirs := collectGoPackageDirs(root, deadline)
+	pkgDirs, collectTruncated := collectGoPackageDirs(root, deadline)
 	if len(pkgDirs) == 0 {
 		return ""
 	}
@@ -45,7 +45,7 @@ func buildGoPackageSymbolsSection(root string) string {
 	}
 
 	var summaries []pkgSummary
-	truncated := false
+	truncated := collectTruncated
 	for _, dir := range pkgDirs {
 		if time.Now().After(deadline) {
 			// Ring-noise control: budget-hit fired on every periodic refresh; dropped.
@@ -170,7 +170,7 @@ func hasGoSource(root string) bool {
 	return false
 }
 
-func collectGoPackageDirs(root string, deadline time.Time) []string {
+func collectGoPackageDirs(root string, deadline time.Time) ([]string, bool) {
 	var dirs []string
 
 	if dirHasGoFiles(root) {
@@ -179,7 +179,7 @@ func collectGoPackageDirs(root string, deadline time.Time) []string {
 
 	level1, err := os.ReadDir(root)
 	if err != nil {
-		return dirs
+		return dirs, false
 	}
 
 	for _, e1 := range level1 {
@@ -187,7 +187,12 @@ func collectGoPackageDirs(root string, deadline time.Time) []string {
 			continue
 		}
 		if time.Now().After(deadline) {
-			return dirs
+			// #5892 round-5: surface truncation. A deadline hit during
+			// directory collection used to return a partial dir set that
+			// looked COMPLETE to the caller - the 28<->61 package
+			// oscillation root (a truncated scan emitted AND poisoned the
+			// complete-cache, then a full scan flipped it back).
+			return dirs, true
 		}
 
 		dir1 := filepath.Join(root, e1.Name())
@@ -202,7 +207,7 @@ func collectGoPackageDirs(root string, deadline time.Time) []string {
 		for _, e2 := range level2 {
 
 			if time.Now().After(deadline) {
-				return dirs
+				return dirs, true
 			}
 			if !e2.IsDir() || overviewSkipDirs[e2.Name()] || strings.HasPrefix(e2.Name(), ".") {
 				continue
@@ -214,7 +219,7 @@ func collectGoPackageDirs(root string, deadline time.Time) []string {
 		}
 	}
 
-	return dirs
+	return dirs, false
 }
 
 func dirHasGoFiles(dir string) bool {
