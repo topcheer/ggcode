@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/topcheer/ggcode/internal/debug"
 )
 
 func hasTSSource(root string) bool {
@@ -130,7 +128,8 @@ func buildMultilangSymbolsSection(
 	var summaries []pkgSummary
 	for _, dir := range pkgDirs {
 		if time.Now().After(deadline) {
-			debug.Log("agentruntime", "%s symbol map: time budget hit after %d dirs", langLabel, len(summaries))
+			// Ring-noise control: budget-hit fired on every periodic refresh; dropped.
+			_ = summaries
 			break
 		}
 

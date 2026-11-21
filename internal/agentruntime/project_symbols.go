@@ -46,7 +46,8 @@ func buildGoPackageSymbolsSection(root string) string {
 	var summaries []pkgSummary
 	for _, dir := range pkgDirs {
 		if time.Now().After(deadline) {
-			debug.Log("agentruntime", "symbol map: time budget hit after %d packages", len(summaries))
+			// Ring-noise control: budget-hit fired on every periodic refresh; dropped.
+			_ = summaries
 			break
 		}
 
