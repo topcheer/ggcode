@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 type Invariant struct {
@@ -362,7 +363,7 @@ func invariantGlobMatch(pattern, path string) bool {
 		}
 	}
 	b.WriteString("$")
-	re, err := regexp.Compile(b.String())
+	re, err := rexcache.Compile(b.String())
 	if err != nil {
 		return false
 	}

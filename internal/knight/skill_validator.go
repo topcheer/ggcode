@@ -5,9 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 type ValidationResult struct {
@@ -277,7 +278,7 @@ func hasSection(lines []string, heading string) bool {
 
 func hasActionableSteps(lines []string) bool {
 	inSteps := false
-	stepPattern := regexp.MustCompile(`^\s*(?:[-*]|\d+\.)\s+\S+`)
+	stepPattern := rexcache.Must(`^\s*(?:[-*]|\d+\.)\s+\S+`)
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {

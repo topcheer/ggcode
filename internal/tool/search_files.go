@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/topcheer/ggcode/internal/rexcache"
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
@@ -81,7 +82,7 @@ func (t SearchFiles) Execute(ctx context.Context, input json.RawMessage) (Result
 		args.MaxResults = 50
 	}
 
-	re, err := regexp.Compile(args.Pattern)
+	re, err := rexcache.Compile(args.Pattern)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid regex: %v", err)}, nil
 	}
@@ -353,7 +354,7 @@ func globMatchCrossSlash(pattern, name string) bool {
 		}
 	}
 	sb.WriteString("$")
-	re, err := regexp.Compile(sb.String())
+	re, err := rexcache.Compile(sb.String())
 	if err != nil {
 		return false
 	}

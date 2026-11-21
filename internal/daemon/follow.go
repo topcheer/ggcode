@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
 	charm "charm.land/glamour/v2"
 	"github.com/topcheer/ggcode/internal/chat"
+	"github.com/topcheer/ggcode/internal/rexcache"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -498,7 +498,7 @@ func formatSearchCount(lang Lang, result string, isError bool) string {
 	if isError {
 		return ""
 	}
-	re := regexp.MustCompile(`Showing \d+ of (\d+) matches?|Found (\d+) matches?|of (\d+) results?`)
+	re := rexcache.Must(`Showing \d+ of (\d+) matches?|Found (\d+) matches?|of (\d+) results?`)
 	m := re.FindStringSubmatch(result)
 	n := ""
 	if len(m) >= 4 {

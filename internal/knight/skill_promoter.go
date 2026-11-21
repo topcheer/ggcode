@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/rexcache"
 	"github.com/topcheer/ggcode/internal/util"
 	"gopkg.in/yaml.v3"
 )
@@ -338,7 +339,7 @@ func (p *Promoter) listSnapshots(name, scope string) ([]string, error) {
 		return nil, err
 	}
 
-	snapPattern := regexp.MustCompile(`^` + regexp.QuoteMeta(name) + `\.\d{8}-\d{6,12}\.md$`)
+	snapPattern := rexcache.Must(`^` + regexp.QuoteMeta(name) + `\.\d{8}-\d{6,12}\.md$`)
 	des, err := os.ReadDir(snapDir)
 	if err != nil {
 		if os.IsNotExist(err) {

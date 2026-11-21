@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -49,7 +50,34 @@ type cleanRule struct {
 	replace string
 }
 
+// gateTablesOnce builds the gate rule tables exactly once per process
+// (#5831): the tables hold ~40 compiled regexes and NewCommandGate used to
+// recompile all of them on every construction - i.e. on every run_command
+// and command-job tool call - which kept regexp/syntax.(*compiler).inst at
+// the top of the fleet heap profiles.
+var gateTablesOnce sync.Once
+
+var (
+	sharedBlockRules []*gateRule
+	sharedAskRules   []*gateRule
+	sharedCleanRules []cleanRule
+)
+
 func NewCommandGate() *CommandGate {
+	gateTablesOnce.Do(func() {
+		g := buildCommandGateTables()
+		sharedBlockRules = g.blockRules
+		sharedAskRules = g.askRules
+		sharedCleanRules = g.cleanRules
+	})
+	return &CommandGate{
+		blockRules: sharedBlockRules,
+		askRules:   sharedAskRules,
+		cleanRules: sharedCleanRules,
+	}
+}
+
+func buildCommandGateTables() *CommandGate {
 	g := &CommandGate{}
 
 	rmF := `(?:-[a-zA-Z]*f[a-zA-Z]*|--force)`
@@ -471,31 +499,42 @@ func (g *CommandGate) preChecks(cmd string) GateResult {
 	return GateResult{Behavior: Allow, CleanedCmd: cmd}
 }
 
+// destructiveWarnRules is compiled once per process; destructiveWarnings
+// used to recompile these 15 patterns on every CommandGate.Check call (#5831).
+var (
+	destructiveWarnOnce  sync.Once
+	destructiveWarnRules []destructiveWarnRule
+)
+
+type destructiveWarnRule struct {
+	pattern *regexp.Regexp
+	warning string
+}
+
 func (g *CommandGate) destructiveWarnings(cmd string) []string {
 
 	warnings := []string{}
 
-	destructivePatterns := []struct {
-		pattern *regexp.Regexp
-		warning string
-	}{
-		{regexp.MustCompile(`(?i)\bgit\s+reset\s+--hard\b`), "Note: may discard uncommitted changes"},
-		{regexp.MustCompile(`(?i)\bgit\s+push\b[^;&|\n]*\s(--force|-f)\b`), "Note: may overwrite remote history"},
-		{regexp.MustCompile(`(?i)\bgit\s+clean\b[^;&|\n]*-[a-zA-Z]*f`), "Note: may permanently delete untracked files"},
-		{regexp.MustCompile(`(?i)\bgit\s+checkout\s+(--\s+)?\.\s*($|[;&|])`), "Note: may discard all working tree changes"},
-		{regexp.MustCompile(`(?i)\bgit\s+restore\s+(--\s+)?\.\s*($|[;&|])`), "Note: may discard all working tree changes"},
-		{regexp.MustCompile(`(?i)\bgit\s+stash\s+(drop|clear)\b`), "Note: may permanently remove stashed changes"},
-		{regexp.MustCompile(`(?i)\bgit\s+branch\s+-D\b`), "Note: may force-delete a branch"},
-		{regexp.MustCompile(`(?i)\bgit\s+(commit|push|merge)\b[^;&|\n]*--no-verify\b`), "Note: may skip safety hooks"},
-		{regexp.MustCompile(`(?i)\bgit\s+commit\b[^;&|\n]*--amend\b`), "Note: may rewrite the last commit"},
-		{regexp.MustCompile(`(?i)\brm\s+-[a-zA-Z]*r`), "Note: recursively removing files"},
-		{regexp.MustCompile(`(?i)\brm\s+-[a-zA-Z]*f`), "Note: force-removing files without confirmation"},
-		{regexp.MustCompile(`(?i)\b(DROP|TRUNCATE)\s+(TABLE|DATABASE)`), "Note: may drop or truncate database objects"},
-		{regexp.MustCompile(`(?i)\bkubectl\s+delete\b`), "Note: may delete Kubernetes resources"},
-		{regexp.MustCompile(`(?i)\bterraform\s+destroy\b`), "Note: may destroy Terraform infrastructure"},
-	}
+	destructiveWarnOnce.Do(func() {
+		destructiveWarnRules = []destructiveWarnRule{
+			{regexp.MustCompile(`(?i)\bgit\s+reset\s+--hard\b`), "Note: may discard uncommitted changes"},
+			{regexp.MustCompile(`(?i)\bgit\s+push\b[^;&|\n]*\s(--force|-f)\b`), "Note: may overwrite remote history"},
+			{regexp.MustCompile(`(?i)\bgit\s+clean\b[^;&|\n]*-[a-zA-Z]*f`), "Note: may permanently delete untracked files"},
+			{regexp.MustCompile(`(?i)\bgit\s+checkout\s+(--\s+)?\.\s*($|[;&|])`), "Note: may discard all working tree changes"},
+			{regexp.MustCompile(`(?i)\bgit\s+restore\s+(--\s+)?\.\s*($|[;&|])`), "Note: may discard all working tree changes"},
+			{regexp.MustCompile(`(?i)\bgit\s+stash\s+(drop|clear)\b`), "Note: may permanently remove stashed changes"},
+			{regexp.MustCompile(`(?i)\bgit\s+branch\s+-D\b`), "Note: may force-delete a branch"},
+			{regexp.MustCompile(`(?i)\bgit\s+(commit|push|merge)\b[^;&|\n]*--no-verify\b`), "Note: may skip safety hooks"},
+			{regexp.MustCompile(`(?i)\bgit\s+commit\b[^;&|\n]*--amend\b`), "Note: may rewrite the last commit"},
+			{regexp.MustCompile(`(?i)\brm\s+-[a-zA-Z]*r`), "Note: recursively removing files"},
+			{regexp.MustCompile(`(?i)\brm\s+-[a-zA-Z]*f`), "Note: force-removing files without confirmation"},
+			{regexp.MustCompile(`(?i)\b(DROP|TRUNCATE)\s+(TABLE|DATABASE)`), "Note: may drop or truncate database objects"},
+			{regexp.MustCompile(`(?i)\bkubectl\s+delete\b`), "Note: may delete Kubernetes resources"},
+			{regexp.MustCompile(`(?i)\bterraform\s+destroy\b`), "Note: may destroy Terraform infrastructure"},
+		}
+	})
 
-	for _, p := range destructivePatterns {
+	for _, p := range destructiveWarnRules {
 		if p.pattern.MatchString(cmd) {
 			warnings = append(warnings, p.warning)
 		}

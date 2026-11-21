@@ -3,8 +3,9 @@ package hooks
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 type HookType string
@@ -120,7 +121,7 @@ func ValidateHooks(cfg HookConfig) []string {
 			}
 
 			if h.MatchMode == "regex" {
-				if _, err := regexp.Compile(h.Match); err != nil {
+				if _, err := rexcache.Compile(h.Match); err != nil {
 					errs = append(errs, fmt.Sprintf("%s: invalid regex: %v", prefix, err))
 				}
 			}
@@ -152,7 +153,7 @@ func ValidateHooks(cfg HookConfig) []string {
 
 func TestMatch(mode, pattern, toolName, rawInput string) (bool, error) {
 	if mode == "regex" {
-		re, err := regexp.Compile(pattern)
+		re, err := rexcache.Compile(pattern)
 		if err != nil {
 			return false, fmt.Errorf("invalid regex: %w", err)
 		}

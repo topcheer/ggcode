@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 const (
@@ -268,7 +270,7 @@ func expandMacroArgs(template json.RawMessage, runArgs []string) (json.RawMessag
 		return json.RawMessage("{}"), nil
 	}
 
-	placeholderRe := regexp.MustCompile(`\{\{([1-9])\}\}`)
+	placeholderRe := rexcache.Must(`\{\{([1-9])\}\}`)
 	out := placeholderRe.ReplaceAllStringFunc(string(template), func(m string) string {
 
 		n := int(m[2] - '0')

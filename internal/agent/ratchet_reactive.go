@@ -1,10 +1,10 @@
 package agent
 
 import (
-	"regexp"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 func (rs *RuleStore) MatchingRulesForResult(resultContent, toolArgs string) []Rule {
@@ -23,7 +23,7 @@ func (rs *RuleStore) MatchingRulesForResult(resultContent, toolArgs string) []Ru
 		if len(r.MatchPattern) < minMatchPatternLen {
 			continue
 		}
-		re, err := regexp.Compile(r.MatchPattern)
+		re, err := rexcache.Compile(r.MatchPattern)
 		if err != nil {
 			continue
 		}
@@ -32,7 +32,7 @@ func (rs *RuleStore) MatchingRulesForResult(resultContent, toolArgs string) []Ru
 		}
 
 		if r.ToolPattern != "" {
-			tre, terr := regexp.Compile(r.ToolPattern)
+			tre, terr := rexcache.Compile(r.ToolPattern)
 			if terr != nil || !tre.MatchString(toolArgs) {
 				continue
 			}

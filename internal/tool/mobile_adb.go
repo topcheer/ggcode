@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 type androidBackend struct {
@@ -395,7 +397,7 @@ var androidBoundsRe = regexp.MustCompile(`\[(\d+),(\d+)\]\[(\d+),(\d+)\]`)
 
 func parseAndroidUIXML(xmlData string) *uiElement {
 
-	nodeRe := regexp.MustCompile(`<node\b([^>]*?)/?>`)
+	nodeRe := rexcache.Must(`<node\b([^>]*?)/?>`)
 	nodes := nodeRe.FindAllStringSubmatch(xmlData, -1)
 	if len(nodes) == 0 {
 		return nil
@@ -481,7 +483,7 @@ func simplifyAndroidClass(class string) string {
 }
 
 func xmlAttr(attrs, name string) string {
-	re := regexp.MustCompile(name + `="([^"]*)"`)
+	re := rexcache.Must(name + `="([^"]*)"`)
 	m := re.FindStringSubmatch(attrs)
 	if m != nil {
 		return strings.TrimSpace(m[1])

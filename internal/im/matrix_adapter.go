@@ -29,6 +29,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/rexcache"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/yuin/goldmark"
 )
@@ -741,7 +742,7 @@ func (a *matrixAdapter) hasMention(body string, raw map[string]any) bool {
 func (a *matrixAdapter) stripMention(text string) string {
 
 	if a.userID != "" {
-		re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(a.userID))
+		re := rexcache.Must(`(?i)` + regexp.QuoteMeta(a.userID))
 		text = re.ReplaceAllString(text, "")
 	}
 

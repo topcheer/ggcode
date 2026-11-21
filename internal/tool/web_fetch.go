@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/topcheer/ggcode/internal/rexcache"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -332,22 +333,22 @@ func StripHTML(s string) string {
 func stripHTML(s string) string {
 
 	for _, tag := range []string{"script", "style", "noscript", "template", "svg", "nav", "header", "footer", "aside", "form", "iframe"} {
-		re := regexp.MustCompile(`(?is)<` + tag + `\b[^>]*>.*?</` + tag + `\s*>`)
+		re := rexcache.Must(`(?is)<` + tag + `\b[^>]*>.*?</` + tag + `\s*>`)
 		s = re.ReplaceAllString(s, "")
 	}
 
-	s = regexp.MustCompile(`(?is)<(meta|link|input|button)\b[^>]*/?>`).ReplaceAllString(s, "")
+	s = rexcache.Must(`(?is)<(meta|link|input|button)\b[^>]*/?>`).ReplaceAllString(s, "")
 
 	if extracted := extractMainContent(s); extracted != "" {
 		s = extracted
 	}
 
-	blockRe := regexp.MustCompile(`(?i)</?(p|div|section|article|header|footer|h[1-6]|li|tr|blockquote|pre|ul|ol|table|figure|figcaption|dt|dd)\b[^>]*>`)
+	blockRe := rexcache.Must(`(?i)</?(p|div|section|article|header|footer|h[1-6]|li|tr|blockquote|pre|ul|ol|table|figure|figcaption|dt|dd)\b[^>]*>`)
 	s = blockRe.ReplaceAllString(s, "\n")
 
-	s = regexp.MustCompile(`(?i)<br\s*/?>`).ReplaceAllString(s, "\n")
+	s = rexcache.Must(`(?i)<br\s*/?>`).ReplaceAllString(s, "\n")
 
-	s = regexp.MustCompile(`<[^>]+>`).ReplaceAllString(s, " ")
+	s = rexcache.Must(`<[^>]+>`).ReplaceAllString(s, " ")
 
 	s = html.UnescapeString(s)
 
@@ -385,8 +386,8 @@ func extractMainContent(htmlStr string) string {
 }
 
 func extractFirstTag(s, tag string) string {
-	openRe := regexp.MustCompile(`(?is)<` + tag + `\b[^>]*>`)
-	closeRe := regexp.MustCompile(`(?is)</` + tag + `\s*>`)
+	openRe := rexcache.Must(`(?is)<` + tag + `\b[^>]*>`)
+	closeRe := rexcache.Must(`(?is)</` + tag + `\s*>`)
 
 	openMatch := openRe.FindStringIndex(s)
 	if openMatch == nil {
@@ -423,7 +424,7 @@ func extractFirstTag(s, tag string) string {
 }
 
 func extractTaggedBlock(s, attrTailRE string) string {
-	re := regexp.MustCompile(`(?is)<(\w+)[^>]*` + attrTailRE + `[^>]*>`)
+	re := rexcache.Must(`(?is)<(\w+)[^>]*` + attrTailRE + `[^>]*>`)
 	loc := re.FindStringSubmatchIndex(s)
 	if loc == nil || len(loc) < 4 {
 		return ""
@@ -432,7 +433,7 @@ func extractTaggedBlock(s, attrTailRE string) string {
 	start := s[loc[1]:]
 	rest := start
 	consumed := 0
-	boundary := regexp.MustCompile(`(?i)<(/?)` + name + `(\s|>|/)`)
+	boundary := rexcache.Must(`(?i)<(/?)` + name + `(\s|>|/)`)
 	depth := 1
 	for {
 		m := boundary.FindStringSubmatchIndex(rest)
@@ -468,5 +469,5 @@ func extractByID(s, id string) string {
 }
 
 func stripTagsOnly(s string) string {
-	return regexp.MustCompile(`<[^>]+>`).ReplaceAllString(s, " ")
+	return rexcache.Must(`<[^>]+>`).ReplaceAllString(s, " ")
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/topcheer/ggcode/internal/rexcache"
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
@@ -121,7 +122,7 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 	var re *regexp.Regexp
 	if args.IsRegex {
 		var err error
-		re, err = regexp.Compile(args.Pattern)
+		re, err = rexcache.Compile(args.Pattern)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("invalid regex pattern: %v", err)}, nil
 		}

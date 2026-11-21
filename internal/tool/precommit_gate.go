@@ -8,11 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 const precommitBuildTimeout = 30 * time.Second
@@ -237,7 +237,7 @@ func isBuildErrorLine(line string) bool {
 		return true
 	}
 
-	if strings.Contains(lower, "error:") && !regexp.MustCompile(`\b0 errors`).MatchString(lower) {
+	if strings.Contains(lower, "error:") && !rexcache.Must(`\b0 errors`).MatchString(lower) {
 		return true
 	}
 

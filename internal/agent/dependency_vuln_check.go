@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 type vulnEntry struct {
@@ -254,7 +256,7 @@ func parsePackageJSON(content string) map[string]string {
 		return deps
 	}
 
-	re := regexp.MustCompile(`"([^"]+)"\s*:\s*"([^"]+)"`)
+	re := rexcache.Must(`"([^"]+)"\s*:\s*"([^"]+)"`)
 	lines := strings.Split(content, "\n")
 	inDeps := false
 	for _, line := range lines {
