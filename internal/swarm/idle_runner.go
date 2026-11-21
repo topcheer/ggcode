@@ -197,6 +197,13 @@ func handleMessage(
 				}
 				debug.Log("swarm", "teammate %s direct-task %s marked completed on board", tm.ID, msg.TaskID)
 			}
+			// Stale-results fix: the direct-delivery path historically only
+			// flipped the board status and never archived the output, while
+			// the claim path (persistTaskResult above) did. GetTeammateTaskResult
+			// prefers the newest board-archived result, so once ONE task had a
+			// stored result every later direct-delivered task reported that
+			// old output forever. Archive here to keep both paths equivalent.
+			persistTaskResult(board, msg.TaskID, result)
 		}
 	}
 

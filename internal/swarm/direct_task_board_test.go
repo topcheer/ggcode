@@ -2,6 +2,7 @@ package swarm
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,5 +43,43 @@ func TestDirectTaskCompletionMarksBoard(t *testing.T) {
 	}
 	if tm.getStatus() != TeammateIdle {
 		t.Fatalf("teammate should return to idle, got %s", tm.getStatus())
+	}
+}
+
+// Stale-results regression: the direct-delivery completion path must archive
+// the task result into the board metadata (persistTaskResult), matching the
+// claim path. Before the fix only the board STATUS was flipped; the newest
+// board-archived result never changed, so GetTeammateTaskResult kept serving
+// whichever earlier task happened to have an archived result - every later
+// direct-delivered task reported that old output forever.
+func TestDirectTaskCompletionPersistsResult(t *testing.T) {
+	mgr := newTestManager()
+	snap := mgr.CreateTeam("direct-persist", "")
+	team := &Team{ID: snap.ID, Name: "direct-persist", LeaderID: "leader"}
+	board, err := mgr.EnsureTaskManager(team.ID)
+	if err != nil {
+		t.Fatalf("ensure board: %v", err)
+	}
+
+	agent := &countingAgent{}
+	tm := &Teammate{ID: "tm-7", Name: "ops", Status: TeammateIdle, Inbox: make(chan MailMessage, 4)}
+
+	first := board.Create("first-pass", "desc", "", map[string]string{"assignee": "tm-7"})
+	handleMessage(context.Background(), tm, team, agent, mgr, nil, time.Minute,
+		MailMessage{From: "leader", Type: "task", TaskID: first.ID, Content: "do first-pass"})
+
+	second := board.Create("second-pass", "desc", "", map[string]string{"assignee": "tm-7"})
+	handleMessage(context.Background(), tm, team, agent, mgr, nil, time.Minute,
+		MailMessage{From: "leader", Type: "task", TaskID: second.ID, Content: "do second-pass"})
+
+	taskID, result, ok := mgr.GetTeammateTaskResult(team.ID, "tm-7")
+	if !ok {
+		t.Fatal("no board-archived result for tm-7 (direct-delivery path skipped persistTaskResult)")
+	}
+	if taskID != second.ID {
+		t.Fatalf("expected newest archived task %s, got %s", second.ID, taskID)
+	}
+	if !strings.Contains(result, "second-pass") {
+		t.Fatalf("archived result should carry the second task's output, got: %.200s", result)
 	}
 }
