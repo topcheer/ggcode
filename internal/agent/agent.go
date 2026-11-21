@@ -1091,14 +1091,13 @@ func (a *Agent) UpdateSystemPrompt(text string) {
 	defer a.mu.Unlock()
 	a.baseSystemPrompt = text
 	a.lastInjectedSystemPrompt = ""
-	cm, ok := a.contextManager.(*ctxpkg.Manager)
-	if !ok {
-		return
-	}
-	cm.UpdateFirstSystemMessage(provider.Message{
-		Role:    "system",
-		Content: []provider.ContentBlock{{Type: "text", Text: text, Cache: true}},
-	})
+	// #5892 drift finding: do NOT write the head directly here. This path
+	// used to bypass the stable-head assembly (temporal anchor + headParts),
+	// so the head oscillated between bare-base and assembled forms - each
+	// UpdateSystemPrompt call invalidated the whole cached prefix twice
+	// (bare write, then re-assembly on the next run). Pure invalidation is
+	// enough: the next run's maybeInjectStableSystemHead reassembles from
+	// the updated base through the single canonical write path.
 }
 func (a *Agent) syncContextManagerProviderLocked() {
 	if cm, ok := a.contextManager.(providerAwareContextManager); ok {
