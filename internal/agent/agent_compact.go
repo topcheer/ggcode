@@ -168,8 +168,10 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 	tokens := a.contextManager.TokenCount()
 	threshold := a.contextManager.AutoCompactThreshold()
 
-	debug.Log("agent", "maybeAutoCompact: tokens=%d threshold=%d maxTokens=%d",
-		tokens, threshold, a.contextManager.ContextWindow())
+	if threshold > 0 && tokens >= threshold/2 { // Ring-noise control: log only when compaction is plausible.
+		debug.Log("agent", "maybeAutoCompact: tokens=%d threshold=%d maxTokens=%d",
+			tokens, threshold, a.contextManager.ContextWindow())
+	}
 
 	if tokens < threshold {
 		return nil
