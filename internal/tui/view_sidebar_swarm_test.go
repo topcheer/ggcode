@@ -15,6 +15,32 @@ func TestRenderSidebarSwarmSection_NoTeams(t *testing.T) {
 	}
 }
 
+// #5874: the task tracker used to REPLACE the whole sidebar, hiding the
+// Swarm Teams section whenever todos were tracked - healthy teams looked
+// "not restored". Both must render together now.
+func TestRenderSidebarTrackerAndSwarmCoexist(t *testing.T) {
+	m := Model{
+		todoSnapshot: map[string]todoStateItem{
+			"t1": {ID: "t1", Content: "ship the fix", Status: "in_progress"},
+		},
+		todoOrder: []string{"t1"},
+		swarmTeams: []swarm.TeamSnapshot{{
+			ID:   "team-27557f",
+			Name: "cron-ops",
+			Teammates: []swarm.TeammateSnapshot{
+				{ID: "tm-7", Name: "tm-ops", Status: swarm.TeammateIdle},
+			},
+		}},
+	}
+	sidebar := m.renderSidebar()
+	if !strings.Contains(sidebar, "cron-ops (1)") {
+		t.Errorf("sidebar with active task tracker must still show the swarm team; got:\n%s", sidebar)
+	}
+	if !strings.Contains(sidebar, "Swarm Teams") {
+		t.Errorf("sidebar with active task tracker must still show the Swarm Teams section title; got:\n%s", sidebar)
+	}
+}
+
 func TestRenderSidebarSwarmSection_WithTeams(t *testing.T) {
 	m := Model{swarmTeams: []swarm.TeamSnapshot{{
 		ID:   "team-1",
