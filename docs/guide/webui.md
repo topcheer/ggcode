@@ -19,7 +19,7 @@ go build -tags goolm ./cmd/ggcode   # 重新编译使新 dist 生效
 
 - **聊天为核心**：首屏 WelcomeScreen + 大输入框；流式 markdown 渲染、思考过程折叠块、工具调用状态卡片（spinner→绿/红+耗时；diff 类结果逐行红绿着色）、乐观 UI（离线消息队列补发）；截图/图片直接粘贴进输入框（缩略图预览，随消息发送）
 - **Composer**：`⌘/Ctrl+Enter` 发送、`Shift+Enter` 换行、输入 `@` 唤起文件（实时搜索 workspace 真实路径）/技能/Agent 彩色引用弹层、活跃发光态
-- **子代理委派**：spawn_agent 等委派在聊天流中以单行 `Spawn <目标>` 条目呈现；右栏自动显示**子代理实时流监视器**（推理/文本增量，完结转状态色，空闲自动隐藏）——TUI/WebUI/桌面共用同一 `StreamEventSubagent*` 事件契约
+- **子代理委派**：spawn_agent 等委派在聊天流中以单行 `Spawn <目标>` 条目呈现；右栏自动显示**子代理实时流监视器**（推理/文本增量，完结转状态色，空闲自动隐藏）——TUI/WebUI/桌面共用同一 `StreamEventSubagent*` 事件契约；swarm 队友（tm-*）生命周期事件同样经此面板流式呈现（`internal/tui/repl.go` 将 `teammate_text`→SubagentDelta、`teammate_idle`→SubagentDone 复用既有通道，#5881）
 - **命令面板**：`⌘/Ctrl+K`（切视图/切主题/新建会话/切换最近会话）；`⌘/Ctrl+N` 新会话；TUI 内 `/webui` 打印地址并唤起浏览器（含 `#token=`，服务器未运行时友好提示）
 - **公网隧道**：`/et on` 经 etunnel（服务端由 SDK 内置默认 `wss://t.etun.uk/tunnel` 决定）把本 WebUI 映射为公网 https 域名并打印完整 URL（含 `#token=` 鉴权，免费计划 4h/1Mbps）；`/et off` 关闭；`/et show` 查看状态。付费定制域名：`/et setup <子域名> <token>` 持久化到 config `etunnel` 节（token 在 /api/config 面自动脱敏）。Go SDK 以已发布模块 `github.com/topcheer/etunnel`（v1.2.0）引入，无需本地 replace（官方 SDK 另有 pub.dev 等 12 语言发行）
 - **侧栏双隧道入口**：①📱 共享——点按即发起 `/share`，弹层显示连接二维码（PNG）+ Connect URL，mobile app 扫码接入后弹层自动隐藏（轮询 `GET /api/tunnel/status` 的 `share.connected`），可显式停止；②⇄ 隧道——点按即 `/et on`，弹层显示公网 URL 可直接点击（关弹层不关隧道，可显式停止）。启停均走 `POST /api/chat/commands` slash 全链，状态真相源为活 scheduler 快照
