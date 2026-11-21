@@ -43,12 +43,12 @@ func (w workspaceSymbols) Symbols(lang, query string, limit int) ([]tool.Package
 	deadline := time.Now().Add(symbolMapTimeBudget)
 	var out []tool.PackageSymbols
 
-	addLang := func(tag string, dirs []string, extract func(string) ([]string, int)) {
+	addLang := func(tag string, dirs []string, extract func(string) ([]string, int, bool)) {
 		for _, dir := range dirs {
 			if time.Now().After(deadline) {
 				return
 			}
-			syms, _ := extract(dir)
+			syms, _, _ := extract(dir)
 			if len(syms) == 0 {
 				continue
 			}
@@ -73,15 +73,17 @@ func (w workspaceSymbols) Symbols(lang, query string, limit int) ([]tool.Package
 	}
 	if lang == "" || lang == "ts" {
 		if hasTSSource(w.root) {
-			addLang("ts", collectMultilangDirs(w.root, "ts", deadline), func(dir string) ([]string, int) {
-				return extractTSSymbols(dir, deadline)
+			addLang("ts", collectMultilangDirs(w.root, "ts", deadline), func(dir string) ([]string, int, bool) {
+				syms, n := extractTSSymbols(dir, deadline)
+				return syms, n, false
 			})
 		}
 	}
 	if lang == "" || lang == "py" {
 		if hasPythonSource(w.root) {
-			addLang("py", collectMultilangDirs(w.root, "py", deadline), func(dir string) ([]string, int) {
-				return extractPythonSymbols(dir, deadline)
+			addLang("py", collectMultilangDirs(w.root, "py", deadline), func(dir string) ([]string, int, bool) {
+				syms, n := extractPythonSymbols(dir, deadline)
+				return syms, n, false
 			})
 		}
 	}

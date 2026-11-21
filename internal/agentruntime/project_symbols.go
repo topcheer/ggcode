@@ -63,7 +63,13 @@ func buildGoPackageSymbolsSection(root string) string {
 			rel = "(root)"
 		}
 
-		syms, fc := extractPackageSymbols(dir)
+		syms, fc, extFailed := extractPackageSymbols(dir)
+		if extFailed {
+			// #5892 round-8: an extract-stage failure silently skipped
+			// this package - the reduced set still looked COMPLETE,
+			// was emitted, and poisoned the cache (61<->63 flip).
+			truncated = true
+		}
 		if len(syms) == 0 {
 			continue
 		}
@@ -249,9 +255,9 @@ func dirHasGoFiles(dir string) bool {
 	return false
 }
 
-func extractPackageSymbols(dir string) ([]string, int) {
+func extractPackageSymbols(dir string) ([]string, int, bool) {
 	fset := token.NewFileSet()
-
+	failed := false
 	fileCount := 0
 	pkgs, firstErr := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
 		name := fi.Name()
@@ -263,11 +269,17 @@ func extractPackageSymbols(dir string) ([]string, int) {
 	}, parser.SkipObjectResolution)
 
 	if firstErr != nil {
+		// #5892 round-8: a parse failure means part of the package's
+		// syntax tree is missing - the harvest is not trustworthy.
+		failed = true
 		debug.Log("agentruntime", "symbol map: parse error in %s: %v", filepath.Base(dir), firstErr)
 	}
 
 	if len(pkgs) == 0 {
-		return nil, 0
+		// Directories reach here via dirHasGoFiles, so zero packages with
+		// files counted means every parse failed (e.g. transient i/o).
+		// Zero with nothing counted can be a stale directory listing.
+		return nil, 0, true
 	}
 
 	seen := make(map[string]bool)
@@ -295,7 +307,7 @@ func extractPackageSymbols(dir string) ([]string, int) {
 	}
 
 	if len(seen) == 0 {
-		return nil, parsedFiles
+		return nil, parsedFiles, failed
 	}
 
 	symbols := make([]string, 0, len(seen))
@@ -303,5 +315,5 @@ func extractPackageSymbols(dir string) ([]string, int) {
 		symbols = append(symbols, s)
 	}
 	sort.Strings(symbols)
-	return symbols, parsedFiles
+	return symbols, parsedFiles, failed
 }
