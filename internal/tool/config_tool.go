@@ -43,7 +43,7 @@ func (t ConfigTool) Parameters() json.RawMessage {
 			},
 			"delete": {
 				"type": "boolean",
-				"description": "Delete the specified key. Supported keys: 'mcp_servers.<name>' (remove MCP server), 'im.adapters.<name>' (remove IM adapter)."
+				"description": "Delete the specified key. Supported keys: 'mcp_servers.<name>' (remove MCP server), 'im.adapters.<name>' (remove IM adapter), 'etunnel' (clear the persisted /et tunnel config: subdomain/token/plan)."
 			},
 			"description": {
 				"type": "string",

@@ -82,6 +82,12 @@ func (c *Config) Save() error {
 
 		existingRaw := map[string]interface{}{}
 		if yamlErr := yaml.Unmarshal(existingData, &existingRaw); yamlErr == nil {
+			// etunnel 全零值 = 显式清理（config delete etunnel 分支）。
+			// 零值节被 omitempty 省略后 deepMergeYAMLMaps 会把盘上旧键
+			// 当 dst-only 保留，导致"内存已清、盘上复活"；显式删除收敛。
+			if c.ETunnel.Subdomain == "" && c.ETunnel.Token == "" && c.ETunnel.Plan == "" && len(c.ETunnel.Subdomains) == 0 {
+				delete(existingRaw, "etunnel")
+			}
 			deepMergeYAMLMaps(existingRaw, currentRaw)
 			// #5779: vendors/im/mcp_servers live in their own external files.
 			// A stale section left in the main file (failed external migration,
