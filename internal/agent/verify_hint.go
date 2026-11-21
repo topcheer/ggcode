@@ -718,7 +718,9 @@ func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage,
 		a.postEditVerify.lastBuildFailed = resultErr
 	}
 
-	debug.Log("agent", "verify hint counter reset: agent ran build command %q (failed=%v)", cmd, resultErr)
+	// Ring-noise control: full command strings (which can embed multi-KB
+	// commit messages/PR bodies) flooded the ring; keep the head for signal.
+	debug.Log("agent", "verify hint counter reset: agent ran build command %q (failed=%v)", truncateString(cmd, 120), resultErr)
 }
 
 func extractCommandFromArgs(args json.RawMessage) string {
