@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -318,7 +319,58 @@ func (m Model) dispatchUpdate(msg tea.Msg, spinnerCmd tea.Cmd) (tea.Model, bool,
 	if d := time.Since(start); d > slowUpdateLogThreshold {
 		debug.Log("tui", fmt.Sprintf("slow update handler: type=%T duration=%s", msg, d.Round(time.Millisecond)))
 	}
+	probeUpdateSaturation(msg, start)
 	return model, true, cmd
+}
+
+// probeUpdateSaturation surfaces accumulated-update freezes that no single
+// slow handler triggers (e.g. hundreds of <100ms handlers back to back —
+// the "TUI freezes for tens of seconds then catches up" symptom, #5883).
+// dispatchUpdate runs on the single bubbletea goroutine, so the probe state
+// needs no locking. A burst ends when two dispatches are >5ms apart; bursts
+// exceeding 2s log a one-line summary with a type histogram sample.
+var (
+	satBurstSince time.Time
+	satBurstMsgs  int
+	satBurstTypes map[string]int
+	satLastEnd    time.Time
+)
+
+const (
+	satGapThreshold  = 5 * time.Millisecond
+	satBurstLogAt    = 2 * time.Second
+	satTypeSampleCap = 8
+)
+
+func probeUpdateSaturation(msg tea.Msg, start time.Time) {
+	now := time.Now()
+	if satBurstMsgs > 0 && start.Sub(satLastEnd) > satGapThreshold {
+		// gap: close out the previous burst silently (below-threshold bursts
+		// are noise; the log fires mid-burst instead).
+		satBurstMsgs = 0
+		satBurstTypes = nil
+	}
+	if satBurstMsgs == 0 {
+		satBurstSince = start
+		satBurstTypes = make(map[string]int)
+	}
+	satBurstMsgs++
+	satBurstTypes[fmt.Sprintf("%T", msg)]++
+	satLastEnd = now
+	if d := now.Sub(satBurstSince); d > satBurstLogAt {
+		types := make([]string, 0, len(satBurstTypes))
+		for t, n := range satBurstTypes {
+			if len(types) < satTypeSampleCap {
+				types = append(types, fmt.Sprintf("%s x%d", t, n))
+			}
+		}
+		debug.Log("tui", fmt.Sprintf(
+			"update loop saturated: %d msgs in %s (top: %s) — UI freeze window",
+			satBurstMsgs, d.Round(time.Millisecond), strings.Join(types, ", ")))
+		// reset so the log rate stays ~1 per burst-window, not per msg
+		satBurstMsgs = 0
+		satBurstTypes = nil
+	}
 }
 
 const slowUpdateLogThreshold = 100 * time.Millisecond
