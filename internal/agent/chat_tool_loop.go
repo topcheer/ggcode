@@ -314,7 +314,9 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 				if a.turnImpact != nil {
 					a.turnImpact.recordShellMutation(cmd, shellDestructive(cmd))
 				}
-				debug.Log("agent", "shell source mutation %q (failed cmd included): invalidated command/speculator/memo caches", cmd)
+				// Ring-noise control: keep only the command head; the full string can
+				// embed multi-KB payloads and floods the ring.
+				debug.Log("agent", "shell source mutation %q (failed cmd included): invalidated command/speculator/memo caches", truncateString(cmd, 120))
 			}
 		}
 
