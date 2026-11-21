@@ -1910,6 +1910,13 @@ func (p *desktopRuntimeProvider) RuntimeMobile() tool.RuntimeMobileInfo {
 	return info
 }
 
+// RuntimeEtunnel satisfies the extended RuntimeStatusProvider surface.
+// The desktop bridge has no etunnel (/et) surface today; sessions running
+// under the TUI own the TunnelCtl singleton.
+func (p *desktopRuntimeProvider) RuntimeEtunnel() tool.RuntimeEtunnelInfo {
+	return tool.RuntimeEtunnelInfo{}
+}
+
 func (b *ChatBridge) StartMCPOAuth(ctx context.Context, serverName string, openURL func(string) error) (*MCPOAuthStartResult, error) {
 	if b == nil || b.mcpManager == nil {
 		return nil, fmt.Errorf("MCP manager not initialized")
