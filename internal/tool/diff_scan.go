@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/topcheer/ggcode/internal/security"
 )
@@ -19,34 +20,89 @@ type DiffIssue struct {
 
 const maxDiffScanIssues = 15
 
-var debugStmtPatterns = []*regexp.Regexp{
-
-	regexp.MustCompile(`\bfmt\.Println\(`),
-	regexp.MustCompile(`\bfmt\.Printf\(`),
-	regexp.MustCompile(`\bprintln\(`),
-
-	regexp.MustCompile(`\bconsole\.log\(`),
-	regexp.MustCompile(`\bconsole\.debug\(`),
-
-	regexp.MustCompile(`\bprint\(`),
-	regexp.MustCompile(`\bpprint\.pprint\(`),
-	regexp.MustCompile(`\bpprint\.pformat\(`),
-
-	regexp.MustCompile(`\bbinding\.irb\b`),
-
-	regexp.MustCompile(`\bSystem\.out\.println\(`),
-	regexp.MustCompile(`\bSystem\.err\.println\(`),
-
-	regexp.MustCompile(`\beprintln!\(`),
-	regexp.MustCompile(`\bdbg!\(`),
-
-	regexp.MustCompile(`\bvar_dump\(`),
-	regexp.MustCompile(`\bprint_r\(`),
-	regexp.MustCompile(`\bdd\(`),
-
-	regexp.MustCompile(`\bfprintf\s*\(\s*stderr\b`),
+// #5876 phase-1: the diff_scan regex fleet (~31 patterns) is compiled lazily
+// on first scan instead of at tool-package init, so sessions that never scan
+// a diff (most sub-agents/teammates) no longer pay the compile at startup.
+type diffScanTables struct {
+	debugStmtPatterns    []*regexp.Regexp
+	debuggerPatterns     []*regexp.Regexp
+	pythonFileRe         *regexp.Regexp
+	todoPattern          *regexp.Regexp
+	mergeConflictMarkers []*regexp.Regexp
+	testFilePattern      *regexp.Regexp
+	diffFileHeader       *regexp.Regexp
+	diffOldFileHeader    *regexp.Regexp
+	diffHunkHeader       *regexp.Regexp
 }
 
+// diffScanTablesOnce builds the fleet exactly once per process, mirroring the
+// sync.Once facade pattern of permission/dangerous.go and command_gate.go
+// (#5831).
+var (
+	diffScanTablesOnce   sync.Once
+	sharedDiffScanTables *diffScanTables
+)
+
+func diffTables() *diffScanTables {
+	diffScanTablesOnce.Do(func() {
+		sharedDiffScanTables = buildDiffScanTables()
+	})
+	return sharedDiffScanTables
+}
+
+func buildDiffScanTables() *diffScanTables {
+	t := &diffScanTables{}
+	t.debugStmtPatterns = []*regexp.Regexp{
+
+		regexp.MustCompile(`\bfmt\.Println\(`),
+		regexp.MustCompile(`\bfmt\.Printf\(`),
+		regexp.MustCompile(`\bprintln\(`),
+
+		regexp.MustCompile(`\bconsole\.log\(`),
+		regexp.MustCompile(`\bconsole\.debug\(`),
+
+		regexp.MustCompile(`\bprint\(`),
+		regexp.MustCompile(`\bpprint\.pprint\(`),
+		regexp.MustCompile(`\bpprint\.pformat\(`),
+
+		regexp.MustCompile(`\bbinding\.irb\b`),
+
+		regexp.MustCompile(`\bSystem\.out\.println\(`),
+		regexp.MustCompile(`\bSystem\.err\.println\(`),
+
+		regexp.MustCompile(`\beprintln!\(`),
+		regexp.MustCompile(`\bdbg!\(`),
+
+		regexp.MustCompile(`\bvar_dump\(`),
+		regexp.MustCompile(`\bprint_r\(`),
+		regexp.MustCompile(`\bdd\(`),
+
+		regexp.MustCompile(`\bfprintf\s*\(\s*stderr\b`),
+	}
+	t.debuggerPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`\bpdb\.set_trace\(\)`),
+		regexp.MustCompile(`\bbreakpoint\(\)`),
+		regexp.MustCompile(`^\s*import\s+pdb\b`),
+		regexp.MustCompile(`^\s*debugger;\s*$`),
+		regexp.MustCompile(`\bbinding\.pry\b`),
+	}
+	t.pythonFileRe = regexp.MustCompile(`\.py$|(^|/)python(/|$)`)
+	t.todoPattern = regexp.MustCompile(`(?i)\b(TODO|FIXME|HACK|XXX|BUG|WORKAROUND)\b`)
+	t.mergeConflictMarkers = []*regexp.Regexp{
+		regexp.MustCompile(`^<{7}`),
+		regexp.MustCompile(`^={7}`),
+		regexp.MustCompile(`^>{7}`),
+		regexp.MustCompile(`^\|{7}`),
+	}
+	t.testFilePattern = regexp.MustCompile(`(_test\.go|\.test\.[jt]sx?|\.spec\.[jt]sx?|test_.*\.py|.*_test\.py|\.test\.ts|\.test\.js|__tests__/.*|Test\.cs|_spec\.rb|\.spec\.rb|_test\.rs)$`)
+	t.diffFileHeader = regexp.MustCompile(`^\+\+\+\s+(?:b/"([^"]+)"|b/([^"\s]\S*))`)
+	t.diffOldFileHeader = regexp.MustCompile(`^---\s+(?:a/"([^"]+)"|a/([^"\s]\S*))`)
+	t.diffHunkHeader = regexp.MustCompile(`^@{2,3}\s+(?:-\d+(?:,\d+)?\s+)+\+(\d+)(?:,\d+)?\s+@{2,3}`)
+	return t
+}
+
+// pythonOnlyPattern holds pattern-source strings (never compiled) keyed for
+// the python-only guard; it stays package-level since it allocates nothing.
 var pythonOnlyPattern = map[string]bool{
 	`\bprint\(`:           true,
 	`\bpprint\.pprint\(`:  true,
@@ -54,31 +110,6 @@ var pythonOnlyPattern = map[string]bool{
 
 	`\bdd\(`: true,
 }
-
-var debuggerPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`\bpdb\.set_trace\(\)`),
-	regexp.MustCompile(`\bbreakpoint\(\)`),
-	regexp.MustCompile(`^\s*import\s+pdb\b`),
-	regexp.MustCompile(`^\s*debugger;\s*$`),
-	regexp.MustCompile(`\bbinding\.pry\b`),
-}
-
-var pythonFileRe = regexp.MustCompile(`\.py$|(^|/)python(/|$)`)
-
-var todoPattern = regexp.MustCompile(`(?i)\b(TODO|FIXME|HACK|XXX|BUG|WORKAROUND)\b`)
-
-var mergeConflictMarkers = []*regexp.Regexp{
-	regexp.MustCompile(`^<{7}`),
-	regexp.MustCompile(`^={7}`),
-	regexp.MustCompile(`^>{7}`),
-	regexp.MustCompile(`^\|{7}`),
-}
-
-var testFilePattern = regexp.MustCompile(`(_test\.go|\.test\.[jt]sx?|\.spec\.[jt]sx?|test_.*\.py|.*_test\.py|\.test\.ts|\.test\.js|__tests__/.*|Test\.cs|_spec\.rb|\.spec\.rb|_test\.rs)$`)
-
-var diffFileHeader = regexp.MustCompile(`^\+\+\+\s+(?:b/"([^"]+)"|b/([^"\s]\S*))`)
-
-var diffOldFileHeader = regexp.MustCompile(`^---\s+(?:a/"([^"]+)"|a/([^"\s]\S*))`)
 
 func diffHeaderPath(m []string) string {
 	if len(m) >= 3 && m[2] != "" {
@@ -90,12 +121,12 @@ func diffHeaderPath(m []string) string {
 	return ""
 }
 
-var diffHunkHeader = regexp.MustCompile(`^@{2,3}\s+(?:-\d+(?:,\d+)?\s+)+\+(\d+)(?:,\d+)?\s+@{2,3}`)
-
 func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 	if strings.TrimSpace(diffOutput) == "" {
 		return nil
 	}
+
+	t := diffTables()
 
 	var issues []DiffIssue
 	lowSeverityIssues := 0
@@ -109,18 +140,18 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 
 	for _, line := range lines {
 
-		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
+		if m := t.diffFileHeader.FindStringSubmatch(line); m != nil {
 
 			currentFile = diffHeaderPath(m)
-			isTestFile = testFilePattern.MatchString(currentFile)
+			isTestFile = t.testFilePattern.MatchString(currentFile)
 			continue
 		}
 
-		if diffOldFileHeader.MatchString(line) {
+		if t.diffOldFileHeader.MatchString(line) {
 			continue
 		}
 
-		if m := diffHunkHeader.FindStringSubmatch(line); m != nil {
+		if m := t.diffHunkHeader.FindStringSubmatch(line); m != nil {
 			fmt.Sscanf(m[1], "%d", &newLineNum)
 
 			inCombinedHunk = strings.HasPrefix(line, "@@@")
@@ -145,7 +176,7 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 		issueLine := newLineNum
 		newLineNum++
 
-		for _, pat := range mergeConflictMarkers {
+		for _, pat := range t.mergeConflictMarkers {
 			if pat.MatchString(addedContent) {
 				issues = append(issues, DiffIssue{
 					File:     currentFile,
@@ -179,7 +210,7 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 			continue
 		}
 
-		for _, pat := range debuggerPatterns {
+		for _, pat := range t.debuggerPatterns {
 			if pat.MatchString(addedContent) {
 				issues = append(issues, DiffIssue{
 					File:     currentFile,
@@ -193,9 +224,9 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 			}
 		}
 
-		for _, pat := range debugStmtPatterns {
+		for _, pat := range t.debugStmtPatterns {
 
-			if pythonOnlyPattern[pat.String()] && !pythonFileRe.MatchString(currentFile) {
+			if pythonOnlyPattern[pat.String()] && !t.pythonFileRe.MatchString(currentFile) {
 				continue
 			}
 			if pat.MatchString(addedContent) {
@@ -211,7 +242,7 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 			}
 		}
 
-		if todoPattern.MatchString(addedContent) {
+		if t.todoPattern.MatchString(addedContent) {
 			issues = append(issues, DiffIssue{
 				File:     currentFile,
 				Line:     issueLine,

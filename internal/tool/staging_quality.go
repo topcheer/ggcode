@@ -116,7 +116,7 @@ func AnalyzeStagingQuality(diffOutput string) string {
 
 	fileSet := make(map[string]bool)
 	for _, line := range strings.Split(diffOutput, "\n") {
-		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
+		if m := diffTables().diffFileHeader.FindStringSubmatch(line); m != nil {
 			fileSet[diffHeaderPath(m)] = true
 		} else if m := diffGitHeader.FindStringSubmatch(line); m != nil {
 

@@ -209,7 +209,7 @@ func parseDiffStats(diffOutput string) diffStats {
 				lastGitPath = normalizeGitDiffPath(m[2])
 			}
 		}
-		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
+		if m := diffTables().diffFileHeader.FindStringSubmatch(line); m != nil {
 			lastOldFile = ""
 			add(diffHeaderPath(m))
 			continue
@@ -220,7 +220,7 @@ func parseDiffStats(diffOutput string) diffStats {
 			lastOldFile = ""
 			continue
 		}
-		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil &&
+		if m := diffTables().diffOldFileHeader.FindStringSubmatch(line); m != nil &&
 
 			i+1 < len(lines) && strings.HasPrefix(lines[i+1], "+++") {
 			lastOldFile = diffHeaderPath(m)

@@ -7,7 +7,7 @@ import (
 
 func TestQuotedHeaderRegexes(t *testing.T) {
 
-	m := diffFileHeader.FindStringSubmatch(`+++ b/"my file.go"`)
+	m := diffTables().diffFileHeader.FindStringSubmatch(`+++ b/"my file.go"`)
 	if m == nil {
 		t.Fatal("quoted +++ header must match (#4686)")
 	}
@@ -15,7 +15,7 @@ func TestQuotedHeaderRegexes(t *testing.T) {
 		t.Fatalf("quoted +++ path = %q, want my file.go", got)
 	}
 
-	m = diffOldFileHeader.FindStringSubmatch(`--- a/"my file.go"`)
+	m = diffTables().diffOldFileHeader.FindStringSubmatch(`--- a/"my file.go"`)
 	if m == nil {
 		t.Fatal("quoted --- header must match (#4686)")
 	}
@@ -23,7 +23,7 @@ func TestQuotedHeaderRegexes(t *testing.T) {
 		t.Fatalf("quoted --- path = %q, want my file.go", got)
 	}
 
-	m = diffFileHeader.FindStringSubmatch("+++ b/plain.go")
+	m = diffTables().diffFileHeader.FindStringSubmatch("+++ b/plain.go")
 	if m == nil || diffHeaderPath(m) != "plain.go" {
 		t.Fatalf("bare +++ must keep working, m=%v", m)
 	}
