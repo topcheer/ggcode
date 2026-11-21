@@ -16,9 +16,17 @@ import (
 )
 
 const (
-	symbolMapMaxPackages        = 25
-	symbolMapMaxPerPkg          = 10
-	symbolMapTimeBudget         = 200 * time.Millisecond
+	symbolMapMaxPackages = 25
+	symbolMapMaxPerPkg   = 10
+	// #5892 round-12: the budget gates the WHOLE scan (collect+extract).
+	// A full scan of a 63-package tree takes ~205ms on an external volume;
+	// at the old 200ms every periodic refresh hit the deadline, truncated
+	// stayed true forever, the complete-cache was never written, and the
+	// round-2/5 stale-but-stable fallback was dead code - each refresh
+	// emitted a load-dependent partial count (61/62/63/64 flip). 2s keeps
+	// one-shot head-assembly latency bounded while letting real trees
+	// complete so the cache actually populates.
+	symbolMapTimeBudget         = 2 * time.Second
 	symbolMapMaxFilesPerPackage = 200
 )
 
