@@ -172,6 +172,7 @@ func hasGoSource(root string) bool {
 
 func collectGoPackageDirs(root string, deadline time.Time) ([]string, bool) {
 	var dirs []string
+	truncatedHit := false
 
 	if dirHasGoFiles(root) {
 		dirs = append(dirs, root)
@@ -179,7 +180,10 @@ func collectGoPackageDirs(root string, deadline time.Time) ([]string, bool) {
 
 	level1, err := os.ReadDir(root)
 	if err != nil {
-		return dirs, false
+		// #5892 round-7: an unreadable root yields a dir set we cannot
+		// trust - surface it as truncated so the caller falls back to
+		// the last complete scan instead of emitting a partial one.
+		return dirs, true
 	}
 
 	for _, e1 := range level1 {
@@ -202,6 +206,12 @@ func collectGoPackageDirs(root string, deadline time.Time) ([]string, bool) {
 
 		level2, err := os.ReadDir(dir1)
 		if err != nil {
+			// #5892 round-7: transient i/o failure (e.g. external-volume
+			// hiccup) silently skipped this subtree and the reduced dir
+			// set still looked COMPLETE - the 63<->61 package flip root.
+			// Mark truncated and keep walking; the caller emits the last
+			// complete scan instead of this partial harvest.
+			truncatedHit = true
 			continue
 		}
 		for _, e2 := range level2 {
@@ -219,7 +229,7 @@ func collectGoPackageDirs(root string, deadline time.Time) ([]string, bool) {
 		}
 	}
 
-	return dirs, false
+	return dirs, truncatedHit
 }
 
 func dirHasGoFiles(dir string) bool {
