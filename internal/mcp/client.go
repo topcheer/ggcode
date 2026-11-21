@@ -1121,7 +1121,9 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 		return nil, fmt.Errorf("mcp[%s]: read http body: %w", c.name, err)
 	}
 	contentType := resp.Header.Get("Content-Type")
-	debug.Log("mcp-http", "response server=%s status=%d content_type=%s body_len=%d", c.name, resp.StatusCode, contentType, len(body))
+	if resp.StatusCode != 200 { // Ring-noise control: happy-path 200s fired per MCP call; only anomalies log.
+		debug.Log("mcp-http", "response server=%s status=%d content_type=%s body_len=%d", c.name, resp.StatusCode, contentType, len(body))
+	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		if retried, handled, err := c.handleHTTPAuthChallenge(ctx, msg, resp, authHeader, allowRetry, oauthHandler); handled {
 			return retried, err

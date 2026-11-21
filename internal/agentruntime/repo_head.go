@@ -10,6 +10,10 @@ import (
 	"github.com/topcheer/ggcode/internal/vcs"
 )
 
+// lastLoggedRepoHead suppresses repeated repo-head log lines when the
+// periodic collector refreshes without a change (ring-noise control).
+var lastLoggedRepoHead string
+
 const repoHeadSectionTimeout = 2 * time.Second
 
 func repoHeadSection(workingDir string) string {
@@ -82,6 +86,10 @@ func computeRepoHeadSection(workingDir string) string {
 	}
 	sb.WriteString(" — commit context: use git_log\n")
 
-	debug.Log("agentruntime", "repo head section: %s", ref)
+	// Ring-noise control: this collector re-fires every ~10s; log only on change.
+	if ref != lastLoggedRepoHead {
+		lastLoggedRepoHead = ref
+		debug.Log("agentruntime", "repo head section: %s", ref)
+	}
 	return strings.TrimRight(sb.String(), "\n")
 }

@@ -51,8 +51,7 @@ func (c *TokenCalibrator) RecordSample(estimatedTokens, actualTokens, asciiChars
 	}
 
 	if (c.samples-calibWarmupSamples)%calibAdjustInterval != 0 {
-		debug.Log("context-calibrator", "sample=%d estimated=%d actual=%d ratio=%.3f/%.3f (no-adjust)",
-			c.samples, estimatedTokens, actualTokens, c.asciiRatio, c.cjkRatio)
+		// Ring-noise control: no-adjust samples fired every stream; dropped.
 		return
 	}
 

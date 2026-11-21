@@ -307,8 +307,10 @@ func (m *Manager) Add(msg provider.Message) {
 		ratio = float64(m.tokenCountLocked()) / float64(m.contextWindow)
 	}
 	persistFn := m.onPersist
-	debug.Log("ctx", "Add: role=%s blocks=%d msg_tokens=%d total=%d max=%d ratio=%.3f baseline=%t",
-		msg.Role, len(msg.Content), msgTokens, m.tokenCountLocked(), m.contextWindow, ratio, m.baselineAvailable)
+	if ratio >= 0.8 { // Ring-noise control: per-message Add fired 2-3 lines/iteration; log only near-compact.
+		debug.Log("ctx", "Add: role=%s blocks=%d msg_tokens=%d total=%d max=%d ratio=%.3f baseline=%t (near-compact)",
+			msg.Role, len(msg.Content), msgTokens, m.tokenCountLocked(), m.contextWindow, ratio, m.baselineAvailable)
+	}
 	m.mu.Unlock()
 	if persistFn != nil {
 		persistFn(msg)

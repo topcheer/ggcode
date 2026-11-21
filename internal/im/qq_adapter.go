@@ -245,7 +245,7 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 	if path == "" {
 		return fmt.Errorf("unknown QQ chat type %q for %s", chatType, channelID)
 	}
-	debug.Log("qq", "adapter=%s outbound kind=%s channel=%s len=%d reply_to=%q msg_seq=%d markdown=%t", a.name, event.Kind, channelID, len(content), replyTo, replySeq, a.markdownSupport)
+	debug.Log("qq", "adapter=%s outbound kind=%s channel=%s len=%d reply_seq=%d markdown=%t", a.name, event.Kind, channelID, len(content), replySeq, a.markdownSupport)
 
 	images, remainingText := ExtractImagesFromText(content)
 
@@ -319,7 +319,11 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 		}
 	}
 
-	debug.Log("qq", "adapter=%s outbound delivered kind=%s channel=%s images=%d seqs_consumed=%d", a.name, event.Kind, channelID, len(images), consumedSeqs)
+	// Ring-noise control: the paired 'outbound delivered' line duplicated the
+	// outbound line for every message. Delivery failures still surface via
+	// their error paths; drop the happy path.
+	_ = consumedSeqs
+	_ = images
 	return nil
 }
 
