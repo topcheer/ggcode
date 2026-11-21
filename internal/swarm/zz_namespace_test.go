@@ -71,3 +71,27 @@ func TestConfirmSessionOnce(t *testing.T) {
 	m.ConfirmSession("sess-Y")
 	_ = filepath.Separator
 }
+
+func TestRebindSessionSwitchesNamespace(t *testing.T) {
+	root := t.TempDir()
+	m := nsManager(t, root, "")
+	m.ConfirmSession("sess-X")
+	m.RebindSession("sess-X") // same id: no-op
+	if got := m.SessionNamespace(); got != "sess-X" {
+		t.Fatalf("same-id rebind changed namespace: %q", got)
+	}
+	m.RebindSession("sess-Y") // different id: switch, no panic
+	if got := m.SessionNamespace(); got != "sess-Y" {
+		t.Fatalf("rebind did not switch namespace: %q", got)
+	}
+	// empty id is ignored, namespace intact
+	m.RebindSession("")
+	if got := m.SessionNamespace(); got != "sess-Y" {
+		t.Fatalf("empty rebind changed namespace: %q", got)
+	}
+	// rebinding back to a previously used id is allowed too (session cycling)
+	m.RebindSession("sess-X")
+	if got := m.SessionNamespace(); got != "sess-X" {
+		t.Fatalf("rebind back failed: %q", got)
+	}
+}

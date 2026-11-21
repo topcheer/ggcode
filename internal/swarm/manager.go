@@ -134,6 +134,25 @@ func (m *Manager) ConfirmSession(sessionID string) {
 	m.sessionID.Store(sessionID)
 }
 
+// RebindSession moves the confirmed session id when the TUI legitimately
+// switches sessions (Ctrl+L new session, /session switch). Unlike
+// ConfirmSession it does NOT panic on a different id - the caller asserts
+// the switch is intentional. Live teammates are expected to be torn down by
+// the caller (handleClearChat cancels the swarm before switching); both
+// sessions' on-disk namespaces are untouched, this only changes which
+// namespace this process addresses next (#5872).
+func (m *Manager) RebindSession(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cur, _ := m.sessionID.Load().(string); cur != sessionID {
+		debug.Log("swarm", "session rebind: %s -> %s (#5872 session switch)", cur, sessionID)
+		m.sessionID.Store(sessionID)
+	}
+}
+
 // SessionNamespace reads the confirmed session id lock-free: it is set
 // exactly once (constructor or ConfirmSession) and never mutated after,
 // and taking m.mu here inverted the lock order against Shutdown's
