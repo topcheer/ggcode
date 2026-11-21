@@ -29,6 +29,19 @@ func sidebarShortID(id string) string {
 
 func (m Model) renderSidebar() string {
 	if tracker := m.renderSidebarTaskTracker(); tracker != "" {
+		// #5874: the task tracker used to replace the ENTIRE sidebar,
+		// which silently hid the Swarm Teams section whenever todos were
+		// being tracked - teams looked "not restored" while being healthy
+		// in the manager. Render the swarm section alongside the tracker.
+		if swarmSection := m.renderSidebarSwarmSection(); swarmSection != "" {
+			swarmBox := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(chromeBorderColor).
+				Padding(0, 1).
+				Width(m.boxInnerWidth(m.sidebarWidth())).
+				Render(swarmSection)
+			return tracker + "\n" + swarmBox
+		}
 		return tracker
 	}
 	vendor, _, model := m.currentSelection()
