@@ -194,7 +194,7 @@ func TestBuildGoPackageSymbolsSection_FileCount(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "c_test.go"), "package main\nfunc TestC() {}\n")
 
 	// File counts left the prompt surface with P3; pin at the extractor.
-	_, fc := extractPackageSymbols(root)
+	_, fc, _ := extractPackageSymbols(root)
 	if fc != 2 {
 		t.Errorf("expected 2 files counted, got %d", fc)
 	}
@@ -244,7 +244,7 @@ func TestExtractPackageSymbols_Dedup(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "a.go"), "package x\ntype Foo struct{}\nfunc Bar() {}\n")
 	mustWrite(t, filepath.Join(dir, "b.go"), "package x\nfunc Bar() {}\n")
 
-	syms, fc := extractPackageSymbols(dir)
+	syms, fc, _ := extractPackageSymbols(dir)
 	if fc != 2 {
 		t.Errorf("expected 2 files, got %d", fc)
 	}

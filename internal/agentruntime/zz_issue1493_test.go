@@ -54,7 +54,7 @@ func TestIssue1493C_GiantPackageCapped(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	symbols, n := extractPackageSymbols(dir)
+	symbols, n, _ := extractPackageSymbols(dir)
 	if n > symbolMapMaxFilesPerPackage {
 		t.Fatalf("package cap failed: parsed %d files, cap is %d", n, symbolMapMaxFilesPerPackage)
 	}
