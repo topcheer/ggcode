@@ -161,7 +161,7 @@ root.go:
 2. Teammate enters idle loop, polls team task board periodically
 3. On task/message received → `handleMessage()` → `executeTask()` → `agent.RunStream()`
 4. Output collected in `strings.Builder`, stored as `LastResult`
-5. Leader retrieves via `teammate_results` or `send_message` reply channel
+5. Leader retrieves via `teammate_results` or `send_message` reply channel. A per-teammate query (`teammate_id`) returns the archived result of that teammate's most recently completed board task when one exists, falling back to the session-level `LastResult` — so later unrelated work does not overwrite the answer to the task you asked about (#5890); whole-team queries return each teammate's latest session output
 
 ### Task Ordering with `depends_on`
 
