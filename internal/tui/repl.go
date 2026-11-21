@@ -1162,6 +1162,24 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 			msgs = append(msgs, subAgentUpdateMsg{AgentID: ev.TeammateID})
 		}
 		r.sendProgramMsgs(msgs...)
+		// WebUI 流式面板:teammate 复用 subagent_delta/done 契约(TUI 面板
+		// 本就 Kind="teammate" 共用同族消息),前端右侧"子代理"tab 零改动渲染。
+		if br := r.model.webuiBridge; br != nil {
+			switch ev.Type {
+			case "teammate_text":
+				br.BroadcastEvent(provider.StreamEvent{
+					Type:     provider.StreamEventSubagentDelta,
+					Subagent: &provider.SubagentEvent{ID: ev.TeammateID, Kind: "text", Text: ev.Result},
+				})
+			case "teammate_idle":
+				if ev.Result != "" {
+					br.BroadcastEvent(provider.StreamEvent{
+						Type:     provider.StreamEventSubagentDone,
+						Subagent: &provider.SubagentEvent{ID: ev.TeammateID, Result: ev.Result, IsError: ev.Error != nil},
+					})
+				}
+			}
+		}
 	})
 
 	mgr.StartStreamBatcher()
