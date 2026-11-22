@@ -44,7 +44,22 @@ var (
 	prefixDriftPath      string
 	prefixDriftEnabled   bool
 	prefixDriftLastCheck time.Time
+
+	// #5892 round-4: per-process rate gate for insert-bare-add records.
+	// Ephemeral per-request Managers each fire one bare-add on their
+	// first system Add onto an empty list (112 records in 47s from two
+	// non-leader PIDs). The gate keeps at most one bare-add record per
+	// window and folds the dropped count into the next written record,
+	// so volume stays observable while the storm is bounded to ~1
+	// line/window.
+	prefixDriftBareAddWindow  = 5 * time.Second // var so tests can shrink the window
+	prefixDriftBareAddLast    time.Time
+	prefixDriftBareAddDropped int
 )
+
+// prefixDriftBareAddEvent is the bare-head insert event from #5892
+// round-3, now rate-limited per process (round-4).
+const prefixDriftBareAddEvent = "insert-bare-add"
 
 // prefixDriftOn reports whether the anchor file exists (2s stat cache).
 func prefixDriftOn() bool {
@@ -89,6 +104,11 @@ type prefixDriftRecord struct {
 	FirstDiffLine int                `json:"firstDiffLine"`
 	DiffOld       string             `json:"diffOld,omitempty"`
 	DiffNew       string             `json:"diffNew,omitempty"`
+	// #5892 round-4: set on a bare-add record that stands in for burst
+	// traffic; Suppressed is the number of insert-bare-add records the
+	// rate gate dropped since the previous written bare-add record.
+	Sampled    bool `json:"sampled,omitempty"`
+	Suppressed int  `json:"suppressed,omitempty"`
 }
 
 func blockFingerprint(idx int, blk provider.ContentBlock) prefixDriftBlock {
@@ -232,6 +252,23 @@ func openPrefixDriftFileLocked(dir string) error {
 	return nil
 }
 
+// prefixDriftBareAddGatePassLocked decides whether this bare-add event
+// is written (first in its window) or counted as dropped. Caller holds
+// prefixDriftMu. The returned count is the number of bare-add records
+// dropped since the previous written one, carried forward onto the
+// current record so burst volume remains visible in the sink.
+func prefixDriftBareAddGatePassLocked() (dropped int, ok bool) {
+	now := time.Now()
+	if !prefixDriftBareAddLast.IsZero() && now.Sub(prefixDriftBareAddLast) < prefixDriftBareAddWindow {
+		prefixDriftBareAddDropped++
+		return 0, false
+	}
+	prefixDriftBareAddLast = now
+	dropped = prefixDriftBareAddDropped
+	prefixDriftBareAddDropped = 0
+	return dropped, true
+}
+
 // recordPrefixDrift captures the fingerprint pair for a head rewrite/insert.
 // Called under m.mu; allocation-light when disabled (anchor stat only).
 func recordPrefixDrift(event string, old, new provider.Message, oldTokens, newTokens int, version, nonTailSeq int64) {
@@ -246,6 +283,20 @@ func recordPrefixDrift(event string, old, new provider.Message, oldTokens, newTo
 		OldTokens:     oldTokens,
 		NewTokens:     newTokens,
 		FirstDiffLine: -1,
+	}
+	// #5892 round-4: rate-limit only bare-add events (the ephemeral
+	// Manager storm); rewrite/insert from real sessions always record.
+	if event == prefixDriftBareAddEvent {
+		prefixDriftMu.Lock()
+		dropped, ok := prefixDriftBareAddGatePassLocked()
+		prefixDriftMu.Unlock()
+		if !ok {
+			return
+		}
+		if dropped > 0 {
+			rec.Sampled = true
+			rec.Suppressed = dropped
+		}
 	}
 	rec.OldBlocks = fingerprintBlocks(old)
 	rec.NewBlocks = fingerprintBlocks(new)
@@ -278,4 +329,8 @@ func ResetPrefixDriftForTest() {
 	prefixDriftPath = ""
 	prefixDriftEnabled = false
 	prefixDriftLastCheck = time.Time{}
+	// #5892 round-4: reset the bare-add rate gate so tests start with an
+	// open window (round-3's single bare head must always be recorded).
+	prefixDriftBareAddLast = time.Time{}
+	prefixDriftBareAddDropped = 0
 }

@@ -295,7 +295,10 @@ func (m *Manager) Add(msg provider.Message) {
 	// these). Surface every head-shaping write, not just the
 	// UpdateFirstSystemMessage ones.
 	if msg.Role == "system" && len(m.messages) == 0 && len(msg.Content) > 0 {
-		recordPrefixDrift("insert-bare-add", provider.Message{}, msg, 0, msgTokens, m.version, m.nonTailMutSeq)
+		// #5892 round-4: this event is rate-limited per process inside
+		// recordPrefixDrift (ephemeral per-request Managers used to storm
+		// the sink); the dropped count travels on the next bare-add record.
+		recordPrefixDrift(prefixDriftBareAddEvent, provider.Message{}, msg, 0, msgTokens, m.version, m.nonTailMutSeq)
 	}
 	m.messages = append(m.messages, msg)
 	if m.runAddedIDs == nil {
