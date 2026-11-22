@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -93,8 +96,10 @@ func SnapshotRules(p *ConfigPolicy, configDir string) *PermissionRulesFile {
 
 	var allowPats, denyPats []string
 	if p.cmdRules != nil {
-		allowPats = userFriendlyPatterns(p.cmdRules.AllowPatterns())
-		denyPats = userFriendlyPatterns(p.cmdRules.DenyPatterns())
+		// #5901: patterns are static per config load; memoize the pure
+		// render instead of re-unescaping per snapshot call (~24GB/s churn).
+		allowPats = userFriendlyPatternsCached(p.cmdRules.AllowPatterns())
+		denyPats = userFriendlyPatternsCached(p.cmdRules.DenyPatterns())
 	}
 	p.mu.RUnlock()
 	data.CommandAllowPatterns = allowPats
@@ -138,6 +143,24 @@ func replaceAll(s, old, new string) string {
 		}
 	}
 	return result
+}
+
+// patMemo caches userFriendlyPatterns results keyed by the pattern set
+// content. Configured pattern sets are a small finite universe, so the map
+// stays bounded without eviction (#5901).
+var patMemo sync.Map
+
+func userFriendlyPatternsCached(patterns []string) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	key := strconv.Itoa(len(patterns)) + "\x00" + strings.Join(patterns, "\x00")
+	if v, ok := patMemo.Load(key); ok {
+		return v.([]string)
+	}
+	out := userFriendlyPatterns(patterns)
+	v, _ := patMemo.LoadOrStore(key, out)
+	return v.([]string)
 }
 
 func unescapeRegex(s string) string {
