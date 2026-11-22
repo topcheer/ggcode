@@ -14,7 +14,19 @@ LEDGER=.ggcode/review-ledger.e${EPOCH}.txt
 # prune then broke the "stale" lock mid-RMW and the loser's entries were
 # lost (TestIssue5390ParallelMarksAllSurvive failed twice on release CI,
 # green locally where the hold was <1s).
+# Lock strategy (#5390 CI round 3): CI/Linux has flock (util-linux) - use a
+# kernel-level lock there for deterministic serialization; the two previous
+# CI-only failures ("mark: ... missing from ledger after write" at
+# 2026-11-22 14:21Z and its predecessor) never reproduced locally (macOS,
+# 3 consecutive green runs) and point at the mkdir-spin timeout/stale-break
+# paths under slow-fork CI runners. macOS has no flock, so local dev keeps
+# the mkdir spin (which is also the documented cross-platform fallback).
 ledger_lock() {
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"${LEDGER}.lock"
+    flock 9 || { echo "ledger flock failed" >&2; exit 1; }
+    return
+  fi
   local dir="${LEDGER}.lockd" i=0 owner
   until mkdir "$dir" 2>/dev/null; do
     owner=$(cat "$dir/owner" 2>/dev/null || true)
@@ -31,6 +43,10 @@ ledger_lock() {
   echo $$ > "$dir/owner"
 }
 ledger_unlock() {
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>&-
+    return
+  fi
   # Only remove OUR lock: if we were broken as "stale" and someone else
   # now holds it, rmdir here would evict the new owner (cascade).
   local dir="${LEDGER}.lockd"
