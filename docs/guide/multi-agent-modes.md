@@ -167,7 +167,11 @@ root.go:
 
 `swarm_task_create` accepts `depends_on`: a list of prerequisite task IDs that must complete before this task becomes runnable. While any dependency is incomplete the task stays parked on the board — it is not delivered to any inbox (even with an `assignee` set), `swarm_task_claim` rejects claims, and `swarm_task_list` shows it as `(blocked by: ...)`. The board unblocks automatically as dependencies complete; no manual unblock step exists. Unknown dependency IDs are rejected at creation (the task is not created). Use this to express cross-teammate ordering (e.g. "review" blocked by "implement") instead of polling completion yourself.
 
-## Worker-to-Leader Report Channel
+#
+Teammates and sub-agents do **not** have the `lanchat` tool: it would dial the LAN under the leader's seat identity (name/role/team), letting a worker impersonate the main agent externally. Workers report through `report_to_leader`; external-facing messaging stays leader-only.
+
+
+# Worker-to-Leader Report Channel
 
 **Code**: `internal/tool/leader_inbox.go`  
 **Wire-up**: `cmd/ggcode/root.go` (CLI/TUI), `internal/agentruntime/subsystems.go` (headless/desktop)  
