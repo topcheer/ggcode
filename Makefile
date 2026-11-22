@@ -103,3 +103,38 @@ store-tag:
 
 store-release:
 	cd mobile/flutter && bash scripts/store_deploy.sh --release
+
+# ---- container images (docker/Dockerfile, per-language tag matrix) ----
+DOCKER_REGISTRY ?= topcheer
+DOCKER_TAG ?= dev
+# enterprise build-time knobs (all optional):
+#   APT_MIRROR   e.g. https://mirrors.internal.com/ubuntu
+#   GO_VERSION   official Go toolchain tarball version
+#   GOARCH       amd64 | arm64
+DOCKER_BUILD_ARGS ?=
+
+define docker_build
+	docker build --target $(1) -t $(DOCKER_REGISTRY)/ggcode:$(2) \
+	  --build-arg APT_MIRROR="$(APT_MIRROR)" \
+	  --build-arg GO_VERSION="$(GO_VERSION)" \
+	  --build-arg GOARCH="$(GOARCH)" $(DOCKER_BUILD_ARGS) \
+	  -f docker/Dockerfile .
+endef
+
+docker-build: docker-build-base docker-build-python docker-build-node docker-build-go docker-build-java docker-build-dotnet docker-build-web docker-build-full
+
+docker-build-base:    ; $(call docker_build,base,base-$(DOCKER_TAG))
+docker-build-python:  ; $(call docker_build,python,python-$(DOCKER_TAG))
+docker-build-node:    ; $(call docker_build,node,node-$(DOCKER_TAG))
+docker-build-go:      ; $(call docker_build,go,go-$(DOCKER_TAG))
+docker-build-java:    ; $(call docker_build,java,java-$(DOCKER_TAG))
+docker-build-dotnet:  ; $(call docker_build,dotnet,dotnet-$(DOCKER_TAG))
+docker-build-web:     ; $(call docker_build,web,web-$(DOCKER_TAG))
+docker-build-full:    ; $(call docker_build,full,full-$(DOCKER_TAG))
+
+docker-smoke:
+	docker run --rm $(DOCKER_REGISTRY)/ggcode:base-$(DOCKER_TAG) --version
+	docker run --rm $(DOCKER_REGISTRY)/ggcode:base-$(DOCKER_TAG) id -u
+	docker run --rm -e GGCODE_CA_DIR=/certs -v /tmp/fake-certs:/certs $(DOCKER_REGISTRY)/ggcode:base-$(DOCKER_TAG) echo CA-MOUNT-OK
+
+.PHONY: docker-build docker-build-base docker-build-python docker-build-node docker-build-go docker-build-java docker-build-dotnet docker-build-web docker-build-full docker-smoke
