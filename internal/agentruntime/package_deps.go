@@ -14,8 +14,15 @@ import (
 )
 
 const (
-	depGraphMaxHubs    = 10
-	depGraphTimeBudget = 200 * time.Millisecond
+	depGraphMaxHubs = 10
+	// #5892 round-13: same disease as the round-12 symbolMapTimeBudget -
+	// the dep-graph scan (collect + import maps + fan-in over ~70
+	// packages) overshoots 200ms on real trees, so computeFanIn hit its
+	// deadline mid-walk and buildPackageDepsSection rendered the PARTIAL
+	// fan-in map directly (no truncation check, no fallback). The head's
+	// "Package dependencies" section then cycled between three different
+	// truncation points (45/34/30 -> 18/15/13 -> 32/23/23 -> ...).
+	depGraphTimeBudget = 2 * time.Second
 	depGraphMinFanIn   = 2
 )
 
