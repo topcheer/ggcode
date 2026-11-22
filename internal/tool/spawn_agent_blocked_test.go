@@ -26,6 +26,7 @@ func TestSubAgentBlockedTools(t *testing.T) {
 		"swarm_task_list":     true,
 		"teammate_results":    true,
 		"teammate_list":       true,
+		"leader_inbox":        true,
 		"send_message":        true,
 		"lanchat":             true,
 

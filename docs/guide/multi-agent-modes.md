@@ -1,6 +1,6 @@
 # Multi-Agent Execution Modes
 
-> Last updated: 2026-07-23
+> Last updated: 2026-11-22
 
 ggcode has multiple mechanisms for delegating work to independent agents. Each differs in isolation level, tool access, and workspace semantics.
 
@@ -166,6 +166,19 @@ root.go:
 ### Task Ordering with `depends_on`
 
 `swarm_task_create` accepts `depends_on`: a list of prerequisite task IDs that must complete before this task becomes runnable. While any dependency is incomplete the task stays parked on the board — it is not delivered to any inbox (even with an `assignee` set), `swarm_task_claim` rejects claims, and `swarm_task_list` shows it as `(blocked by: ...)`. The board unblocks automatically as dependencies complete; no manual unblock step exists. Unknown dependency IDs are rejected at creation (the task is not created). Use this to express cross-teammate ordering (e.g. "review" blocked by "implement") instead of polling completion yourself.
+
+## Worker-to-Leader Report Channel
+
+**Code**: `internal/tool/leader_inbox.go`  
+**Wire-up**: `cmd/ggcode/root.go` (CLI/TUI), `internal/agentruntime/subsystems.go` (headless/desktop)  
+**Session-scoped**: queues are keyed by the session ID; a worker can only reach the leader of its own session
+
+Sub-agents (`agent-*`) and teammates (`tm-*`) can push a mid-run report to their leader instead of staying silent until the final poll:
+
+- `report_to_leader` (worker-only): enqueues one report into the leader's inbox for the current session. Pull-based — the leader is not interrupted; delivery confirms enqueue only. Use it for early completion, blockers, or mid-run decisions; the final result still goes through the normal result channel.
+- `leader_inbox` (leader-only): drains and consumes the current session's pending reports (read = ack). Returns only this session's messages, never other sessions'.
+- Role boundaries ride the registry clone: the leader's own `report_to_leader` instance refuses to run, and worker toolsets receive a `leader_inbox` clone that refuses to drain. Clones freeze the session ID at spawn time, so a worker keeps reporting into the session it was spawned in even if the leader switches sessions (Ctrl+L / `/session`) — the stale session's inbox is dropped on rebind.
+- Each session's inbox is bounded (64 reports); further pushes are rejected until the leader drains it.
 
 ### Dependency Findings Handoff (team blackboard)
 

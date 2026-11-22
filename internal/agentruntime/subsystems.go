@@ -259,6 +259,11 @@ func NewSwarmManager(
 		_ = registry.Register(tool.SwarmTaskCompleteTool{Manager: mgr})
 		_ = registry.Register(tool.TeamReviewDigestTool{Manager: mgr})
 		_ = registry.Register(tool.TeamReviewDecideTool{Manager: mgr})
+		// Session-scoped worker->leader report channel (session id is
+		// confirmed at construction here; freeze it into the tools).
+		inbox := tool.NewLeaderInboxStore()
+		_ = registry.Register(tool.ReportToLeaderTool{Inbox: inbox, SessionID: func() string { return sessionID }})
+		_ = registry.Register(tool.LeaderInboxTool{Inbox: inbox, SessionID: func() string { return sessionID }})
 	}
 	return mgr
 }
