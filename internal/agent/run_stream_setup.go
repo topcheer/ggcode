@@ -354,7 +354,6 @@ func (a *Agent) buildRunTurnContextD2(ctx context.Context, content []provider.Co
 	a.cacheEffMonitor.reset()
 
 	a.changeReconcile.reset()
-	a.claimVerify.reset()
 	a.permDenyStreak.reset()
 	a.crossFileImpact.reset()
 	a.diffSummary.reset()
