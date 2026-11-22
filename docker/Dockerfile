@@ -93,8 +93,11 @@ USER ggcode
 
 FROM base AS dotnet
 USER root
-RUN apt-get update && apt-get install -y --no-install-recommends dotnet-sdk-9.0 \
-    && rm -rf /var/lib/apt/lists/*
+# dotnet-sdk-9.0 is not in ubuntu:24.04 apt repos - use official installer
+RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/di.sh \
+    && bash /tmp/di.sh --channel 9.0 --install-dir /usr/share/dotnet \
+    && ln -sf /usr/share/dotnet/dotnet /usr/local/bin/dotnet \
+    && rm /tmp/di.sh
 USER ggcode
 
 FROM base AS web
@@ -109,8 +112,13 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv \
       openjdk-21-jdk-headless maven gradle \
-      ruby-full php-cli dotnet-sdk-9.0 \
+      ruby-full php-cli \
     && rm -rf /var/lib/apt/lists/*
+# dotnet via official installer (not in ubuntu:24.04 apt repos)
+RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/di.sh \
+    && bash /tmp/di.sh --channel 9.0 --install-dir /usr/share/dotnet \
+    && ln -sf /usr/share/dotnet/dotnet /usr/local/bin/dotnet \
+    && rm /tmp/di.sh
 ARG NODE_MAJOR=22
 RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
