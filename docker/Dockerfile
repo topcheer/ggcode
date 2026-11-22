@@ -19,10 +19,11 @@
 # ==================== stage 0: builder ====================
 FROM golang:1.26-bookworm AS builder
 WORKDIR /src
+ARG TARGETARCH
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOFLAGS=-buildvcs=false go build -tags goolm -trimpath \
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GOFLAGS=-buildvcs=false go build -tags goolm -trimpath \
     -ldflags "-s -w" -o /out/ggcode ./cmd/ggcode
 
 # ==================== stage 1: base (all variants) ====================
@@ -79,8 +80,12 @@ USER ggcode
 FROM base AS go
 USER root
 ARG GO_VERSION=1.26.10
+# Go tarball arch: TARGETARCH (auto-injected by buildx per platform) wins;
+# GOARCH kept as fallback for legacy `docker build` / documented --build-arg flow.
+ARG TARGETARCH
 ARG GOARCH=amd64
-RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz" \
+RUN GO_TARBALL_ARCH="${TARGETARCH:-${GOARCH}}" \
+    && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_TARBALL_ARCH}.tar.gz" \
       | tar -C /usr/local -xz && ln -sf /usr/local/go/bin/go /usr/local/bin/go
 USER ggcode
 
@@ -125,7 +130,9 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && npm install -g pnpm yarn typescript tsx \
     && rm -rf /var/lib/apt/lists/*
 ARG GO_VERSION=1.26.10
+ARG TARGETARCH
 ARG GOARCH=amd64
-RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz" \
+RUN GO_TARBALL_ARCH="${TARGETARCH:-${GOARCH}}" \
+    && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_TARBALL_ARCH}.tar.gz" \
       | tar -C /usr/local -xz && ln -sf /usr/local/go/bin/go /usr/local/bin/go
 USER ggcode

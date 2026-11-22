@@ -46,6 +46,9 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -98,7 +101,7 @@ jobs:
           context: .
           file: docker/Dockerfile
           target: ${{ matrix.target }}
-          platforms: linux/amd64     # add linux/arm64 + GOARCH matrix when needed
+          platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
           tags: ${{ steps.ver.outputs.ghcr_tags }}
@@ -116,7 +119,7 @@ jobs:
           context: .
           file: docker/Dockerfile
           target: ${{ matrix.target }}
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
           tags: ${{ steps.ver.outputs.docker_tags }}
