@@ -1528,6 +1528,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			"ask_user", "spawn_agent", "wait_agent", "list_agents",
 			"teammate_spawn", "teammate_shutdown", "team_create", "team_delete",
 			"team_restore", "leader_inbox",
+			// #5917 round 2: teammates must never hold lanchat - it dials the
+			// LAN as the leader's seat identity (name/role/team), so a worker
+			// could impersonate the main agent externally.
+			"lanchat",
 		} {
 			cloned.Unregister(name)
 		}

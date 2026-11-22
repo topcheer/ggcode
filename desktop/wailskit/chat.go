@@ -1567,6 +1567,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 			"ask_user", "spawn_agent", "wait_agent", "list_agents",
 			"teammate_spawn", "teammate_shutdown", "team_create", "team_delete",
 			"leader_inbox",
+			"lanchat", // #5917 round 2: no LAN identity for teammates
 		} {
 			cloned.Unregister(name)
 		}
