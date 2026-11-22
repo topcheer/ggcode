@@ -13,6 +13,14 @@ docs
 skills
 agent/skills
 cmd/e2e_test
+mobile
+web
+ggcode
+ggcode-latest
+ggcode.exe
+node_modules
+vendor
 *.md
 Dockerfile
 docker/
+!docker/entrypoint.sh
