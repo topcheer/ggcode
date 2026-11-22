@@ -35,6 +35,7 @@ var subAgentBlockedTools = []string{
 	"swarm_task_list",
 	"teammate_results",
 	"teammate_list",
+	"leader_inbox",
 	"send_message",
 	"lanchat",
 	"a2a_remote",

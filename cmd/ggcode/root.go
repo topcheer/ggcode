@@ -733,6 +733,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	// pre-agent prompt stays unfiltered only until that first rebuild.
 	swarm.SetProcessOwnerSession(ag.SessionID())
 
+	// Session-scoped worker->leader report channel: workers (agent-*/tm-*)
+	// push mid-run reports via report_to_leader; the leader drains them
+	// with leader_inbox. Queues are keyed by the session id resolved live
+	// from the agent; worker toolsets receive clones that freeze it.
+	leaderInboxStore := tool.NewLeaderInboxStore()
+	_ = registry.Register(tool.ReportToLeaderTool{Inbox: leaderInboxStore, SessionID: func() string { return ag.SessionID() }})
+	_ = registry.Register(tool.LeaderInboxTool{Inbox: leaderInboxStore, SessionID: func() string { return ag.SessionID() }})
+
 	// Memory v2: resident memory curator. It watches memory save/delete
 	// events and runs a debounced headless curation pass (tag, merge,
 	// archive stale temporal facts) through the same store APIs the
@@ -1519,7 +1527,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		for _, name := range []string{
 			"ask_user", "spawn_agent", "wait_agent", "list_agents",
 			"teammate_spawn", "teammate_shutdown", "team_create", "team_delete",
-			"team_restore",
+			"team_restore", "leader_inbox",
 		} {
 			cloned.Unregister(name)
 		}
@@ -1917,6 +1925,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 		repl.SetSessionCreatedCallback(func(sessionID string) {
 			if prev := swarmMgr.SessionNamespace(); prev != "" && prev != sessionID {
 				swarmMgr.RebindSession(sessionID)
+				// Session-switch lifecycle: drop the previous session's
+				// worker->leader inbox so the new session's leader can never
+				// inherit reports addressed to the old one.
+				leaderInboxStore.DropSession(prev)
 			} else {
 				swarmMgr.ConfirmSession(sessionID)
 			}
