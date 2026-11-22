@@ -81,18 +81,48 @@ type claimVerifyPattern struct {
 	anchored bool
 }
 
+// claimVerifyMaxRegexBody caps the size of a `re:` pattern body that may
+// be compiled into claimVerifyReCache (issue #5878 phase 2). Bodies above
+// the cap are never handed to regexp.Compile: an arbitrarily large body
+// builds a full regexp syntax tree plus compiled program that the cache
+// then retains for the whole process lifetime (issue #5878 measured
+// ~66MB retained per syntax tree, 533.7MB total in one live process).
+// Oversized bodies fall back to plain-string verification instead (see
+// claimVerifyMatch / claimVerifyMatchAnchored).
+const claimVerifyMaxRegexBody = 4 << 10 // 4KiB
+
+// claimVerifyCompileRegex compiles body unless it exceeds
+// claimVerifyMaxRegexBody; oversized or syntactically invalid bodies
+// return nil so callers fall back to the non-regex verification path.
+func claimVerifyCompileRegex(body string) *regexp.Regexp {
+	if len(body) > claimVerifyMaxRegexBody {
+		return nil
+	}
+	if re, err := regexp.Compile(body); err == nil {
+		return re
+	}
+	return nil
+}
+
+// claimVerifyReCache holds the compiled `re:` matchers for the static
+// claimVerifyPatterns list. It is built once at init and is bounded by
+// construction: at most two entries per static pattern, every body within
+// claimVerifyMaxRegexBody. Per-session claimVerifyState keeps no matchers,
+// so there is no per-claim retention and no release path is needed
+// (issue #5878 phase 2 retention check).
 var claimVerifyReCache = func() map[string]*regexp.Regexp {
 	m := make(map[string]*regexp.Regexp)
 	for _, cvp := range claimVerifyPatterns {
-		if strings.HasPrefix(cvp.pattern, "re:") {
-			body := strings.TrimPrefix(cvp.pattern, "re:")
-			if re, err := regexp.Compile(body); err == nil {
-				m[cvp.pattern] = re
-			}
-			if cvp.anchored {
-				if re, err := regexp.Compile(`(?:^|\s)(?:` + body + `)`); err == nil {
-					m[cvp.pattern+"|anchored"] = re
-				}
+		if !strings.HasPrefix(cvp.pattern, "re:") {
+			continue
+		}
+		body := strings.TrimPrefix(cvp.pattern, "re:")
+		if re := claimVerifyCompileRegex(body); re != nil {
+			m[cvp.pattern] = re
+		}
+		if cvp.anchored {
+			if re := claimVerifyCompileRegex(`(?:^|\s)(?:` + body + `)`); re != nil {
+				m[cvp.pattern+"|anchored"] = re
 			}
 		}
 	}
@@ -104,7 +134,9 @@ func claimVerifyMatch(lower, pattern string) bool {
 		if re := claimVerifyReCache[pattern]; re != nil {
 			return re.MatchString(lower)
 		}
-		return false
+		// Oversized or uncompilable body (issue #5878): verify via plain
+		// string containment instead of compiling a regexp.
+		return strings.Contains(lower, strings.TrimPrefix(pattern, "re:"))
 	}
 	return strings.Contains(lower, pattern)
 }
@@ -310,15 +342,17 @@ func (c *claimVerifyState) check(toolName, content string, isError bool, cmd str
 func claimVerifyMatchAnchored(lower, pattern string) bool {
 	if strings.HasPrefix(pattern, "re:") {
 		re := claimVerifyReCache[pattern+"|anchored"]
-		if re == nil {
+		if re != nil {
+			for _, line := range strings.Split(lower, "\n") {
+				if re.MatchString(strings.TrimRight(line, "\r")) {
+					return true
+				}
+			}
 			return false
 		}
-		for _, line := range strings.Split(lower, "\n") {
-			if re.MatchString(strings.TrimRight(line, "\r")) {
-				return true
-			}
-		}
-		return false
+		// Oversized or uncompilable body (issue #5878): never compile it;
+		// verify via the same plain line-prefix rule as the literal path.
+		pattern = strings.TrimPrefix(pattern, "re:")
 	}
 	for _, line := range strings.Split(lower, "\n") {
 		if strings.HasPrefix(strings.TrimRight(line, "\r"), pattern) {
