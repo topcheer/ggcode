@@ -1,0 +1,18 @@
+# slim docker build context (repo is multi-GB with desktop/mobile subtrees)
+# used by: docker build -f docker/Dockerfile .  (context = repo root)
+.git
+.ggcode
+bin
+desktop
+ggcode-desktop
+ggcode-mobile
+ggcode-relay
+ggcode-tui
+acp-registry
+docs
+skills
+agent/skills
+cmd/e2e_test
+*.md
+Dockerfile
+docker/
