@@ -57,7 +57,12 @@ require (
 	modernc.org/sqlite v1.62.0
 )
 
-require cloud.google.com/go/auth/oauth2adapt v0.3.1 // indirect
+require (
+	cel.dev/expr v0.26.0 // indirect
+	cloud.google.com/go/auth/oauth2adapt v0.3.1 // indirect
+	fiatjaf.com/lib v0.3.7 // indirect
+	github.com/FastFilter/xorfilter v0.5.1 // indirect
+)
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
