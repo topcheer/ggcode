@@ -730,10 +730,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			a.appendGuidance(&result, compoundingGuidance)
 		}
 
-		if claimGuidance := a.claimVerify.check(tc.Name, result.Content, result.IsError, extractCommandFromToolCall(tc.Arguments)); claimGuidance != "" {
-			a.appendGuidance(&result, claimGuidance)
-		}
-
 		if modeGuard := a.permDenyStreak.record(a.currentMode(), result); modeGuard != "" {
 			a.appendGuidance(&result, modeGuard)
 		}

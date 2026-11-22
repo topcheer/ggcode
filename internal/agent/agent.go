@@ -282,7 +282,6 @@ type Agent struct {
 	scopeNarrow                  *scopeNarrowState
 	complexityGate               *complexityGateState
 	changeReconcile              *changeReconcileState
-	claimVerify                  *claimVerifyState
 	permDenyStreak               *permDenyStreakState
 	diffSummary                  *diffSummaryState
 	goalFinish                   *goalFinishState
@@ -577,7 +576,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		complexityGate:         newComplexityGateState(),
 		changeReconcile:        newChangeReconcileState(),
 		docDrift:               newDocDriftState(),
-		claimVerify:            newClaimVerifyState(),
 		permDenyStreak:         newPermDenyStreakState(),
 		diffSummary:            newDiffSummaryState(),
 		goalFinish:             newGoalFinishState(),
