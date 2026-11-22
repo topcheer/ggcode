@@ -5,7 +5,7 @@ name: docker-release
 #
 # Tag matrix (per-language targets from docker/Dockerfile):
 #   ghcr.io/<owner>/ggcode:<lang>-v1.3.x, <lang>-latest   (full also gets: latest)
-#   docker.io/topcheer/ggcode:<same tags>
+#   docker.io/ggcodedev/ggcode:<same tags>
 #
 # Secrets (repo-level):
 #   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN - Docker Hub push (docker.io side is
@@ -83,10 +83,10 @@ jobs:
           if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
             {
               echo "docker_tags<<EOF"
-              echo "topcheer/ggcode:${LANG_TAG}-v${V}"
-              echo "topcheer/ggcode:${LANG_TAG}-latest"
+              echo "ggcodedev/ggcode:${LANG_TAG}-v${V}"
+              echo "ggcodedev/ggcode:${LANG_TAG}-latest"
               if [ "${{ matrix.target }}" = "full" ]; then
-                echo "topcheer/ggcode:latest"
+                echo "ggcodedev/ggcode:latest"
               fi
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
