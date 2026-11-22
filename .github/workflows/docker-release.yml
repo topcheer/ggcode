@@ -1,0 +1,123 @@
+name: docker-release
+
+# Publish ggcode container images to BOTH GitHub Container Registry (ghcr.io)
+# and Docker Hub (docker.io) on version tags.
+#
+# Tag matrix (per-language targets from docker/Dockerfile):
+#   ghcr.io/<owner>/ggcode:<lang>-v1.3.x, <lang>-latest   (full also gets: latest)
+#   docker.io/ggcodedev/ggcode:<same tags>
+#
+# Secrets (repo-level):
+#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN - Docker Hub push (docker.io side is
+#   skipped gracefully when unset; ghcr.io always publishes via GITHUB_TOKEN).
+#
+# Triggers:
+#   - push tag v*            (release flow)
+#   - workflow_dispatch      (manual, optional tag input)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to build (e.g. v1.3.290); defaults to current ref"
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-push:
+    name: ${{ matrix.target }} → ghcr + dockerhub
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [base, python, node, go, java, dotnet, web, full]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub (optional)
+        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+
+      - name: Compute version tags
+        id: ver
+        run: |
+          RAW="${{ inputs.tag || github.ref_name }}"
+          V="${RAW#v}"                     # v1.3.290 -> 1.3.290
+          LANG_TAG="${{ matrix.target }}"
+          {
+            echo "ghcr_tags<<EOF"
+            echo "ghcr.io/${{ github.repository_owner }}/ggcode:${LANG_TAG}-v${V}"
+            echo "ghcr.io/${{ github.repository_owner }}/ggcode:${LANG_TAG}-latest"
+            if [ "${{ matrix.target }}" = "full" ]; then
+              echo "ghcr.io/${{ github.repository_owner }}/ggcode:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
+            {
+              echo "docker_tags<<EOF"
+              echo "ggcodedev/ggcode:${LANG_TAG}-v${V}"
+              echo "ggcodedev/ggcode:${LANG_TAG}-latest"
+              if [ "${{ matrix.target }}" = "full" ]; then
+                echo "ggcodedev/ggcode:latest"
+              fi
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & push (ghcr.io always; docker.io when secrets present)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/amd64     # add linux/arm64 + GOARCH matrix when needed
+          push: true
+          provenance: false
+          tags: ${{ steps.ver.outputs.ghcr_tags }}
+          labels: |
+            org.opencontainers.image.title=ggcode
+            org.opencontainers.image.description=ggcode container - ${{ matrix.target }} toolchain variant
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,scope=${{ matrix.target }},mode=max
+
+      - name: Build & push (docker.io, when secrets present)
+        if: ${{ steps.ver.outputs.docker_tags != '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ steps.ver.outputs.docker_tags }}
+          cache-from: type=gha,scope=${{ matrix.target }}
