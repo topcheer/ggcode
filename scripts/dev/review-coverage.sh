@@ -7,20 +7,36 @@ EPOCH=$(cat "$EPOCH_FILE" 2>/dev/null || echo 1)
 LEDGER=.ggcode/review-ledger.e${EPOCH}.txt
 
 # Cross-platform ledger lock (mkdir is atomic everywhere; flock is Linux-only).
-# Spin with timeout; stale locks older than 1 minute are broken forcibly.
+# Spin with timeout. Break stale locks ONLY when the owning process is dead
+# (kill -0); an ownerless lock (pre-owner-fix legacy) is broken after 1min.
+# #5390 CI race, round 2: mark used to fork `git ls-files` per path WHILE
+# holding this lock, which exceeded 1min on slow CI runners - concurrent
+# prune then broke the "stale" lock mid-RMW and the loser's entries were
+# lost (TestIssue5390ParallelMarksAllSurvive failed twice on release CI,
+# green locally where the hold was <1s).
 ledger_lock() {
-  local dir="${LEDGER}.lockd" i=0
+  local dir="${LEDGER}.lockd" i=0 owner
   until mkdir "$dir" 2>/dev/null; do
-    if [ -n "$(find "$dir" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
-      rmdir "$dir" 2>/dev/null || rm -rf "$dir"   # stale lock - break it
-      continue
+    owner=$(cat "$dir/owner" 2>/dev/null || true)
+    if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+      rm -rf "$dir"; continue          # owner died - break it
+    fi
+    if [ -z "$owner" ] && [ -n "$(find "$dir" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      rm -rf "$dir"; continue          # legacy ownerless lock - break it
     fi
     i=$((i+1))
     [ "$i" -gt 100 ] && { echo "ledger lock timeout ($dir)" >&2; exit 1; }
     sleep 0.1
   done
+  echo $$ > "$dir/owner"
 }
-ledger_unlock() { rmdir "${LEDGER}.lockd" 2>/dev/null || true; }
+ledger_unlock() {
+  # Only remove OUR lock: if we were broken as "stale" and someone else
+  # now holds it, rmdir here would evict the new owner (cascade).
+  local dir="${LEDGER}.lockd"
+  [ "$(cat "$dir/owner" 2>/dev/null)" = "$$" ] && rm -rf "$dir" 2>/dev/null
+  return 0
+}
 
 all_files() {
   { git ls-files -s -- '*.go' | grep -v '_test\.go$' || true;
@@ -77,18 +93,17 @@ case "${1:-status}" in
   mark)
     shift
     [ $# -lt 1 ] && { echo "usage: $0 mark <path>..." >&2; exit 1; }
-    # Concurrency-safe: serialize the read-modify-write and use a unique tmp
-    # file so parallel marks cannot lose entries or collide on a shared temp
-    # path (issue #5390).
-    ledger_lock; trap ledger_unlock EXIT
-    touch "$LEDGER"
+    # Resolve tracked lines OUTSIDE the lock (#5390 CI race round 2): the
+    # per-path `git ls-files` forks (with #5483 retries) held the lock
+    # >1min on slow CI runners; inside the lock only millisecond-level
+    # file writes remain, so the stale-break can never fire mid-RMW.
     marked=''
+    n=0
+    mklist=$(mktemp -d)
     for p in "$@"; do
       # #5483: `git ls-files ... || true` swallowed transient fork/exec
-      # failures under CI memory pressure - the mark silently became a
-      # "skip (not tracked)" and exited 0, losing the entry (observed as
-      # "mark of pkg/fh.go lost" with every cmd green). Retry transient
-      # failures; only an exit-0-but-empty result is a genuine skip.
+      # failures under CI memory pressure - retry; exit-0-but-empty is a
+      # genuine skip.
       line=$(git ls-files -s -- "$p" 2>/dev/null) && git_ok=1 || git_ok=0
       for _try in 1 2 3; do
         [ "$git_ok" = 1 ] && break
@@ -97,14 +112,26 @@ case "${1:-status}" in
       done
       if [ "$git_ok" != 1 ]; then
         echo "mark: git ls-files failed for $p (transient, gave up after retries)" >&2
+        rm -rf "$mklist" 2>/dev/null
         exit 1
       fi
       if [ -z "$line" ]; then echo "skip (not tracked): $p" >&2; continue; fi
+      printf '%s\n' "$line" > "$mklist/$n.line"
+      printf '%s\n' "$p" > "$mklist/$n.path"
+      n=$((n+1))
+      marked="$marked $p"
+    done
+    if [ "$n" -eq 0 ]; then rm -rf "$mklist" 2>/dev/null; exit 0; fi
+    ledger_lock; trap 'ledger_unlock; rm -rf "$mklist" 2>/dev/null' EXIT
+    touch "$LEDGER"
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      line=$(cat "$mklist/$i.line"); p=$(cat "$mklist/$i.path")
       tmp=$(mktemp "${LEDGER}.XXXXXX")
       { grep -vF "$(printf '\t')$p" "$LEDGER" || true; } > "$tmp"
       printf '%s\n' "$line" >> "$tmp"
       mv "$tmp" "$LEDGER"
-      marked="$marked $p"
+      i=$((i+1))
     done
     # #5483 belt: every path actually written must be present in the ledger
     # on exit - any silent write loss becomes a loud failure instead of a
@@ -115,6 +142,7 @@ case "${1:-status}" in
         exit 1
       fi
     done
+    rm -rf "$mklist" 2>/dev/null
     ;;
   prune)
     td=$(mktemp -d)
