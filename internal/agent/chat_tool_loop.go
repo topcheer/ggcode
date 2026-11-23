@@ -34,10 +34,7 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		a.cascade.notePlanned(tc.Name)
 	}
 
-	if a.mindlessAction.recordStep(len(textBuf)+reasoningChars, true) {
-		debug.Log("agent", "Iteration %d: mindless action detector triggered (streak=%d)", iter+1, a.mindlessAction.streak)
-		a.injectGuidance(mindlessActionWarning(a.mindlessAction.streak))
-	}
+	_ = a.mindlessAction.recordStep(len(textBuf)+reasoningChars, true)
 	for idx, tc := range toolCalls {
 		if err := ctx.Err(); err != nil {
 

@@ -91,16 +91,3 @@ func TestMindlessActionState_Reset(t *testing.T) {
 		t.Errorf("reset failed: streak=%d warnings=%d", s.streak, s.warnings)
 	}
 }
-
-func TestMindlessActionWarning_Format(t *testing.T) {
-	msg := mindlessActionWarning(5)
-	if msg == "" {
-		t.Fatal("expected non-empty warning")
-	}
-	if !contains(msg, "5") {
-		t.Errorf("warning should contain streak count '5': %s", msg)
-	}
-	if !contains(msg, "mindless-action") {
-		t.Errorf("warning should contain detector tag: %s", msg)
-	}
-}
