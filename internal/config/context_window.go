@@ -621,6 +621,7 @@ var knownModelCapabilities = map[string]modelCapability{
 	"glm-5.2-highspeed":                                             {ContextWindow: 1000000, MaxOutputTokens: 131072},
 	"glm-5.2@eu":                                                    {ContextWindow: 1048576, MaxOutputTokens: 131072},
 	"glm-5.3":                                                       {ContextWindow: 1048576, MaxOutputTokens: 131072},
+	"glm-5.4":                                                       {ContextWindow: 1048576, MaxOutputTokens: 131072, SupportsVision: true},
 	"glm-5.3-flash":                                                 {ContextWindow: 1000000, MaxOutputTokens: 131072, SupportsVision: true},
 	"glm-5.3-flash-free":                                            {ContextWindow: 200000, MaxOutputTokens: 32000, SupportsVision: true},
 	"glm-5.3-flash@eu":                                              {ContextWindow: 1000000, MaxOutputTokens: 131072, SupportsVision: true},
