@@ -1,10 +1,10 @@
 ---
-import { t, localizedPath, type Locale } from '../i18n/utils';
+import { t, localizedPath, withBase, type Locale } from '../i18n/utils';
 
 interface Props { locale: Locale; currentPath: string }
 const { locale, currentPath } = Astro.props;
 const other: Locale = locale === 'en' ? 'zh' : 'en';
-const otherHref = localizedPath(other, currentPath);
+const otherHref = withBase(localizedPath(other, currentPath));
 const links = [
   { href: '#product', key: 'nav.product' },
   { href: '#features', key: 'nav.features' },
@@ -15,7 +15,7 @@ const links = [
 
 <header class="nav" id="top">
   <div class="container nav-inner">
-    <a class="brand" href={locale === 'en' ? '/' : '/zh/'} aria-label="ggcode">
+    <a class="brand" href={withBase(locale === 'en' ? '/' : '/zh/')} aria-label="ggcode">
       <span class="brand-mark" aria-hidden="true">&gt;_</span>
       <span class="brand-name">ggcode</span>
     </a>

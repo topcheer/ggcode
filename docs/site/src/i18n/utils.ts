@@ -32,6 +32,13 @@ export function localizedPath(locale: Locale, pathname: string): string {
   return rest ? `/zh/${rest}` : '/zh/';
 }
 
+/** Prefix a root-absolute site path with the configured Astro base.
+ *  '/' at the domain root (ggcode.dev), '/ggcode' on the GitHub Pages project site. */
+export function withBase(path: string): string {
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+  return base + (path.startsWith('/') ? path : `/${path}`);
+}
+
 export function localeHtmlLang(locale: Locale): string {
   return locale === 'zh' ? 'zh-CN' : 'en';
 }

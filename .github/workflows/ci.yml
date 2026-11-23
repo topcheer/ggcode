@@ -213,11 +213,18 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
-      - name: Build + type-check + link-check
+      - name: Build + type-check + link-check (root base, production)
         if: steps.filter.outputs.site == 'true'
         run: |
           cd docs/site
           npm ci --no-audit --no-fund
           npx astro check
+          npm run build
+      - name: Build + link-check (GitHub Pages /ggcode base)
+        if: steps.filter.outputs.site == 'true'
+        env:
+          SITE_BASE: /ggcode
+        run: |
+          cd docs/site
           npm run build
 

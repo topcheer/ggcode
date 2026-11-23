@@ -8,7 +8,7 @@ import '../styles/tokens.css';
 import '../styles/global.css';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
-import { t, localeHtmlLang, localeOgLocale, localeHreflang, localizedPath, DEFAULT_LOCALE, type Locale } from '../i18n/utils';
+import { t, localeHtmlLang, localeOgLocale, localeHreflang, localizedPath, withBase, DEFAULT_LOCALE, type Locale } from '../i18n/utils';
 
 interface Props {
   locale: Locale;
@@ -73,8 +73,8 @@ const jsonLd = {
     <title>{title}</title>
     <meta name="description" content={description} />
     <meta name="theme-color" content="#0a0e1a" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="apple-touch-icon" href="/ggcode-banner.png" />
+    <link rel="icon" type="image/svg+xml" href={withBase('/favicon.svg')} />
+    <link rel="apple-touch-icon" href={withBase('/ggcode-banner.png')} />
     {noindex ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={canonical} />}
     {!noindex && <link rel="alternate" hreflang={localeHreflang('en')} href={enHref} />}
     {!noindex && <link rel="alternate" hreflang={localeHreflang('zh')} href={zhHref} />}

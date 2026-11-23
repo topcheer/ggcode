@@ -1,5 +1,5 @@
 ---
-import { t, type Locale } from '../i18n/utils';
+import { t, withBase, type Locale } from '../i18n/utils';
 interface Props { locale: Locale }
 const { locale } = Astro.props;
 const year = new Date().getFullYear();
@@ -14,8 +14,8 @@ const year = new Date().getFullYear();
     <ul class="footer-links">
       <li><a href="https://github.com/topcheer/ggcode" rel="noopener" target="_blank">GitHub</a></li>
       <li><a href="https://github.com/topcheer/ggcode/releases" rel="noopener" target="_blank">Releases</a></li>
-      <li><a href={locale === 'en' ? '/privacy.html' : '/zh/privacy.html'}>Privacy</a></li>
-      <li><a href={locale === 'en' ? '/terms.html' : '/zh/terms.html'}>Terms</a></li>
+      <li><a href={withBase(locale === 'en' ? '/privacy.html' : '/zh/privacy.html')}>Privacy</a></li>
+      <li><a href={withBase(locale === 'en' ? '/terms.html' : '/zh/terms.html')}>Terms</a></li>
     </ul>
     <p class="footer-note">© {year} ggcode · <span class="muted">{t(locale, 'hero.sub').split('—')[0].trim()}</span></p>
   </div>
