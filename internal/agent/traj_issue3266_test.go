@@ -6,55 +6,6 @@ import (
 	"time"
 )
 
-func TestIssue3266_TeammateReingestIdempotent(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", t.TempDir())
-
-	t0 := time.Now().Add(-3 * time.Hour)
-	writeLedger(t, dir, []map[string]any{
-		{"ts": t0, "team_id": "t1", "teammate": "tm-1 (coder)", "digest": "first digest"},
-		{"ts": t0.Add(time.Hour), "team_id": "t1", "teammate": "tm-2 (tester)", "digest": "second digest"},
-		{"ts": t0.Add(2 * time.Hour), "team_id": "t1", "teammate": "tm-3 (coder)", "digest": "third digest"},
-	})
-
-	flush := func() []trajectoryLearning {
-		s := newTrajIntelState()
-		s.ingestTeammateExperience(dir)
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if err := s.persistLocked(); err != nil {
-			t.Fatal(err)
-		}
-		return readStoreRows(t, filepath.Join(dir, ".ggcode", "trajectory-learnings.jsonl"))
-	}
-
-	after1 := flush()
-	if len(after1) != 1 {
-		t.Fatalf("expected one merged row, got %d", len(after1))
-	}
-	row := after1[0]
-	if row.Reinforced != 2 {
-		t.Fatalf("merge wrong: %+v", row)
-	}
-	if row.Insight != "(unverified outcome) teammate experience: third digest" {
-		t.Fatalf("newest digest must win the merge, got %q", row.Insight)
-	}
-
-	after2 := flush()
-	if len(after2) != 1 {
-		t.Fatalf("expected still one row, got %d", len(after2))
-	}
-	if after2[0].Reinforced != row.Reinforced {
-		t.Fatalf("re-ingest must be idempotent: Reinforced %d -> %d", row.Reinforced, after2[0].Reinforced)
-	}
-	if after2[0].Confidence != row.Confidence {
-		t.Fatalf("re-ingest must be idempotent: Confidence %v -> %v", row.Confidence, after2[0].Confidence)
-	}
-	if after2[0].Insight != row.Insight {
-		t.Fatal("re-ingest must be idempotent: Insight drifted")
-	}
-}
-
 func TestIssue3266_DecayCrossesFloorAndNoResurrect(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	old := time.Now().UTC().Add(-10 * trajConfidenceHalfLife)

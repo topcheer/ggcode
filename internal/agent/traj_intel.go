@@ -750,14 +750,6 @@ func TrajBackflowFromWorktree(mainWorkingDir, worktreePath string) {
 	}
 }
 
-type teammateExperienceEntry struct {
-	Ts       time.Time `json:"ts"`
-	TeamID   string    `json:"team_id"`
-	Teammate string    `json:"teammate"`
-	Digest   string    `json:"digest"`
-	Outcome  string    `json:"outcome,omitempty"`
-}
-
 const (
 	trajPromptMinConfidence = 0.3
 
@@ -851,72 +843,6 @@ func consolidateLearnings(all []trajectoryLearning) []trajectoryLearning {
 		out = append(out, l)
 	}
 	return out
-}
-
-func (s *trajIntelState) ingestTeammateExperience(workingDir string) {
-	if workingDir == "" {
-		return
-	}
-	if s.filePath == "" {
-		s.filePath = filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
-	}
-	ledger := filepath.Join(workingDir, ".ggcode", "teammate-experience.jsonl")
-	data, err := os.ReadFile(ledger)
-	if err != nil || len(data) == 0 {
-		return
-	}
-	var newest time.Time
-	if existing, err := s.loadFromFile(); err == nil {
-		for _, l := range existing {
-			if l.Type != "teammate" {
-				continue
-			}
-
-			for _, ts := range []time.Time{l.Timestamp, l.LastReinforced} {
-				if ts.After(newest) {
-					newest = ts
-				}
-			}
-		}
-	}
-
-	var fresh []trajectoryLearning
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var e teammateExperienceEntry
-		if json.Unmarshal([]byte(line), &e) != nil || e.Digest == "" {
-			continue
-		}
-		if !e.Ts.After(newest) {
-			continue
-		}
-		// Legacy entries carry no outcome and must not be counted as wins
-		// (they used to be hardcoded Success:true, poisoning the trust score).
-		success := e.Outcome == "success"
-		insight := "teammate experience: " + truncateTask(e.Digest, 300)
-		if e.Outcome == "" {
-			insight = "(unverified outcome) " + insight
-		}
-		fresh = append(fresh, trajectoryLearning{
-			Timestamp: e.Ts,
-			Type:      "teammate",
-			Task:      truncateTask("swarm/"+e.Teammate, 120),
-			Success:   success,
-			Insight:   insight,
-			Category:  "teammate_experience",
-		})
-	}
-	if len(fresh) == 0 {
-		return
-	}
-
-	s.mu.Lock()
-	s.learnings = append(s.learnings, fresh...)
-	s.mu.Unlock()
-	debug.Log("traj-intel", "ingested %d teammate experience entries", len(fresh))
 }
 
 type trajKey struct{ cat, typ string }
