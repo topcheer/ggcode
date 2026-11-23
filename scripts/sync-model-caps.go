@@ -357,6 +357,31 @@ var upstreamCapabilityOverrides = map[string]capabilityOverride{
 	"deepseek-v4-flash:0731":          {1048576, 393216},
 	"deepseek-v4-pro:0813":            {1048576, 393216},
 	"deepseek-v4-pro@eu":              {1048576, 393216},
+
+	// W48 calibration (2026-11-23, official-docs audit; sources in PR body):
+	// Claude sonnet-4 / 4-5 non-dated aliases: 1M ctx is beta-header only,
+	// default tier is 200K per docs.claude.com models overview.
+	"claude-sonnet-4":   {200000, 64000},
+	"claude-sonnet-4-5": {200000, 64000},
+	// Sonnet 4.6 family out=128K; think/@eu aliases carried a stale 64K.
+	"claude-sonnet-4-6-think": {1000000, 128000},
+	"claude-sonnet-4-6@eu":    {1000000, 128000},
+	// gpt-oss-120b max output is 131072 per OpenAI model page (upstream 40960).
+	"gpt-oss-120b": {131072, 131072},
+	// Qwen4-Max family: official max out 262144 (thinking cap) per
+	// help.aliyun.com qwen4-max page (upstream 393216).
+	"qwen-4-max":        {1000000, 262144},
+	"qwen4-max-preview": {1000000, 262144},
+	// Mistral: codestral-2508 GA ctx is 128K (upstream 256K); ministral-3b-2512
+	// ctx is 256K (upstream 131K). Out values keep per-key upstream lines.
+	"codestral-2508":      {131072, 8192},
+	"codestral-latest":    {131072, 4096},
+	"ministral-3b-2512":   {262144, 131072},
+	"ministral-3b-latest": {262144, 128000},
+	// Kimi: k2-6 ctx aligns to K2 family 262144 (upstream 256000);
+	// k3-1-pro-highspeed aligns to K3 dotted family 1048576/1048576.
+	"kimi-k2-6":               {262144, 65536},
+	"kimi-k3-1-pro-highspeed": {1048576, 1048576},
 }
 
 // capabilityOverrideFor resolves a capability override, tolerating both
