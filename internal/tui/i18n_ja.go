@@ -150,10 +150,6 @@ func jaCatalog(key string) string {
 		return "Ctrl+C クリア/終了"
 	case "hint.image_attached_count":
 		return "%d 個の画像が添付されました"
-	case "hint.follow_panel":
-		return "Ctrl+N フォロー"
-	case "hint.unfollow_panel":
-		return "Ctrl+N フォロー解除"
 	case "queued.count":
 		return "%d 件キュー中"
 	case "interrupt.delivered":
@@ -176,20 +172,6 @@ func jaCatalog(key string) string {
 		return "現在のプロバイダーは推論強度をサポートしていません"
 	case "reasoning.effort.unsupported":
 		return "現在のプロバイダーは推論強度をサポートしていません"
-	case "follow.loading":
-		return "  フォロービューを読み込み中..."
-	case "follow.active_agent":
-		return "エージェント %s をフォロー中 — 入力一時停止。Esc で戻る。"
-	case "follow.active_teammate":
-		return "チームメイト %s をフォロー中 — 入力一時停止。Esc で戻る。"
-	case "follow.status_running":
-		return "実行中"
-	case "follow.status_done":
-		return "完了"
-	case "follow.more":
-		return "  +%d 件以上"
-	case "follow.hint":
-		return "  ↑↓←→ 切替  Esc 閉じる"
 	case "status.tools_used":
 		return "ツール %d 回使用"
 	case "approval.rejected":
@@ -933,7 +915,6 @@ func jaCatalog(key string) string {
   Tab                補完または承認選択をサイクル
   Shift+Tab          補完を逆サイクル、または権限モードを切替
   Ctrl+R             サイドバーを切替
-  Ctrl+N/P           新規/前のセッション
   Ctrl+T             トンネルを開く（モバイル共有）
   Enter              メッセージ送信 / 現在の選択を適用
   Esc                補完をキャンセル / アイドルシェルモードを終了

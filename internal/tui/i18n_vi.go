@@ -150,10 +150,6 @@ func viCatalog(key string) string {
 		return "Ctrl+C xóa/thoát"
 	case "hint.image_attached_count":
 		return "đã đính kèm %d ảnh"
-	case "hint.follow_panel":
-		return "Ctrl+N theo dõi"
-	case "hint.unfollow_panel":
-		return "Ctrl+N bỏ theo dõi"
 	case "queued.count":
 		return "%d trong hàng đợi"
 	case "interrupt.delivered":
@@ -176,20 +172,6 @@ func viCatalog(key string) string {
 		return "Mức suy nghĩ không được hỗ trợ bởi nhà cung cấp hiện tại"
 	case "reasoning.effort.unsupported":
 		return "Mức suy nghĩ không được hỗ trợ bởi nhà cung cấp hiện tại"
-	case "follow.loading":
-		return "  Đang tải chế độ xem theo dõi..."
-	case "follow.active_agent":
-		return "Đang theo dõi agent %s — đầu vào tạm dừng. Nhấn Esc để quay lại."
-	case "follow.active_teammate":
-		return "Đang theo dõi teammate %s — đầu vào tạm dừng. Nhấn Esc để quay lại."
-	case "follow.status_running":
-		return "đang chạy"
-	case "follow.status_done":
-		return "hoàn thành"
-	case "follow.more":
-		return "  +%d nữa"
-	case "follow.hint":
-		return "  ↑↓←→ chuyển  Esc đóng"
 	case "status.tools_used":
 		return "đã dùng %d công cụ"
 	case "approval.rejected":
@@ -889,7 +871,6 @@ Phím tắt:
   Tab                Xoay vòng autocomplete hoặc lựa chọn phê duyệt
   Shift+Tab          Xoay vòng ngược autocomplete, hoặc bật/tắt chế độ quyền
   Ctrl+R             Bật/tắt thanh bên
-  Ctrl+N/P           Phiên mới/trước đó
   Ctrl+T             Mở tunnel (chia sẻ di động)
   Enter              Gửi tin nhắn / áp dụng lựa chọn hiện tại
   Esc                Hủy autocomplete / thoát chế độ shell chờ

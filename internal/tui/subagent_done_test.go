@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -59,34 +58,6 @@ func TestSubAgentDoneMsg_BusyAgent(t *testing.T) {
 	}
 
 	assertSystemMessage(t, &m, "completed", "researcher")
-}
-
-func TestSubAgentDoneMsg_BusyAgentSchedulesGraceCleanup(t *testing.T) {
-	m := NewModel(nil, nil)
-	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
-	m.loading = true
-
-	id := m.subAgentMgr.Spawn("researcher", "researcher", "work", nil, context.Background())
-	for _, sa := range m.subAgentMgr.List() {
-		if sa.ID == id {
-			sa.Status = subagent.StatusCompleted
-			sa.EndedAt = time.Now()
-		}
-	}
-
-	next, cmd := m.Update(subAgentDoneMsg{
-		AgentID:   id,
-		AgentName: "researcher",
-		Kind:      "subagent",
-	})
-	m = next.(Model)
-
-	if cmd == nil {
-		t.Fatal("expected grace cleanup tick when a terminal subagent remains visible")
-	}
-	if count := m.pendingSubmissionCount(); count != 0 {
-		t.Fatalf("expected 0 pending submissions when busy, got %d", count)
-	}
 }
 
 func TestSubAgentDoneMsg_Error(t *testing.T) {

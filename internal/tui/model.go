@@ -47,7 +47,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tmux"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tui/cmdpane"
-	extpane "github.com/topcheer/ggcode/internal/tui/extpane"
 	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/update"
 	"github.com/topcheer/ggcode/internal/usage"
@@ -310,7 +309,6 @@ type Model struct {
 	pluginMgr            *plugin.Manager
 	subAgentMgr          *subagent.Manager
 	jobManager           *toolpkg.CommandJobManager
-	subAgentFollow       subAgentFollowState
 	usageTurnIndex       int
 	lastMetricDigestTurn int
 	metricCollectorFlush func()
@@ -476,8 +474,6 @@ type Model struct {
 
 	pendingTunnelConnected bool
 	tunnelSpawned          map[string]bool
-
-	extPaneMgr *extpane.Manager
 
 	cmdPaneMgr *cmdpane.Manager
 
@@ -703,7 +699,6 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		tmuxManager:            tmux.SharedManager(tmuxWorkspace),
 		tmuxEnv:                tmuxEnv,
 		tmuxStartupSetupLayout: tmuxStartupSetupLayout,
-		extPaneMgr:             extpane.NewManager(),
 		petEnabled:             true,
 		pet:                    &petState{},
 	}

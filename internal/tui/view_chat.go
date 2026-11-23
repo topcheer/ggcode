@@ -17,29 +17,6 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 	innerW := m.conversationInnerWidth()
 	innerH := conversationInnerHeight(panelHeight)
 
-	if m.subAgentFollow.isActive() {
-		width := m.boxInnerWidth(m.mainColumnWidth())
-		style := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("208")).
-			Padding(0, 1).
-			Width(width).
-			Height(panelHeight).
-			MaxHeight(panelHeight)
-
-		entry := m.subAgentFollow.getOrCreateView(m.subAgentFollow.activeID, innerW, innerH)
-		entry.list.SetSize(innerW, innerH)
-
-		if entry.list.Len() > 0 {
-			return style.Render(entry.list.Render())
-		}
-
-		placeholder := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("8")).
-			Render(m.t("follow.loading"))
-		return style.Render(placeholder)
-	}
-
 	if debug.IsVerbose("layout") {
 		debug.Log("layout", "panel ph=%d iw=%d ih=%d n=%d",
 			panelHeight, innerW, innerH, m.chatList.Len())

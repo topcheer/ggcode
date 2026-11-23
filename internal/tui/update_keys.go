@@ -126,11 +126,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
-	if msg.String() == "ctrl+c" && m.subAgentFollow.isActive() {
-		m.subAgentFollow.deactivate()
-		return m, nil
-	}
-
 	if msg.String() == "ctrl+c" && len(m.langOptions) == 0 && m.closeActivePanel() {
 		return m, nil
 	}
@@ -458,7 +453,7 @@ approvalGate:
 		}
 	}
 
-	if m.loading && (msg.String() == "ctrl+c" || msg.String() == "esc") && !m.subAgentFollow.isActive() {
+	if m.loading && (msg.String() == "ctrl+c" || msg.String() == "esc") {
 		m.resetExitConfirm()
 		if m.cancelConfirmPending {
 			m.cancelActiveRun()
@@ -469,19 +464,6 @@ approvalGate:
 	}
 
 	switch msg.String() {
-	case "ctrl+n":
-
-		if len(m.subAgentFollow.slots) > 0 {
-			if m.subAgentFollow.isActive() {
-				m.subAgentFollow.deactivate()
-			} else {
-				m.subAgentFollow.activate(0)
-				m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
-			}
-			return m, nil
-		}
-	case "ctrl+p":
-
 	case "$", "!":
 		if !m.shellMode && !m.chatMode && !m.projectMemoryLoading && strings.TrimSpace(m.input.Value()) == "" {
 			m.setShellMode(true)
@@ -541,16 +523,6 @@ approvalGate:
 
 	case "up":
 
-		if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
-			currentIdx := m.subAgentFollow.currentSlotIndex()
-			if currentIdx > 0 {
-				m.subAgentFollow.activate(currentIdx - 1)
-			} else {
-				m.subAgentFollow.activate(len(m.subAgentFollow.slots) - 1)
-			}
-			m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
-			return m, nil
-		}
 		if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
 			m.autoCompleteIndex = (m.autoCompleteIndex - 1 + len(m.autoCompleteItems)) % len(m.autoCompleteItems)
 			var cmd tea.Cmd
@@ -560,16 +532,6 @@ approvalGate:
 		return m.handleHistoryUp()
 	case "down":
 
-		if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
-			currentIdx := m.subAgentFollow.currentSlotIndex()
-			if currentIdx < len(m.subAgentFollow.slots)-1 {
-				m.subAgentFollow.activate(currentIdx + 1)
-			} else {
-				m.subAgentFollow.activate(0)
-			}
-			m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
-			return m, nil
-		}
 		if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
 			m.autoCompleteIndex = (m.autoCompleteIndex + 1) % len(m.autoCompleteItems)
 			var cmd tea.Cmd
@@ -579,28 +541,8 @@ approvalGate:
 		return m.handleHistoryDown()
 	case "left":
 
-		if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
-			currentIdx := m.subAgentFollow.currentSlotIndex()
-			if currentIdx > 0 {
-				m.subAgentFollow.activate(currentIdx - 1)
-			} else {
-				m.subAgentFollow.activate(len(m.subAgentFollow.slots) - 1)
-			}
-			m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
-			return m, nil
-		}
 	case "right":
 
-		if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
-			currentIdx := m.subAgentFollow.currentSlotIndex()
-			if currentIdx < len(m.subAgentFollow.slots)-1 {
-				m.subAgentFollow.activate(currentIdx + 1)
-			} else {
-				m.subAgentFollow.activate(0)
-			}
-			m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
-			return m, nil
-		}
 	case "tab":
 		if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
 			if len(m.autoCompleteItems) == 1 {
@@ -614,7 +556,7 @@ approvalGate:
 		now := time.Now()
 		if !m.exitConfirmPending && !m.cancelConfirmPending &&
 			!m.autoCompleteActive &&
-			!m.subAgentFollow.isActive() && !m.loading && !m.shellMode && !m.chatMode {
+			!m.loading && !m.shellMode && !m.chatMode {
 			if !m.lastEscPress.IsZero() && now.Sub(m.lastEscPress) < 500*time.Millisecond {
 				m.lastEscPress = time.Time{}
 				m.chatWriteSystem(nextSystemID(), m.t("rewind.activated"))
@@ -645,10 +587,6 @@ approvalGate:
 			return m, nil
 		}
 
-		if m.subAgentFollow.isActive() {
-			m.subAgentFollow.deactivate()
-			return m, nil
-		}
 	case "enter":
 		if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
 			return m, m.applyAutoComplete()

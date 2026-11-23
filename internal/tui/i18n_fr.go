@@ -150,10 +150,6 @@ func frCatalog(key string) string {
 		return "Ctrl+C effacér/quitter"
 	case "hint.image_attached_count":
 		return "%d imâge(s) jointe(s)"
-	case "hint.follow_panel":
-		return "Ctrl+N suivre"
-	case "hint.unfollow_panel":
-		return "Ctrl+N ne plus suivre"
 	case "queued.count":
 		return "%d en fîle"
 	case "interrupt.delivered":
@@ -176,20 +172,6 @@ func frCatalog(key string) string {
 		return "Effort de réflexion non supporte par le fournisseur actuel"
 	case "reasoning.effort.unsupported":
 		return "L'effort de réflexion n'est pas supporte par le fournisseur actuel"
-	case "follow.loading":
-		return "  Chargément de la vue de suivi..."
-	case "follow.active_agent":
-		return "Suivi de l'agent %s — entrée en pause. Appuyez sur Esc pour revenir."
-	case "follow.active_teammate":
-		return "Suivi du coequipier %s — entrée en pause. Appuyez sur Esc pour revenir."
-	case "follow.status_running":
-		return "en cours"
-	case "follow.status_done":
-		return "terminé"
-	case "follow.more":
-		return "  +%d de plus"
-	case "follow.hint":
-		return "  ↑↓←→ changer  Esc fermér"
 	case "status.tools_used":
 		return "%d outils utilisés"
 	case "approval.rejected":
@@ -894,7 +876,6 @@ Raccourcis clavier:
   Tab                Naviguer l'autocompletion ou les options d'approbation
   Shift+Tab          Autocompletion inverse, ou basculer le mode de permission
   Ctrl+R             Basculer la barre laterale
-  Ctrl+N/P           Nouvelle/session précédente
   Ctrl+T             Ouvrir tunnel (partâge mobile)
   Enter              Envoyér messâge / appliquér la sélection actuelle
   Esc                Annulér l'autocompletion / quitter le mode shell inactif

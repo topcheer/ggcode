@@ -150,10 +150,6 @@ func esCatalog(key string) string {
 		return "Ctrl+C limpiar/salir"
 	case "hint.image_attached_count":
 		return "%d imagen(es) adjunta(s)"
-	case "hint.follow_panel":
-		return "Ctrl+N seguir"
-	case "hint.unfollow_panel":
-		return "Ctrl+N dejar seguir"
 	case "queued.count":
 		return "%d en cola"
 	case "interrupt.delivered":
@@ -176,20 +172,6 @@ func esCatalog(key string) string {
 		return "Esfuerzo de razónamiento no soportado por el proveedor actual"
 	case "reasoning.effort.unsupported":
 		return "El esfuerzo de razónamiento no es soportado por el proveedor actual"
-	case "follow.loading":
-		return "  Cargando vista de seguimiento..."
-	case "follow.active_agent":
-		return "Siguiendo agente %s — entrada pausada. Presione Esc para volver."
-	case "follow.active_teammate":
-		return "Siguiendo compañero %s — entrada pausada. Presione Esc para volver."
-	case "follow.status_running":
-		return "ejecutando"
-	case "follow.status_done":
-		return "completado"
-	case "follow.more":
-		return "  +%d más"
-	case "follow.hint":
-		return "  ↑↓←→ cambiar  Esc cerrar"
 	case "status.tools_used":
 		return "%d herramientas usadas"
 	case "approval.rejected":
@@ -894,7 +876,6 @@ Atajos de teclado:
   Tab                Ciclar autocompletar o opciones de aprobación
   Shift+Tab          Ciclar autocompletar inverso, o alternar modo de permiso
   Ctrl+R             Alternar barra lateral
-  Ctrl+N/P           Nueva/sesión anterior
   Ctrl+T             Abrir tunnel (compartir móvil)
   Enter              Enviar mensaje / aplicar selección actual
   Esc                Cancelar autocompletar / salir del modo shell inactivo

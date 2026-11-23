@@ -125,9 +125,6 @@ type subAgentDoneMsg struct {
 	Kind      string
 }
 
-type subAgentFollowRefreshMsg struct{}
-type followGraceTickMsg struct{}
-
 type subAgentsCancelDoneMsg struct{}
 
 type systemNotifyMsg struct {

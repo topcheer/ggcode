@@ -150,10 +150,6 @@ func koCatalog(key string) string {
 		return "Ctrl+C 지우기/종료"
 	case "hint.image_attached_count":
 		return "이미지 %d개 첨부됨"
-	case "hint.follow_panel":
-		return "Ctrl+N 팔로우"
-	case "hint.unfollow_panel":
-		return "Ctrl+N 언팔로우"
 	case "queued.count":
 		return "%d개 대기 중"
 	case "interrupt.delivered":
@@ -176,20 +172,6 @@ func koCatalog(key string) string {
 		return "현재 제공자는 추론 강도를 지원하지 않음"
 	case "reasoning.effort.unsupported":
 		return "현재 제공자는 추론 강도를 지원하지 않습니다"
-	case "follow.loading":
-		return "  팔로우 뷰 로딩 중..."
-	case "follow.active_agent":
-		return "에이전트 %s 팔로우 중 — 입력 일시정지. Esc로 돌아가기."
-	case "follow.active_teammate":
-		return "팀원 %s 팔로우 중 — 입력 일시정지. Esc로 돌아가기."
-	case "follow.status_running":
-		return "실행 중"
-	case "follow.status_done":
-		return "완료"
-	case "follow.more":
-		return "  +%d개 더"
-	case "follow.hint":
-		return "  ↑↓←→ 전환  Esc 닫기"
 	case "status.tools_used":
 		return "도구 %d회 사용"
 	case "approval.rejected":
@@ -944,7 +926,6 @@ func koCatalog(key string) string {
   Tab                자동완성 또는 승인 선택 항목 순환
   Shift+Tab         자동완성 역방향 순환, 그 외에는 권한 모드 전환
   Ctrl+R             사이드바 전환
-  Ctrl+N/P           새 세션 / 이전 세션
   Ctrl+T             터널 열기 (모바일 공유)
   Enter              메시지 전송 / 현재 선택 적용
   Esc                자동완성 취소 / 셸 모드 종료
