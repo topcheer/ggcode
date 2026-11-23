@@ -11,7 +11,8 @@
     "build": "astro build && node scripts/postbuild.mjs && node scripts/check-links.mjs",
     "preview": "astro preview",
     "check": "astro check",
-    "lint:links": "node scripts/check-links.mjs"
+    "lint:links": "node scripts/check-links.mjs",
+    "lhci": "lhci autorun"
   },
   "dependencies": {
     "@astrojs/sitemap": "^3.0.0",
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.12",
+    "@lhci/cli": "^0.16.1",
     "@types/three": "^0.182.0",
     "typescript": "^5.9.0"
   }
