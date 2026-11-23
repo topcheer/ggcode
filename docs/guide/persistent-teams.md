@@ -36,6 +36,23 @@ The legacy single-level store (`~/.ggcode/swarm/teams/<teamID>/`, plus the
 Pre-#5863 stores should be archived (e.g. `teams.legacy-<date>`); there is no
 in-place migration.
 
+## Discovering teams
+
+The system prompt's `## Persistent Teams` section lists the persisted teams
+known **at prompt build time** (name, team id, member count, last active) -
+it is a snapshot, so a team created or restored mid-session is not in it.
+For the live picture call `team_list` (leader-only):
+
+```
+team_list {"description": "list teams"}
+```
+
+It prints every team visible to this session: live teams with each
+member's status / current task, and persisted-but-not-restored teams with
+their manifest roster (name, id, role, last active) plus the exact
+`team_restore` call to revive each one. `teammate_list` only addresses a
+team that is already live.
+
 ## Restoring a team
 
 Use the `team_restore` tool (by team name or team ID):
