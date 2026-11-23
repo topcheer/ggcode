@@ -153,30 +153,13 @@ func (m Model) renderSidebarMCPSection() string {
 			failed++
 		}
 	}
+	// Stats only: the per-server list and the active-tool list live in /mcp;
+	// the sidebar just carries the counts. The active-tool count gets its
+	// own row because the default sidebar (~30 cols) cannot fit it on the
+	// summary line without truncation.
 	rows = append(rows, util.Truncate(fmt.Sprintf("%d up • %d pending • %d failed", connected, pending, failed), width))
-	visibleServers := activeServers
-	if len(visibleServers) > 5 {
-		visibleServers = visibleServers[:5]
-	}
-	for _, srv := range visibleServers {
-		icon := "✕"
-		switch {
-		case srv.Connected:
-			icon = "✓"
-		case srv.Pending:
-			icon = "…"
-		}
-		label := fmt.Sprintf("%s %s (%s)", icon, srv.Name, util.FirstNonEmpty(srv.Transport, "stdio"))
-		rows = append(rows, util.Truncate(label, width))
-	}
-	if hidden := len(activeServers) - len(visibleServers); hidden > 0 {
-		rows = append(rows, util.Truncate(m.t("mcp.more", hidden), width))
-	}
-	if active := m.activeMCPToolSummaries(); len(active) > 0 {
-		rows = append(rows, "", util.Truncate(m.t("mcp.active_tools"), width))
-		for _, item := range active {
-			rows = append(rows, util.Truncate("• "+item, width))
-		}
+	if active := len(m.activeMCPTools); active > 0 {
+		rows = append(rows, util.Truncate(fmt.Sprintf("%d active tools", active), width))
 	}
 	return strings.Join(rows, "\n")
 }
@@ -253,17 +236,8 @@ func (m Model) renderSidebarIMSection() string {
 			healthy++
 		}
 	}
+	// Stats only: per-adapter detail lives in /im status.
 	rows = append(rows, util.Truncate(m.t("im.summary", len(adapters), healthy), width))
-	visible := adapters
-	if len(visible) > 5 {
-		visible = visible[:5]
-	}
-	for _, state := range visible {
-		rows = append(rows, util.Truncate(sidebarIMAdapterLabel(state), width))
-	}
-	if hidden := len(adapters) - len(visible); hidden > 0 {
-		rows = append(rows, util.Truncate(m.t("im.more", hidden), width))
-	}
 	return strings.Join(rows, "\n")
 }
 
@@ -331,27 +305,6 @@ func (m Model) sidebarIMRuntimeStatus() string {
 		return m.t("im.runtime.disabled")
 	}
 	return m.t("im.runtime.not_started")
-}
-
-func sidebarIMAdapterLabel(state im.AdapterState) string {
-	icon := "✕"
-	switch {
-	case state.Healthy:
-		icon = "✓"
-	case strings.TrimSpace(state.Status) == "muted":
-		icon = "○"
-	case strings.TrimSpace(state.LastError) == "":
-		icon = "…"
-	}
-	status := compactSingleLine(util.FirstNonEmpty(strings.TrimSpace(state.Status), strings.TrimSpace(state.LastError), "unknown"))
-	if status == "" {
-		status = "unknown"
-	}
-	platform := strings.TrimSpace(string(state.Platform))
-	if platform == "" {
-		platform = "im"
-	}
-	return fmt.Sprintf("%s %s (%s) %s", icon, util.FirstNonEmpty(strings.TrimSpace(state.Name), "adapter"), platform, status)
 }
 
 func (m Model) renderSidebarTaskTracker() string {
