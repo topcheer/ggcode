@@ -88,7 +88,7 @@ internal/
     # Optimization layers (see Agent Optimization Stack below):
     # speculate.go, memoize.go, budget_guard.go, cache_keepalive.go,
     # error_classifier.go, confidence.go, playbook.go, ratchet.go,
-    # ratchet_reactive.go, verify_hint.go, tool_output_guard.go,
+    # ratchet.go, verify_hint.go, tool_output_guard.go,
     # parallel_tools.go, overseer.go, loop_detect.go,
     # repetition_tracker.go, reflection.go, verify.go,
     # autopilot_strategist.go, todo_check.go
@@ -737,7 +737,7 @@ The agent loop (`internal/agent/`) includes multiple research-inspired optimizat
 | Error streak | `loop_detect.go` | SICA (arXiv:2504.15228) | Progressive guidance at 4/7/10 consecutive errors |
 | Drift detection | `overseer.go` | SICA | Progressive drift at 20/40/60 iterations |
 | Repetition tracker | `repetition_tracker.go` | SICA | Detect failed-edit clusters on same file |
-| Ratchet rules | `ratchet.go`, `ratchet_reactive.go` | SICA | Learn error patterns from failures, inject preventively |
+| Ratchet rules | `ratchet.go` | SICA | Learn error patterns from failures, match proactively (reactive result-injection channel removed with the advisory-gate sweep; RuleStore data layer remains) |
 | Strategy playbook | `playbook.go` | ACE (ICLR 2026) | Learn successful tool patterns, inject as hints |
 | Smart verify hint | `verify_hint.go` | Generate-Verify-Fix loop | Post-edit build reminders with smart reset |
 | Fallback checkpoint | `agent_compact.go` | — | Force checkpoint when messages > 500 even if compaction fails |
