@@ -1,5 +1,11 @@
 # Error Cascade Detection
 
+> **Status: removed in #5940 (2026-11-24).** The `[Error Cascade]` detector
+> and its in-loop hints (`[Error Cascade]`, `[: ROOT CAUSE]`, `[: ABORT]`)
+> were deleted as guidance noise; the only surviving piece is `isEditingTool`,
+> which now lives in `internal/agent/editing_tools.go`. Kept as a historical
+> design record - the code paths below no longer exist.
+
 ## Overview
 
 Detects when multiple tool errors across different tools share a common root cause (file path or symbol), forming a **cascade** -- a chain of dependent failures from a single source problem.
