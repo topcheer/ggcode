@@ -1504,8 +1504,6 @@ func (a *Agent) runStreamEpilogue(ctx context.Context, content []provider.Conten
 
 	if a.trajIntel != nil {
 
-		a.trajIntel.ingestTeammateExperience(a.WorkingDir())
-
 		if !isCancelled {
 			a.trajIntel.recordInjectionOutcome(a.WorkingDir(), runStats.Success)
 
