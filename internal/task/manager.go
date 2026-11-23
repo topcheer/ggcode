@@ -73,6 +73,22 @@ type Manager struct {
 	mu     sync.Mutex
 	tasks  map[string]*Task
 	nextID int
+
+	// onChange, when set, fires after every successful mutation (Create /
+	// Update / Delete) with the manager lock already released, so the
+	// callback may re-enter SnapshotJSON. RestoreJSON does not fire it: a
+	// load must never write back. Wired by the swarm layer so board status
+	// transitions made outside the tool layer (teammate claim / complete /
+	// rollback in the idle loop) reach disk - without it those transitions
+	// lived only in memory and a restart re-claimed finished work.
+	onChange func()
+}
+
+// SetOnChange registers a post-mutation callback (see Manager.onChange).
+func (m *Manager) SetOnChange(fn func()) {
+	m.mu.Lock()
+	m.onChange = fn
+	m.mu.Unlock()
 }
 
 func NewManager() *Manager {
@@ -83,7 +99,13 @@ func NewManager() *Manager {
 
 func (m *Manager) Create(subject, description, activeForm string, metadata map[string]string) Task {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer func() {
+		fn := m.onChange
+		m.mu.Unlock()
+		if fn != nil {
+			fn()
+		}
+	}()
 
 	m.nextID++
 	id := fmt.Sprintf("task-%d", m.nextID)
@@ -212,7 +234,14 @@ func truncateDigestSubject(s string) string {
 
 func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	changed := false
+	defer func() {
+		fn := m.onChange
+		m.mu.Unlock()
+		if changed && fn != nil {
+			fn()
+		}
+	}()
 
 	t, ok := m.tasks[taskID]
 	if !ok {
@@ -325,12 +354,20 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 	}
 
 	t.UpdatedAt = time.Now()
+	changed = true
 	return t.Snapshot(), nil
 }
 
 func (m *Manager) Delete(taskID string) bool {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	deleted := false
+	defer func() {
+		fn := m.onChange
+		m.mu.Unlock()
+		if deleted && fn != nil {
+			fn()
+		}
+	}()
 
 	if _, ok := m.tasks[taskID]; !ok {
 		return false
@@ -344,6 +381,7 @@ func (m *Manager) Delete(taskID string) bool {
 		other.BlockedBy = removeString(other.BlockedBy, taskID)
 	}
 	delete(m.tasks, taskID)
+	deleted = true
 	return true
 }
 

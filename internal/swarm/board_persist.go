@@ -138,6 +138,31 @@ func (m *Manager) loadTeamBoard(teamID string) *task.Manager {
 	if rolled > 0 {
 		debug.Log("swarm", "board restore for %s: rolled back %d in_progress task(s) to pending", teamID, rolled)
 	}
+
+	// Root cause of "teammate re-runs finished tasks after restart": board
+	// persistence used to fire only from EmitBoardUpdated, whose callers
+	// are all tool-layer (leader-issued swarm_task_*). The teammate idle
+	// loop's own transitions (claim -> in_progress, complete, rollback)
+	// mutated the in-memory board only, so board.json on disk stayed at the
+	// creation snapshot (all pending) and the next restart re-claimed
+	// everything. Hook every later mutation to a synchronous flush so no
+	// call site can forget, and a kill right after a transition still finds
+	// the new state on disk.
+	//
+	// Wired AFTER the in_progress -> pending rollback on purpose: that
+	// rollback is an in-memory assumption ("the previous owner died") that
+	// must not clobber the disk record while another live seat may still
+	// own the task - ClaimTaskSingleWinner's disk check relies on it
+	// (#4781). Once this seat really claims, the claim itself persists.
+	// loadTeamBoardRaw (throwaway reads) deliberately stays unwired.
+	tm.SetOnChange(func() {
+		persistMu.Lock()
+		defer persistMu.Unlock()
+		if err := m.persistTeamBoardNow(teamID, tm); err != nil {
+			debug.Log("swarm", "board persist for %s: %v", teamID, err)
+		}
+	})
+
 	return tm
 }
 
