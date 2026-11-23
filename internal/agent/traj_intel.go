@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/debug"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,73 +11,50 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
-
-	"github.com/topcheer/ggcode/internal/debug"
 )
 
 const (
-	trajIntelMinIterations = 3
-
-	trajIntelMaxEntries = 50
-
+	trajIntelMinIterations          = 3
+	trajIntelMaxEntries             = 50
 	trajIntelHighIterationThreshold = 15
-
-	trajIntelLowEditThreshold = 2
-
-	trajIntelHighRetryRatio = 0.25
-
-	trajIntelHighContextRatio = 0.80
-
-	trajIntelHighCompaction = 2
+	trajIntelLowEditThreshold       = 2
+	trajIntelHighRetryRatio         = 0.25
+	trajIntelHighContextRatio       = 0.80
+	trajIntelHighCompaction         = 2
 )
 
 type trajectoryLearning struct {
-	Timestamp time.Time      `json:"timestamp"`
-	Type      string         `json:"type"`
-	Task      string         `json:"task"`
-	Success   bool           `json:"success"`
-	Insight   string         `json:"insight"`
-	Metrics   map[string]int `json:"metrics,omitempty"`
-	Category  string         `json:"category"`
-
-	Confidence     float64   `json:"confidence,omitempty"`
-	Reinforced     int       `json:"reinforced,omitempty"`
-	LastReinforced time.Time `json:"last_reinforced,omitempty"`
-
-	InjectedRuns int `json:"injected_runs,omitempty"`
-	AfterSuccess int `json:"after_success,omitempty"`
-	AfterFail    int `json:"after_fail,omitempty"`
-
-	Refined string `json:"refined,omitempty"`
+	Timestamp      time.Time      `json:"timestamp"`
+	Type           string         `json:"type"`
+	Task           string         `json:"task"`
+	Success        bool           `json:"success"`
+	Insight        string         `json:"insight"`
+	Metrics        map[string]int `json:"metrics,omitempty"`
+	Category       string         `json:"category"`
+	Confidence     float64        `json:"confidence,omitempty"`
+	Reinforced     int            `json:"reinforced,omitempty"`
+	LastReinforced time.Time      `json:"last_reinforced,omitempty"`
 }
-
 type trajIntelState struct {
 	mu        sync.Mutex
 	learnings []trajectoryLearning
 	filePath  string
 	loaded    bool
-
-	injectedThisRun map[trajKey]bool
-
-	holdoutThisRun map[trajKey]bool
 }
 
 func newTrajIntelState() *trajIntelState {
 	return &trajIntelState{}
 }
-
 func (s *trajIntelState) extractInsights(stats *RunStats) []trajectoryLearning {
 	if stats == nil || stats.Iterations < trajIntelMinIterations {
 		return nil
 	}
-
 	// #5118: the user prompt is the most common secret carrier - redact
 	// BEFORE truncation so a key spanning the 120-rune boundary cannot leak
 	// a partial (unmatchable) fragment.
 	task := truncateTask(redactTrainText(stats.UserPrompt), 120)
 	now := time.Now()
 	totalToolCalls := totalToolCallCount(stats.ToolCalls)
-
 	failedCalls := stats.ErrorCount
 	errorRatio := 0.0
 	if totalToolCalls > 0 {
@@ -87,7 +65,6 @@ func (s *trajIntelState) extractInsights(stats *RunStats) []trajectoryLearning {
 	if stats.ContextWindow > 0 {
 		contextRatio = float64(stats.ContextPeakTokens) / float64(stats.ContextWindow)
 	}
-
 	metrics := map[string]int{
 		"iterations":  stats.Iterations,
 		"tool_calls":  totalToolCalls,
@@ -95,9 +72,7 @@ func (s *trajIntelState) extractInsights(stats *RunStats) []trajectoryLearning {
 		"errors":      failedCalls,
 		"compactions": stats.CompactionCount,
 	}
-
 	var learnings []trajectoryLearning
-
 	if stats.Success && stats.Iterations <= 8 && editCount > 0 && errorRatio < 0.1 {
 		topTools := topToolNames(stats.ToolCalls, 3)
 		learnings = append(learnings, trajectoryLearning{
@@ -110,7 +85,6 @@ func (s *trajIntelState) extractInsights(stats *RunStats) []trajectoryLearning {
 			Category:  "efficient-completion",
 		})
 	}
-
 	if stats.Success && failedCalls > 0 {
 		errSummary := summarizeErrors(stats.Errors)
 		learnings = append(learnings, trajectoryLearning{
@@ -123,7 +97,6 @@ func (s *trajIntelState) extractInsights(stats *RunStats) []trajectoryLearning {
 			Category:  "error-recovery",
 		})
 	}
-
 	if stats.Iterations >= trajIntelHighIterationThreshold && editCount <= trajIntelLowEditThreshold {
 		readHeavy := isReadHeavy(stats.ToolCalls)
 		verb := "exploration-heavy"
@@ -144,7 +117,6 @@ func (s *trajIntelState) extractInsights(stats *RunStats) []trajectoryLearning {
 			Category:  "over-exploration",
 		})
 	}
-
 	if errorRatio >= trajIntelHighRetryRatio && totalToolCalls >= 5 {
 		status := "completed despite"
 		if !stats.Success {
@@ -160,7 +132,6 @@ func (s *trajIntelState) extractInsights(stats *RunStats) []trajectoryLearning {
 			Category:  "high-error-rate",
 		})
 	}
-
 	if contextRatio >= trajIntelHighContextRatio || stats.CompactionCount >= trajIntelHighCompaction {
 		learnings = append(learnings, trajectoryLearning{
 			Timestamp: now,
@@ -172,7 +143,6 @@ func (s *trajIntelState) extractInsights(stats *RunStats) []trajectoryLearning {
 			Category:  "context-pressure",
 		})
 	}
-
 	if !stats.Success && editCount == 0 && stats.Iterations >= trajIntelMinIterations {
 		learnings = append(learnings, trajectoryLearning{
 			Timestamp: now,
@@ -184,32 +154,25 @@ func (s *trajIntelState) extractInsights(stats *RunStats) []trajectoryLearning {
 			Category:  "no-progress-failure",
 		})
 	}
-
 	return learnings
 }
-
 func (s *trajIntelState) maybeExtractAndPersist(workingDir string, stats *RunStats) {
 	learnings := s.extractInsights(stats)
 	if len(learnings) == 0 {
 		return
 	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	if s.filePath == "" && workingDir != "" {
 		s.filePath = filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
 	}
-
 	s.learnings = append(s.learnings, learnings...)
-
 	if s.filePath != "" {
 		if err := s.persistLocked(); err != nil {
 			debug.Log("traj-intel", "failed to persist learnings: %v", err)
 		}
 	}
 }
-
 func trimLearnings(all []trajectoryLearning) []trajectoryLearning {
 	if len(all) <= trajIntelMaxEntries {
 		return all
@@ -227,39 +190,32 @@ func trimLearnings(all []trajectoryLearning) []trajectoryLearning {
 	})
 	return all
 }
-
 func (s *trajIntelState) persistLocked() error {
 	writeErr := s.rewriteAllLocked(func(existing []trajectoryLearning, loadErr error) ([]trajectoryLearning, error) {
 		if loadErr != nil && !os.IsNotExist(loadErr) {
 			return nil, fmt.Errorf("load: %w", loadErr)
 		}
-
 		all := consolidateLearnings(append(existing, s.learnings...))
-
 		all = trimLearnings(all)
 		return all, nil
 	})
 	if writeErr != nil {
 		return writeErr
 	}
-
 	s.learnings = nil
 	s.loaded = true
 	return nil
 }
-
 func (s *trajIntelState) rewriteAllLocked(fn func(existing []trajectoryLearning, loadErr error) ([]trajectoryLearning, error)) error {
 	dir := filepath.Dir(s.filePath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
-
 	unlock, lockErr := lockTrajFile(s.filePath + ".lock")
 	if lockErr != nil {
 		return fmt.Errorf("lock: %w", lockErr)
 	}
 	defer unlock()
-
 	existing, loadErr := s.loadFromFile()
 	all, err := fn(existing, loadErr)
 	if err != nil {
@@ -268,7 +224,6 @@ func (s *trajIntelState) rewriteAllLocked(fn func(existing []trajectoryLearning,
 	if all == nil {
 		return nil
 	}
-
 	tmpF, err := os.CreateTemp(filepath.Dir(s.filePath), ".traj-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create tmp: %w", err)
@@ -293,7 +248,6 @@ func (s *trajIntelState) rewriteAllLocked(fn func(existing []trajectoryLearning,
 	}
 	return nil
 }
-
 func (s *trajIntelState) loadFromFile() ([]trajectoryLearning, error) {
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {
@@ -314,12 +268,6 @@ func (s *trajIntelState) loadFromFile() ([]trajectoryLearning, error) {
 	return result, nil
 }
 
-const (
-	trajPromptMaxEntries = 8
-	trajPromptMaxChars   = 1200
-	trajPromptPerType    = 3
-)
-
 type TrajLearningView struct {
 	Type       string
 	Category   string
@@ -327,111 +275,7 @@ type TrajLearningView struct {
 	Confidence float64
 	Reinforced int
 	Timestamp  time.Time
-	Injects    bool
 	General    bool
-
-	Holdout  bool
-	DeltaPP  float64
-	HoldRuns int
-}
-
-func trajSimulateInjected(workingDir string, sorted []trajectoryLearning) map[int]bool {
-	held := trajHoldoutSelect(workingDir, sorted)
-	out := map[int]bool{}
-	counts := map[string]int{}
-	seenCat := map[string]bool{}
-	total := 0
-	for i, l := range sorted {
-		if total >= trajPromptMaxEntries {
-			break
-		}
-		if l.EffectiveConfidence() < trajPromptMinConfidence {
-			continue
-		}
-		if effectivenessGated(l) {
-			continue
-		}
-		if held[trajKeyOf(l)] {
-			continue
-		}
-		key := l.Category
-		if key == "" {
-			key = l.Type
-		}
-		if seenCat[key] {
-			continue
-		}
-		if counts[l.Type] >= trajPromptPerType {
-			continue
-		}
-		seenCat[key] = true
-		counts[l.Type]++
-		out[i] = true
-		total++
-	}
-	return out
-}
-
-func TrajListLearnings(workingDir string) []TrajLearningView {
-	s := newTrajIntelState()
-	s.filePath = filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	entries, err := s.loadFromFile()
-	if err != nil {
-		entries = nil
-	}
-	if globalPath, gErr := TrajGlobalPath(); gErr == nil {
-		if gEntries, gLoadErr := loadTrajFile(globalPath); gLoadErr == nil && len(gEntries) > 0 {
-
-			localCats := map[string]bool{}
-			for _, l := range entries {
-				if trajInjectEligible(l) {
-					localCats[l.Category] = true
-				}
-			}
-			for _, l := range gEntries {
-				if l.Category == "" || localCats[l.Category] {
-					continue
-				}
-				l.Insight = l.Insight + " (general, other projects)"
-				entries = append(entries, l)
-			}
-		}
-	}
-	if len(entries) == 0 {
-		return nil
-	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		ci, cj := entries[i].EffectiveConfidence(), entries[j].EffectiveConfidence()
-		if ci != cj {
-			return ci > cj
-		}
-		return entries[i].Timestamp.After(entries[j].Timestamp)
-	})
-	wouldInject := trajSimulateInjected(workingDir, entries)
-	snap := trajHoldoutSnapshot(workingDir)
-	views := make([]TrajLearningView, 0, len(entries))
-	for i, l := range entries {
-		conf := l.EffectiveConfidence()
-		v := TrajLearningView{
-			Type: l.Type, Category: l.Category, Insight: l.Insight,
-			Confidence: conf, Reinforced: l.Reinforced, Timestamp: l.Timestamp,
-			Injects: wouldInject[i],
-			General: strings.HasSuffix(l.Insight, "(general, other projects)"),
-		}
-
-		k := trajKeyOf(l)
-		if e, ok := snap[k]; ok && e.InsightKey == trajHoldoutKeyString(k) {
-			v.Holdout = true
-			v.HoldRuns = e.HoldoutRuns
-			if d, dok := trajHoldoutDelta(l, e); dok {
-				v.DeltaPP = d * 100
-			}
-		}
-		views = append(views, v)
-	}
-	return views
 }
 
 func TrajClearLearnings(workingDir string) error {
@@ -447,7 +291,6 @@ func TrajClearLearnings(workingDir string) error {
 	}
 	return nil
 }
-
 func TrajClearGlobalLearnings() error {
 	path, err := TrajGlobalPath()
 	if err != nil {
@@ -464,7 +307,6 @@ func TrajClearGlobalLearnings() error {
 	}
 	return nil
 }
-
 func TrajGlobalRemaining() (int, error) {
 	path, err := TrajGlobalPath()
 	if err != nil {
@@ -479,7 +321,6 @@ func TrajGlobalRemaining() (int, error) {
 	}
 	return len(entries), nil
 }
-
 func TrajGlobalPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -487,7 +328,6 @@ func TrajGlobalPath() (string, error) {
 	}
 	return filepath.Join(home, ".ggcode", "trajectory-learnings.jsonl"), nil
 }
-
 func TrajMergeInto(dstWorkingDir, srcPath string) (int, error) {
 	data, err := os.ReadFile(srcPath)
 	if err != nil {
@@ -520,7 +360,6 @@ func TrajMergeInto(dstWorkingDir, srcPath string) (int, error) {
 		return 0, lockErr
 	}
 	defer unlock()
-
 	existing, loadErr := loadTrajFile(dstPath)
 	if loadErr != nil && !os.IsNotExist(loadErr) {
 		return 0, loadErr
@@ -544,18 +383,15 @@ func TrajMergeInto(dstWorkingDir, srcPath string) (int, error) {
 		return 0, nil
 	}
 	merged = consolidateLearnings(merged)
-
 	merged = trimLearnings(merged)
 	if err := writeTrajFile(dstPath, merged); err != nil {
 		return 0, err
 	}
 	return added, nil
 }
-
 func trajDedupeKey(l trajectoryLearning) string {
 	return l.Category + "|" + l.Type + "|" + l.Insight
 }
-
 func loadTrajFile(path string) ([]trajectoryLearning, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -588,7 +424,6 @@ func loadTrajFile(path string) ([]trajectoryLearning, error) {
 	}
 	return out, nil
 }
-
 func writeTrajFile(path string, entries []trajectoryLearning) error {
 	tmpF, err := os.CreateTemp(filepath.Dir(path), ".traj-*.tmp")
 	if err != nil {
@@ -609,7 +444,6 @@ func writeTrajFile(path string, entries []trajectoryLearning) error {
 	}
 	return os.Rename(tmpPath, path)
 }
-
 func TrajExportLearnings(workingDir, outPath string) (int, error) {
 	src := filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
 	entries, err := loadTrajFile(src)
@@ -627,7 +461,6 @@ func TrajExportLearnings(workingDir, outPath string) (int, error) {
 	}
 	return len(entries), nil
 }
-
 func TrajGlobalStorePath() string {
 	p, err := TrajGlobalPath()
 	if err != nil {
@@ -635,7 +468,6 @@ func TrajGlobalStorePath() string {
 	}
 	return p
 }
-
 func TrajBackflowFromWorktree(mainWorkingDir, worktreePath string) {
 	if mainWorkingDir == "" || worktreePath == "" || mainWorkingDir == worktreePath {
 		return
@@ -655,16 +487,9 @@ func TrajBackflowFromWorktree(mainWorkingDir, worktreePath string) {
 }
 
 const (
-	trajPromptMinConfidence = 0.3
-
 	trajConfidenceHalfLife = 30 * 24 * time.Hour
-
-	trajConfidenceStep = 0.1
-
-	trajEffectMinSamples = 3
-	trajEffectMinSuccess = 0.4
+	trajConfidenceStep     = 0.1
 )
-
 const trajConfidenceDecayPoint = 0.25
 
 func (l trajectoryLearning) EffectiveConfidence() float64 {
@@ -680,32 +505,19 @@ func (l trajectoryLearning) EffectiveConfidence() float64 {
 	if age <= 0 {
 		return conf
 	}
-
 	decay := 1.0
 	if halfLives := int64(age / trajConfidenceHalfLife); halfLives > 0 {
 		for i := int64(0); i < halfLives && i < 8; i++ {
 			decay *= 0.5
 		}
 	}
-
 	return trajConfidenceDecayPoint + (conf-trajConfidenceDecayPoint)*decay
 }
-
-func effectivenessGated(l trajectoryLearning) bool {
-	return l.InjectedRuns >= trajEffectMinSamples &&
-		float64(l.AfterSuccess)/float64(l.InjectedRuns) < trajEffectMinSuccess
-}
-
-func trajInjectEligible(l trajectoryLearning) bool {
-	return l.EffectiveConfidence() >= trajPromptMinConfidence && !effectivenessGated(l)
-}
-
 func consolidateLearnings(all []trajectoryLearning) []trajectoryLearning {
 	type key struct{ cat, typ string }
 	idx := map[key]int{}
 	var out []trajectoryLearning
 	for _, l := range all {
-
 		if l.Category == "" {
 			out = append(out, l)
 			continue
@@ -729,14 +541,9 @@ func consolidateLearnings(all []trajectoryLearning) []trajectoryLearning {
 			}
 			out[i].Confidence = c
 			out[i].Reinforced++
-
-			out[i].InjectedRuns += l.InjectedRuns
-			out[i].AfterSuccess += l.AfterSuccess
-			out[i].AfterFail += l.AfterFail
 			if l.Timestamp.After(out[i].LastReinforced) {
 				out[i].LastReinforced = l.Timestamp
 			}
-
 			if l.Timestamp.After(out[i].Timestamp) {
 				out[i].Insight = l.Insight
 				out[i].Timestamp = l.Timestamp
@@ -748,107 +555,10 @@ func consolidateLearnings(all []trajectoryLearning) []trajectoryLearning {
 	}
 	return out
 }
-
-type trajKey struct{ cat, typ string }
-
-func trajKeyOf(l trajectoryLearning) trajKey {
-	if l.Category != "" {
-		return trajKey{cat: l.Category, typ: l.Type}
-	}
-	return trajKey{cat: l.Type, typ: l.Type}
-}
-
-func (s *trajIntelState) recordInjectedLocked(l trajectoryLearning) {
-	if s.injectedThisRun == nil {
-		s.injectedThisRun = make(map[trajKey]bool)
-	}
-	s.injectedThisRun[trajKeyOf(l)] = true
-}
-
-func (s *trajIntelState) clearInjectedRun() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.injectedThisRun = nil
-	s.holdoutThisRun = nil
-}
-
-func (s *trajIntelState) recordInjectionOutcome(workingDir string, success bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.injectedThisRun) == 0 {
-		return
-	}
-	keys := s.injectedThisRun
-	s.injectedThisRun = nil
-	if s.filePath == "" && workingDir != "" {
-		s.filePath = filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
-	}
-	if s.filePath == "" {
-		return
-	}
-
-	matched := make(map[trajKey]bool)
-	bump := func(existing []trajectoryLearning) bool {
-		changed := false
-		for i := range existing {
-			k := trajKeyOf(existing[i])
-			if !keys[k] {
-				continue
-			}
-			existing[i].InjectedRuns++
-			if success {
-				existing[i].AfterSuccess++
-			} else {
-				existing[i].AfterFail++
-			}
-			matched[k] = true
-			changed = true
-		}
-		return changed
-	}
-	err := s.rewriteAllLocked(func(existing []trajectoryLearning, loadErr error) ([]trajectoryLearning, error) {
-		if loadErr != nil && !os.IsNotExist(loadErr) {
-			return nil, fmt.Errorf("load: %w", loadErr)
-		}
-		if !bump(existing) {
-			return nil, nil
-		}
-		return existing, nil
-	})
-	if err != nil {
-		debug.Log("traj-intel", "outcome write-back failed: %v", err)
-	}
-
-	leftover := false
-	for k := range keys {
-		if !matched[k] {
-			leftover = true
-			break
-		}
-	}
-	if leftover {
-		if globalPath, gErr := TrajGlobalPath(); gErr == nil {
-			g := &trajIntelState{filePath: globalPath}
-			if gErr := g.rewriteAllLocked(func(existing []trajectoryLearning, loadErr error) ([]trajectoryLearning, error) {
-				if loadErr != nil && !os.IsNotExist(loadErr) {
-					return nil, fmt.Errorf("load: %w", loadErr)
-				}
-				if !bump(existing) {
-					return nil, nil
-				}
-				return existing, nil
-			}); gErr != nil {
-				debug.Log("traj-intel", "global-tier outcome write-back failed: %v", gErr)
-			}
-		}
-	}
-}
-
 func truncateTask(s string, max int) string {
 	s = strings.TrimSpace(s)
 	return truncateRunesUTF8(s, max)
 }
-
 func truncateRunesUTF8(s string, max int) string {
 	if len(s) <= max {
 		return s
@@ -867,7 +577,6 @@ func truncateRunesUTF8(s string, max int) string {
 	}
 	return s[:cut]
 }
-
 func totalToolCallCount(m map[string]int) int {
 	total := 0
 	for _, v := range m {
@@ -875,7 +584,6 @@ func totalToolCallCount(m map[string]int) int {
 	}
 	return total
 }
-
 func topToolNames(m map[string]int, n int) []string {
 	type entry struct {
 		name  string
@@ -897,7 +605,6 @@ func topToolNames(m map[string]int, n int) []string {
 	}
 	return result
 }
-
 func isReadHeavy(m map[string]int) bool {
 	readTools := map[string]bool{
 		"read_file": true, "grep": true, "search_files": true,
@@ -917,16 +624,61 @@ func isReadHeavy(m map[string]int) bool {
 	}
 	return float64(readCount)/float64(totalCount) > 0.5
 }
-
 func summarizeErrors(errors []string) string {
 	if len(errors) == 0 {
 		return "none"
 	}
-
 	first := errors[0]
 	first = truncateRunesUTF8(first, 100)
 	if len(errors) == 1 {
 		return first
 	}
 	return fmt.Sprintf("%s (+%d more)", first, len(errors)-1)
+}
+
+func TrajListLearnings(workingDir string) []TrajLearningView {
+	s := newTrajIntelState()
+	s.filePath = filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := s.loadFromFile()
+	if err != nil {
+		entries = nil
+	}
+	if globalPath, gErr := TrajGlobalPath(); gErr == nil {
+		if gEntries, gLoadErr := loadTrajFile(globalPath); gLoadErr == nil && len(gEntries) > 0 {
+			localCats := map[string]bool{}
+			for _, l := range entries {
+				if l.Category != "" {
+					localCats[l.Category] = true
+				}
+			}
+			for _, l := range gEntries {
+				if l.Category == "" || localCats[l.Category] {
+					continue
+				}
+				l.Insight = l.Insight + " (general, other projects)"
+				entries = append(entries, l)
+			}
+		}
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		ci, cj := entries[i].EffectiveConfidence(), entries[j].EffectiveConfidence()
+		if ci != cj {
+			return ci > cj
+		}
+		return entries[i].Timestamp.After(entries[j].Timestamp)
+	})
+	views := make([]TrajLearningView, 0, len(entries))
+	for _, l := range entries {
+		views = append(views, TrajLearningView{
+			Type: l.Type, Category: l.Category, Insight: l.Insight,
+			Confidence: l.EffectiveConfidence(), Reinforced: l.Reinforced, Timestamp: l.Timestamp,
+			General: strings.HasSuffix(l.Insight, "(general, other projects)"),
+		})
+	}
+	return views
 }

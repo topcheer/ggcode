@@ -21,7 +21,7 @@ behavior into one deterministic inventory:
   skill         active skills (.ggcode/skills/*/SKILL.md)          gate: knight
   skill-staged  skills awaiting promotion (skills-staging/)   gate: knight-staging
   memory        persisted memories (memory/*.md)              gate: auto|manual
-  traj-insight  trajectory learnings (trajectory-learnings.jsonl) gate: holdout
+  traj-insight  trajectory learnings (trajectory-learnings.jsonl) gate: auto
 
 Each entry carries a content hash (sha256, first 12 hex chars), size, source
 path, scope (project|global), and enable state. Read-only: nothing is written.

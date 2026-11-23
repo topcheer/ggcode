@@ -596,7 +596,7 @@ func enCatalog(key string) string {
 	case "evidence.empty":
 		return "No citable claims yet — after the agent answers with code references (file.go:42, `symbol`), /evidence links each to the tool output that backs it."
 	case "traj.header":
-		return "Past-run learnings (%d stored, %d prompt-eligible; > = eligible):"
+		return "Past-run learnings (%d stored; g = general, other projects):"
 	case "traj.usage":
 		return "Usage: /traj [list|clear|export|import [path]]"
 	case "traj.no_home":

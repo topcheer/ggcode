@@ -13,7 +13,7 @@ func TestTrajConfidenceOverviewEmptyWorkspace(t *testing.T) {
 	}
 	b.workingDir = t.TempDir()
 	ov := b.TrajConfidenceOverview()
-	if ov.Total != 0 || ov.HasLearnings || ov.Injecting != 0 || ov.AvgConfidence != 0 {
+	if ov.Total != 0 || ov.HasLearnings || ov.AvgConfidence != 0 {
 		t.Fatalf("empty workspace should yield zero overview, got %+v", ov)
 	}
 	if ov.Top == nil {
@@ -23,9 +23,14 @@ func TestTrajConfidenceOverviewEmptyWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"total", "injecting", "avgConfidence", "top", "hasLearnings"} {
+	for _, field := range []string{"total", "avgConfidence", "top", "hasLearnings"} {
 		if !strings.Contains(string(raw), `"`+field+`"`) {
 			t.Errorf("JSON missing field %q: %s", field, raw)
+		}
+	}
+	for _, gone := range []string{"injecting", "injects", "holdout"} {
+		if strings.Contains(string(raw), `"`+gone+`"`) {
+			t.Errorf("JSON still carries retired injection facet %q: %s", gone, raw)
 		}
 	}
 }

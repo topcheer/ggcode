@@ -1472,18 +1472,7 @@ func (a *Agent) runStreamEpilogue(ctx context.Context, content []provider.Conten
 	}
 
 	if a.trajIntel != nil {
-
-		if !isCancelled {
-			a.trajIntel.recordInjectionOutcome(a.WorkingDir(), runStats.Success)
-
-			a.trajIntel.recordHoldoutOutcome(a.WorkingDir(), runStats.Success)
-		} else {
-
-			a.trajIntel.clearInjectedRun()
-		}
 		a.trajIntel.maybeExtractAndPersist(a.WorkingDir(), runStats)
-
-		a.maybeDistillPolicies(a.WorkingDir())
 
 		a.maybeExportTrainingSample(a.WorkingDir(), runStats)
 	}

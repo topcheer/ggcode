@@ -71,27 +71,16 @@ func (m *Model) handleTrajCommand(parts []string) tea.Cmd {
 			return nil
 		}
 		var b strings.Builder
-		injecting := 0
 		for i, v := range views {
 			marker := " "
-			suffix := ""
-			switch {
-			case v.Holdout:
-
-				marker = "h"
-				suffix = fmt.Sprintf(" (Δ%+.0fpp/%d)", v.DeltaPP, v.HoldRuns)
-			case v.Injects && v.General:
+			if v.General {
 				marker = "g"
-				injecting++
-			case v.Injects:
-				marker = ">"
-				injecting++
 			}
-			fmt.Fprintf(&b, "%s %2d. [%s] %s (conf %.2f, x%d)%s\n",
-				marker, i+1, v.Type, truncateForDisplay(v.Insight, 80), v.Confidence, v.Reinforced+1, suffix)
+			fmt.Fprintf(&b, "%s %2d. [%s] %s (conf %.2f, x%d)\n",
+				marker, i+1, v.Type, truncateForDisplay(v.Insight, 80), v.Confidence, v.Reinforced+1)
 		}
 		m.chatWriteSystem(nextSystemID(),
-			fmt.Sprintf(m.t("traj.header"), len(views), injecting)+"\n"+b.String())
+			fmt.Sprintf(m.t("traj.header"), len(views))+"\n"+b.String())
 		return nil
 	case "export":
 		out := agent.TrajGlobalStorePath()

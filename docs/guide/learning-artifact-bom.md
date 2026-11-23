@@ -21,7 +21,7 @@ Output is JSON on stdout, suitable for scripting, diffing, and CI checks.
 | `skill` | `.ggcode/skills/*/SKILL.md` (project + global) | `knight` — skill lifecycle governance |
 | `skill-staged` | `.ggcode/skills-staging/*/SKILL.md` | `knight-staging` — awaiting dawn promotion gate |
 | `memory` | `.ggcode/memory/*.md` (project + global) | `auto` (research-/build-/release-/preference- prefixes) or `manual` |
-| `traj-insight` | `.ggcode/trajectory-learnings.jsonl` | `holdout` — shadow-holdout counterfactual delta gate |
+| `traj-insight` | `.ggcode/trajectory-learnings.jsonl` | `auto` — auto-extracted per run, confidence-ranked (panel-only; no prompt gate) |
 
 Each entry carries:
 
