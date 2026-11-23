@@ -790,11 +790,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			a.appendGuidance(&result, debtGuidance)
 		}
 
-		a.editAbandon.recordToolCall(tc.Name, string(tc.Arguments))
-		if abandonGuidance := a.editAbandon.maybeWarn(); abandonGuidance != "" {
-			a.appendGuidance(&result, abandonGuidance)
-		}
-
 		editPaths := extractEditedPaths(tc)
 		if result.IsError {
 			if written := extractWrittenPaths(result.Content); len(written) > 0 {

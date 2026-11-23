@@ -332,14 +332,6 @@ var guidanceCounterResets = []func(*Agent){
 		}
 	},
 	func(a *Agent) {
-		if a.editAbandon != nil {
-			a.editAbandon.mu.Lock()
-			a.editAbandon.warnings = 0
-			a.editAbandon.fired = false
-			a.editAbandon.mu.Unlock()
-		}
-	},
-	func(a *Agent) {
 		if a.outcomeMisattrib != nil {
 			a.outcomeMisattrib.warnings = 0
 		}

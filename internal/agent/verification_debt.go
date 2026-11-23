@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -59,7 +60,7 @@ func classifyDebtAction(toolName, args string) debtAction {
 	if action, ok := verificationDebtTools[toolName]; ok {
 		if action == debtVerifying && toolName == "run_command" {
 
-			if !isVerificationCommand(eaExtractCommand(args)) {
+			if !isVerificationCommand(extractCommandFromArgs(json.RawMessage(args))) {
 				return debtNeutral
 			}
 		}
@@ -247,7 +248,7 @@ func fileToPkgKey(f string) string {
 }
 
 func extractVerificationScopes(args string) ([]string, bool) {
-	cmd := eaExtractCommand(args)
+	cmd := extractCommandFromArgs(json.RawMessage(args))
 	if cmd == "" {
 		return nil, false
 	}
