@@ -2,11 +2,8 @@ package agent
 
 import (
 	"encoding/json"
-	"fmt"
 	"regexp"
 	"strings"
-
-	"github.com/topcheer/ggcode/internal/provider"
 )
 
 var expectLineRe = regexp.MustCompile(`(?im)^EXPECT:\s*([a-z_0-9]+)?\s*(exit=0|exit!=0|tests_pass|>=1_match|applied>=1|success|fail)\s*$`)
@@ -115,25 +112,4 @@ func evaluateExpectCheck(check, resultContent string, isError bool) (passed bool
 		return true, ""
 	}
 	return true, ""
-}
-
-func (s *foresightCalibrateState) expectProtocolHint(toolCalls []provider.ToolCallDelta) string {
-	if s == nil || s.protocolTaught {
-		return ""
-	}
-	hasSideEffect := false
-	for _, tc := range toolCalls {
-		if expectSideEffectTools[tc.Name] {
-			hasSideEffect = true
-			break
-		}
-	}
-	if !hasSideEffect {
-		return ""
-	}
-	s.protocolTaught = true
-	return fmt.Sprintf(
-		"[expectation-protocol] Before calling a tool, you MAY declare its expected effect on one line: `EXPECT: <check>` (or `EXPECT: <tool> <check>` when batching several tools). Checks: %s. A declared expectation is verified against the actual result immediately; declaring success on a step that actually failed is flagged on the spot.",
-		"exit=0 | exit!=0 | tests_pass | >=1_match | applied>=1 | success | fail",
-	)
 }

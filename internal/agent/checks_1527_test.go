@@ -32,25 +32,6 @@ func (s *Server) worker() { defer s.wg.Done(); _ = 1 }
 	}
 }
 
-func Test1527DescriptionNotScanned(t *testing.T) {
-	args := `{"description":"检查 git log 后执行 reset","commit":null}`
-	if isReadOnlyGitInvocation("git_reset", args) {
-		t.Fatal("git_reset with log in DESCRIPTION must still be mutating")
-	}
-}
-
-func Test1527RunCommandGitMutates(t *testing.T) {
-	if !runCommandMutatesTree(`{"command":"git checkout main"}`) {
-		t.Fatal("git checkout via run_command must mutate")
-	}
-	if runCommandMutatesTree(`{"command":"go build ./..."}`) {
-		t.Fatal("non-git run_command must not classify")
-	}
-	if runCommandMutatesTree(`{"command":"git status"}`) {
-		t.Fatal("read-only git via run_command must not classify")
-	}
-}
-
 func Test1527DeltaLineDrift(t *testing.T) {
 	if normalizeIntegrityMsg("line 10: unterminated string") != normalizeIntegrityMsg("line 15: unterminated string") {
 		t.Fatal("same problem at drifted line must normalize equal (insertions above must not count as introduced)")

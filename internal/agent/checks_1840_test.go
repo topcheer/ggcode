@@ -44,23 +44,6 @@ func Test1840CriticalDedicatedPool(t *testing.T) {
 	}
 }
 
-func Test1840DedupLossVisible(t *testing.T) {
-	hints := []string{
-		"[loop-guard] first content",
-		"[loop-guard] different content same tag",
-		"[other] fine",
-	}
-	out, dropped := dedupByTag(hints)
-	if dropped != 1 || len(out) != 2 {
-		t.Fatalf("dedup wrong: out=%d dropped=%d", len(out), dropped)
-	}
-	notated := noteDedupDropped(out, dropped)
-	joined := strings.Join(notated, "\n")
-	if !strings.Contains(joined, "duplicate tags") {
-		t.Fatalf("loss must be visible, got %q", joined)
-	}
-}
-
 func Test1840ConflictAcrossPaths(t *testing.T) {
 	g := &guidanceBudget{}
 	g.delivered = []string{"Error rush: ACT NOW and commit to a fix."}

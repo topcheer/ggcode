@@ -104,8 +104,6 @@ func (a *Agent) maybeInjectSentimentFeedback(userPrompt string) {
 	if shouldResetMonitoringOnFeedback(fb) {
 
 		a.resetOverseer(userPrompt)
-		a.resetScopeDrift()
-		a.recurringError.reset()
 		a.confidence.reset()
 		a.resetPlanner()
 		debug.Log("agent", "reset monitoring systems due to strong negative user feedback (level=%d)", fb.Level)

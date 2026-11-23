@@ -1,52 +1,8 @@
 package agent
 
 import (
-	"strings"
 	"testing"
 )
-
-func new1491State() *searchInvalidationState {
-	s := newSearchInvalidationState()
-	s.setBaseDir("/repo")
-	return s
-}
-
-func TestIssue1491A_BareGrepOutputTracked(t *testing.T) {
-	s := new1491State()
-	s.recordSearchResult("grep", "internal/agent/agent.go\ninternal/tui/model.go\n")
-	if len(s.searchResultFiles) != 2 {
-		t.Fatalf("bare grep output must track 2 files, got %d", len(s.searchResultFiles))
-	}
-}
-
-func TestIssue1491A_CodeSearchOutputTracked(t *testing.T) {
-	s := new1491State()
-	s.recordSearchResult("code_search", "1. internal/agent/search_invalid.go (relevance: 92%)\n2. internal/agent/agent.go (relevance: 71%)\n")
-	if len(s.searchResultFiles) != 2 {
-		t.Fatalf("code_search output must track 2 files, got %d", len(s.searchResultFiles))
-	}
-}
-
-func TestIssue1491A_RelativeSearchAbsoluteEditCollide(t *testing.T) {
-	s := new1491State()
-	s.recordSearchResult("grep", "internal/agent/agent.go\n")
-	msg := s.checkEditInvalidation("/repo/internal/agent/agent.go")
-	if msg == "" {
-		t.Fatal("absolute edit of a relative-keyed search hit must warn")
-	}
-	if !strings.Contains(msg, "STALE") {
-		t.Fatalf("warning must mention staleness, got %q", msg)
-	}
-}
-
-func TestIssue1491A_NoPathArgToolsStillRecord(t *testing.T) {
-	s := new1491State()
-
-	s.recordSearchResult("code_search", "internal/util/path.go\n")
-	if len(s.searchResultFiles) != 1 {
-		t.Fatalf("query-only code_search must track its output file, got %d", len(s.searchResultFiles))
-	}
-}
 
 func TestIssue1491D_DeepAbsoluteSignatureDiscriminates(t *testing.T) {
 	if dirSignature("/Volumes/x/repo/internal/agent") == dirSignature("/Volumes/x/repo/internal/tui") {

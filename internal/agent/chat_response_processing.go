@@ -119,7 +119,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 		}
 
 		assistantText := textBuf
-		a.constraintViolation.recordReasoning(assistantText, iter+1)
 		a.reasoningRedund.recordReasoning(assistantText, false)
 		a.recordGiveupText(assistantText)
 
@@ -166,87 +165,10 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 
 		a.successDeclare.recordAssistantText(assistantText, iter)
 		a.criteriaDrift.recordAssistantText(assistantText, iter)
-		a.subgoalTrack.recordAssistantText(assistantText, iter)
 
 		runStats.recordAssistantText(assistantText)
 
 		detectorMsgsBefore := len(a.contextManager.Messages())
-		if truncHint := a.truncClaim.maybeWarnTruncClaim(assistantText, iter); truncHint != "" {
-			debug.Log("agent", "Iteration %d: truncated output completeness fallacy detected", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: truncHint,
-				}},
-			})
-		}
-
-		if circularHint := a.maybeWarnCircularReasoning(assistantText, iter); circularHint != "" {
-			debug.Log("agent", "Iteration %d: circular reasoning detector triggered (%d instances)", iter+1, len(a.circularReasoning.instances))
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: circularHint,
-				}},
-			})
-		}
-
-		if contradictionHint := a.maybeWarnContradiction(assistantText, iter); contradictionHint != "" {
-			debug.Log("agent", "Iteration %d: cross-turn contradiction detector triggered (%d contradictions)", iter+1, len(a.contradiction.contradictions))
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: contradictionHint,
-				}},
-			})
-		}
-
-		if scopeHint := a.maybeWarnScopeCreep(assistantText); scopeHint != "" {
-			debug.Log("agent", "Iteration %d: scope creep detector detected unsolicited expansion", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: scopeHint,
-				}},
-			})
-		}
-
-		if abstrHint := a.maybeWarnPrematureAbstraction(assistantText); abstrHint != "" {
-			debug.Log("agent", "Iteration %d: premature abstraction detector detected over-engineering", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: abstrHint,
-				}},
-			})
-		}
-
-		if capHint := a.maybeWarnCapabilityBoundary(assistantText); capHint != "" {
-			debug.Log("agent", "Iteration %d: capability boundary detector detected stubborn persistence", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: capHint,
-				}},
-			})
-		}
-
-		if planHint := a.maybeWarnPlanAbandon(assistantText, runStats); planHint != "" {
-			debug.Log("agent", "Iteration %d: plan abandonment detector triggered (declared %d steps)", iter+1, len(a.planAbandon.declaredSteps))
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: planHint,
-				}},
-			})
-		}
 
 		reproToolNames, reproToolInputs := extractToolNamesAndInputs(toolCalls)
 
@@ -263,38 +185,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 		}
 		a.reproducerLifecycle.observeText(iter+1, assistantText, reproRan, reproRunInput)
 		a.reproducerLifecycle.observeToolCalls(iter+1, reproToolNames, reproToolInputs)
-		if rlHint := a.reproducerLifecycle.checkIncomplete(iter + 1); rlHint != "" {
-			debug.Log("agent", "Iteration %d: reproducer lifecycle detector triggered", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: rlHint,
-				}},
-			})
-		}
-
-		if ttHint := a.maybeWarnToolTargetMismatch(assistantText, toolCalls); ttHint != "" {
-			debug.Log("agent", "Iteration %d: tool-target mismatch detector triggered", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: ttHint,
-				}},
-			})
-		}
-
-		if omHint := a.outcomeMisattrib.checkMisattribution(assistantText, iter+1); omHint != "" {
-			debug.Log("agent", "Iteration %d: outcome misattribution detector triggered", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: omHint,
-				}},
-			})
-		}
 
 		if raHint := a.maybeWarnReasonAction(assistantText, toolCalls); raHint != "" {
 			debug.Log("agent", "Iteration %d: reasoning-action alignment verifier triggered", iter+1)
@@ -311,12 +201,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 		if wasteHint := a.maybeWarnTokenWaste(); wasteHint != "" {
 			debug.Log("agent", "Iteration %d: token waste budget exceeded 40%% threshold", iter+1)
 			a.injectGuidance(wasteHint)
-		}
-
-		a.foresightCalib.recordPrediction(assistantText, toolCalls, iter+1)
-
-		if epHint := a.foresightCalib.expectProtocolHint(toolCalls); epHint != "" {
-			a.injectGuidance(epHint)
 		}
 
 		if len(a.contextManager.Messages()) > detectorMsgsBefore && st.detectorContinueBudget > 0 {
@@ -432,20 +316,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 			}
 		}
 
-		if driftMsg := a.planDrift.checkPlanDrift(runStats, textBuf); driftMsg != "" {
-			debug.Log("agent", "Iteration %d: plan drift detected, injecting reminder", iter+1)
-
-			a.driftRecurrenceMarkWarn(runStats.Iterations)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: driftMsg,
-				}},
-			})
-			return chatTurnContinue, nil
-		}
-
 		a.constraintAudit.observe(userPromptForStats)
 		if fulfillmentMsg := a.checkFulfillmentGate(userPromptForStats, runStats, textBuf); fulfillmentMsg != "" {
 			debug.Log("agent", "Iteration %d: fulfillment gate detected gap, injecting reminder", iter+1)
@@ -472,30 +342,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 
 				return chatTurnContinue, nil
 			}
-		}
-
-		if auditMsg := a.constraintAudit.checkAndInject(); auditMsg != "" {
-			debug.Log("agent", "Iteration %d: constraint audit injected", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: auditMsg,
-				}},
-			})
-			return chatTurnContinue, nil
-		}
-
-		if fuMsg := a.constraintFollowup.checkAndInject(textBuf, a.constraintAudit); fuMsg != "" {
-			debug.Log("agent", "Iteration %d: constraint followup injected (round %d)", iter+1, a.constraintFollowup.currentRound())
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: fuMsg,
-				}},
-			})
-			return chatTurnContinue, nil
 		}
 
 		a.mu.Lock()
@@ -562,41 +408,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 		}
 
 		if a.claimsSupervision {
-			if claimMsg := a.checkUnverifiedClaim(textBuf, runStats); claimMsg != "" {
-				debug.Log("agent", "Iteration %d: unverified success claim detected, injecting reminder", iter+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: claimMsg,
-					}},
-				})
-				return chatTurnContinue, nil
-			}
-		}
-
-		if companionMsg := a.companionGuard.checkCompanionFiles(runStats, a.WorkingDir()); companionMsg != "" {
-			debug.Log("agent", "Iteration %d: companion file guard detected unedited test companions", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: companionMsg,
-				}},
-			})
-			return chatTurnContinue, nil
-		}
-
-		if specGamingMsg := a.checkSpecGaming(runStats, userPromptForStats); specGamingMsg != "" {
-			debug.Log("agent", "Iteration %d: specification gaming detected, injecting warning", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: specGamingMsg,
-				}},
-			})
-			return chatTurnContinue, nil
 		}
 
 		syncPassed := false
@@ -615,30 +426,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 		} else {
 
 			st.asyncVerifyStats = runStats
-		}
-
-		if complexityMsg := a.checkComplexityGate(runStats); complexityMsg != "" {
-			debug.Log("agent", "Iteration %d: complexity gate detected quality issues, injecting advisory", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: complexityMsg,
-				}},
-			})
-			return chatTurnContinue, nil
-		}
-
-		if impactMsg := a.checkCrossFileImpact(runStats); impactMsg != "" {
-			debug.Log("agent", "Iteration %d: cross-file impact analysis detected potential breakage", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: impactMsg,
-				}},
-			})
-			return chatTurnContinue, nil
 		}
 
 		if reconcileMsg := a.checkChangeReconcile(runStats); reconcileMsg != "" {
@@ -684,42 +471,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 				Content: []provider.ContentBlock{{
 					Type: "text",
 					Text: goalMsg,
-				}},
-			})
-			return chatTurnContinue, nil
-		}
-
-		if commitHintMsg := a.checkCommitHintGate(runStats); commitHintMsg != "" {
-			debug.Log("agent", "Iteration %d: commit hint gate injected reminder", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: commitHintMsg,
-				}},
-			})
-			return chatTurnContinue, nil
-		}
-
-		if docDriftMsg := a.checkDocDriftGate(runStats); docDriftMsg != "" {
-			debug.Log("agent", "Iteration %d: doc-drift advisory injected", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: docDriftMsg,
-				}},
-			})
-			return chatTurnContinue, nil
-		}
-
-		if draftPRMsg := a.checkDraftPRHintGate(runStats); draftPRMsg != "" {
-			debug.Log("agent", "Iteration %d: draft-PR hint gate injected reminder", iter+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: draftPRMsg,
 				}},
 			})
 			return chatTurnContinue, nil

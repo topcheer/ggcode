@@ -42,20 +42,6 @@ func TestIssue5254_BatchConflictExtractorPullsApplyPatchPath(t *testing.T) {
 	}
 }
 
-func TestIssue5254_EditPropagationRecordsApplyPatch(t *testing.T) {
-	s := newEditPropagationState()
-	if !s.recordEdit("apply_patch", `{"path":"internal/c.go","diff":"x"}`) {
-		t.Fatal("apply_patch edit must be recorded by edit propagation (#5254)")
-	}
-	// second distinct file: still records; same file: no new distinct entry
-	if !s.recordEdit("apply_patch", `{"path":"internal/d.go"}`) {
-		t.Fatal("distinct apply_patch target must record")
-	}
-	if s.recordEdit("browser", `{"url":"https://x"}`) {
-		t.Fatal("non-edit tools must not record")
-	}
-}
-
 func TestIssue5254_RepetitionTrackerCountsApplyPatch(t *testing.T) {
 	rt := newRepetitionTracker()
 	// failures on the same apply_patch target accumulate through the gate

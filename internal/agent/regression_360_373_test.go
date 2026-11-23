@@ -96,7 +96,7 @@ func TestCausalAttribution_SourceReadNotFailure(t *testing.T) {
 	s.recordEdit("edit_file", "internal/x/a.go", 1)
 
 	out := s.attributeFailure("func f() error {\n\treturn fmt.Errorf(\"failed to connect\")\n}\n")
-	if out != "" {
-		t.Errorf("source dump must not trigger failure attribution, got: %s", out)
+	if out != nil {
+		t.Errorf("source dump must not trigger failure attribution, got: %+v", out.step)
 	}
 }

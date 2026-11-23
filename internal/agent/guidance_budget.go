@@ -105,12 +105,11 @@ func isCriticalGuidance(text string) bool {
 	return isCriticalTag(tag)
 }
 
+// guidanceEmit is a no-op: every mid-turn guidance nudge that used it was
+// removed as noise. Kept so residual call sites compile; nothing is ever
+// added to the conversation.
 func (a *Agent) guidanceEmit(msg string, msgs []provider.Message) []provider.Message {
-	if msg == "" {
-		return msgs
-	}
-	a.injectGuidance(msg)
-	return a.contextManager.Messages()
+	return msgs
 }
 
 func (a *Agent) injectGuidance(text string) bool {

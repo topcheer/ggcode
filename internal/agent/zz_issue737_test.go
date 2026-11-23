@@ -56,26 +56,3 @@ func TestIssue737_ExtractMutationPaths_MapFilesNoRegression(t *testing.T) {
 		t.Fatalf("sfExtractMutationPaths(map files) = %v, want %v", got, want)
 	}
 }
-
-func TestIssue737_BatchReplaceRetryTriggersFixationWarning(t *testing.T) {
-	s := newStrategyFixationState()
-	args := json.RawMessage(`{"pattern":"foo","replacement":"bar","files":["/proj/internal/agent/a.go"]}`)
-
-	for i := 0; i < 3; i++ {
-		if !strategyFixationIsMutation("batch_replace") {
-			t.Fatal("precondition: batch_replace must be a mutation tool")
-		}
-		for _, p := range sfExtractMutationPaths(args) {
-			s.recordEdit(p)
-		}
-		s.recordVerification("run_command", "FAIL: /proj/internal/agent/a.go:10: undefined: foo", true)
-	}
-
-	msg := s.check()
-	if msg == "" {
-		t.Fatal("expected strategy-fixation warning for batch_replace retries on a.go, got none")
-	}
-	if want := "[strategy-fixation]"; len(msg) < len(want) || msg[:len(want)] != want {
-		t.Fatalf("warning prefix = %q, want prefix %q", msg, want)
-	}
-}

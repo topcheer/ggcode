@@ -1,26 +1,8 @@
 package agent
 
 import (
-	"strings"
 	"testing"
 )
-
-func TestExplorationFragMessageCountsNotZero(t *testing.T) {
-	s := newExploreFragState()
-	var msg string
-	for i := 0; i < 6; i++ {
-		msg = s.recordToolCall("read_file", []byte(`{"path":"/repo/file`+string(rune('a'+i))+`"}`), 2+i%2)
-	}
-	if msg == "" {
-		t.Fatal("expected the detector to fire (6 calls / 6 unique targets)")
-	}
-	if strings.Contains(msg, "] 0 exploration tool calls") {
-		t.Fatalf("message reports 0 calls after fire-and-clear (order regression): %q", msg[:min2(90, len(msg))])
-	}
-	if !strings.Contains(msg, "] 6 exploration tool calls") {
-		t.Fatalf("message must report the pre-clear call count: %q", msg[:min2(90, len(msg))])
-	}
-}
 
 func min2(a, b int) int {
 	if a < b {
