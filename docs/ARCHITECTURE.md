@@ -88,7 +88,7 @@ internal/
     # Optimization layers (see Agent Optimization Stack below):
     # speculate.go, memoize.go, budget_guard.go, cache_keepalive.go,
     # error_classifier.go, confidence.go, playbook.go, ratchet.go,
-    # ratchet.go, verify_hint.go, tool_output_guard.go,
+    # verify_hint.go, tool_output_guard.go,
     # parallel_tools.go, overseer.go, loop_detect.go,
     # repetition_tracker.go, reflection.go, verify.go,
     # autopilot_strategist.go, todo_check.go
