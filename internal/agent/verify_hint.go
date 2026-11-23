@@ -81,7 +81,7 @@ func assertEditToolMapsInSync() bool {
 	for t := range sourceMutatingTools {
 		if !isEditTool(t) || !isEditingTool(t) || !coverageIsEditTool(t) ||
 			!bareStreakIsMutation(t) || !csIsEditTool(t) || !ecIsEditTool(t) ||
-			!recklessIsEditTool(t) || !undoBlindIsMutation(t) || !eaIsEditTool(t) {
+			!recklessIsEditTool(t) || !undoBlindIsMutation(t) {
 			return false
 		}
 	}

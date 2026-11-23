@@ -237,7 +237,6 @@ type Agent struct {
 	selfModel                    *AgentSelfModel
 	verifDebt                    *verificationDebtState
 	undoBlind                    *undoBlindState
-	editAbandon                  *editAbandonState
 	toolCallBudget               *toolCallBudget
 	commandCache                 *commandCache
 	effectLedger                 *effectLedgerState
@@ -508,7 +507,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		selfModel:              nil, // lazily bound in SetWorkingDir (#5498: cwd != workspace)
 		verifDebt:              newVerificationDebtState(),
 		undoBlind:              newUndoBlindState(),
-		editAbandon:            newEditAbandonState(),
 		toolCallBudget:         newToolCallBudget(),
 		commandCache:           newCommandCache(),
 		effectLedger:           newEffectLedger(),
