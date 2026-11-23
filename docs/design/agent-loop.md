@@ -80,7 +80,7 @@ The loop monitors its own trajectory and injects guidance when patterns look pat
 
 | Layer | File | Purpose |
 |-------|------|---------|
-| Ratchet | `ratchet.go` + `ratchet_reactive.go` | Learned error rules matched proactively and reactively |
+| Ratchet | `ratchet.go` | Learned error rules matched proactively before execution (the reactive result-injection channel, `ratchet_reactive.go`, was removed with the advisory-gate sweep; the RuleStore data layer remains) |
 | Verify hint | `verify_hint.go` | Post-edit build reminders with smart reset on verify commands |
 | Playbook | `playbook.go` | Strategy pattern learning from successful runs (ACE-inspired) |
 | Reflection | `reflection.go` | Run-level self-assessment and insight recording |
