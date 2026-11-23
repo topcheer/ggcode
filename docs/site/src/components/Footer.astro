@@ -1,0 +1,33 @@
+---
+import { t, type Locale } from '../i18n/utils';
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+const year = new Date().getFullYear();
+---
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="footer-brand">
+      <span class="brand-mark" aria-hidden="true">&gt;_</span>
+      <span>ggcode</span>
+    </div>
+    <ul class="footer-links">
+      <li><a href="https://github.com/topcheer/ggcode" rel="noopener" target="_blank">GitHub</a></li>
+      <li><a href="https://github.com/topcheer/ggcode/releases" rel="noopener" target="_blank">Releases</a></li>
+      <li><a href={locale === 'en' ? '/privacy.html' : '/zh/privacy.html'}>Privacy</a></li>
+      <li><a href={locale === 'en' ? '/terms.html' : '/zh/terms.html'}>Terms</a></li>
+    </ul>
+    <p class="footer-note">© {year} ggcode · <span class="muted">{t(locale, 'hero.sub').split('—')[0].trim()}</span></p>
+  </div>
+</footer>
+
+<style>
+  .footer { border-top: 1px solid var(--border); padding-block: var(--space-7); margin-top: var(--space-8); }
+  .footer-inner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-4); }
+  .footer-brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; }
+  .brand-mark { font-family: var(--font-mono); font-size: 12px; color: #fff; background: linear-gradient(160deg, var(--accent), var(--accent-deep)); border-radius: 6px; padding: 4px 6px; }
+  .footer-links { display: flex; flex-wrap: wrap; gap: var(--space-4); }
+  .footer-links a { color: var(--text-muted); font-size: var(--text-sm); }
+  .footer-links a:hover { color: var(--text); }
+  .footer-note { color: var(--text-dim); font-size: var(--text-xs); width: 100%; margin-top: var(--space-4); }
+</style>

@@ -1,0 +1,57 @@
+---
+import { t, type Locale } from '../i18n/utils';
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+---
+
+<div class="term" data-terminal>
+  <div class="term-bar">
+    <span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span class="term-label">ggcode</span>
+    <span class="term-meta" aria-hidden="true">GLM-4.6 · 12 tools</span>
+  </div>
+  <div class="term-body" aria-live="off">
+    <pre class="line l-prompt"><span class="p">$</span> cd my-project &amp;&amp; ggcode</pre>
+    <pre class="line l-muted">▸ Loading project context...</pre>
+    <pre class="line l-muted">▸ Connected: GLM-4.6 · 12 tools ready</pre>
+    <pre class="line l-prompt"><span class="p">&gt;</span> {t(locale, 'terminal.demo')}</pre>
+    <pre class="line l-accent">● Reading internal/auth/session.go...</pre>
+    <pre class="line l-accent">● Reading internal/auth/provider.go...</pre>
+    <pre class="line l-accent">● Editing 3 files...</pre>
+    <pre class="line l-ok">✓ Done · 3 files edited · 1 commit ready</pre>
+  </div>
+</div>
+
+<style>
+  .term {
+    font-family: var(--font-mono); font-size: 13px; line-height: 1.6;
+    background: rgba(10, 14, 26, 0.86); border: 1px solid var(--border-bright); border-radius: var(--radius-lg);
+    box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(74, 157, 255, 0.05), 0 0 60px -20px var(--accent-glow);
+    backdrop-filter: blur(16px); overflow: hidden;
+  }
+  .term-bar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); }
+  .term-dots { display: inline-flex; gap: 6px; }
+  .term-dots i { width: 11px; height: 11px; border-radius: 50%; background: #ff5f57; }
+  .term-dots i:nth-child(2) { background: #febc2e; } .term-dots i:nth-child(3) { background: #28c840; }
+  .term-label { color: var(--text-muted); font-size: 12px; }
+  .term-meta { margin-left: auto; color: var(--text-dim); font-size: 11px; }
+  .term-body { padding: 18px 20px 22px; }
+  .line { margin: 0; white-space: pre-wrap; color: var(--text); opacity: 0; transform: translateY(4px); }
+  html.js .term.is-in .line { animation: termIn 420ms var(--ease-out) forwards; animation-delay: calc(var(--n) * 260ms); }
+  html:not(.js) .line { opacity: 1; transform: none; }
+  .line:nth-child(1) { --n: 0 } .line:nth-child(2) { --n: 1 } .line:nth-child(3) { --n: 2 } .line:nth-child(4) { --n: 3 } .line:nth-child(5) { --n: 4 } .line:nth-child(6) { --n: 5 } .line:nth-child(7) { --n: 6 } .line:nth-child(8) { --n: 7 }
+  @keyframes termIn { to { opacity: 1; transform: none; } }
+  .p { color: var(--accent); font-weight: 600; }
+  .l-muted { color: var(--text-dim); } .l-accent { color: var(--accent-soft); } .l-ok { color: var(--success); }
+  .l-prompt { white-space: pre-wrap; }
+  @media (prefers-reduced-motion: reduce) { .line { opacity: 1; transform: none; animation: none !important; } }
+  @media (max-width: 768px) { .term { font-size: 11.5px; } .term-body { padding: 14px; } }
+</style>
+
+<script>
+  const term = document.querySelector('[data-terminal]');
+  if (term) {
+    const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) { term.classList.add('is-in'); io.disconnect(); } }, { threshold: 0.3 });
+    io.observe(term);
+  }
+</script>

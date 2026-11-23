@@ -1,0 +1,84 @@
+---
+/**
+ * Poster-first video loop. The <video> carries no src until the tab is active
+ * AND in view (IntersectionObserver), then sources are copied from <source
+ * data-src>. Autoplay is attempted muted+playsinline; if the browser refuses,
+ * the poster stays with a play button overlay. Honors prefers-reduced-motion
+ * (never autoplays, shows poster + button).
+ */
+interface Props { id: string; poster: string; mp4: string; webm: string; alt: string; playLabel: string; active?: boolean; }
+const { id, poster, mp4, webm, alt, playLabel, active = false } = Astro.props;
+---
+
+<div class={`video-loop${active ? ' is-active' : ''}`} data-video-loop data-id={id}>
+  <video class="video-el" muted playsinline loop preload="none" poster={poster} aria-label={alt} role="img"></video>
+  <template data-sources>
+    <source data-src={webm} type="video/webm" />
+    <source data-src={mp4} type="video/mp4" />
+  </template>
+  <button type="button" class="video-play" data-video-play aria-label={playLabel} hidden>
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+  </button>
+</div>
+
+<style>
+  .video-loop { position: relative; aspect-ratio: 16 / 9; background: var(--bg-surface); border-radius: var(--radius); overflow: hidden; }
+  .video-el { width: 100%; height: 100%; object-fit: cover; }
+  .video-play {
+    position: absolute; inset: 0; margin: auto; width: 56px; height: 56px; border-radius: 50%;
+    display: grid; place-items: center; color: #fff;
+    background: rgba(74, 157, 255, 0.9); box-shadow: 0 8px 30px -8px var(--accent-glow);
+    transition: transform var(--dur-2) var(--ease-out);
+  }
+  .video-play:hover { transform: scale(1.06); }
+  .video-play[hidden] { display: none; }
+</style>
+
+<script>
+  function setup(box: HTMLElement) {
+    const video = box.querySelector('video')!;
+    const tpl = box.querySelector('template')!;
+    const play = box.querySelector('button')!;
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let loaded = false;
+
+    const load = () => {
+      if (loaded) return;
+      loaded = true;
+      tpl.content.querySelectorAll('source').forEach((s) => {
+        const el = document.createElement('source');
+        el.src = s.getAttribute('data-src')!; el.type = s.getAttribute('type')!;
+        video.appendChild(el);
+      });
+      video.load();
+    };
+    const tryPlay = () => {
+      load();
+      const p = video.play();
+      if (p) p.catch(() => { play.hidden = false; });
+    };
+    const stop = () => { video.pause(); };
+
+    play.addEventListener('click', () => { play.hidden = true; tryPlay(); });
+
+    const active = () => box.classList.contains('is-active');
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting && active() && !reduce) tryPlay();
+        else stop();
+      }
+    }, { threshold: 0.25 });
+    io.observe(box);
+
+    // Tab switches toggle .is-active; react without coupling to the tabs code.
+    new MutationObserver(() => {
+      if (active() && !reduce) {
+        const r = box.getBoundingClientRect();
+        if (r.top < innerHeight && r.bottom > 0) tryPlay();
+      } else stop();
+    }).observe(box, { attributes: true, attributeFilter: ['class'] });
+
+    if (reduce) { load(); play.hidden = false; }
+  }
+  document.querySelectorAll<HTMLElement>('[data-video-loop]').forEach(setup);
+</script>

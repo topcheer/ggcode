@@ -1,0 +1,65 @@
+---
+import { t, type Locale } from '../i18n/utils';
+import Reveal from './Reveal.astro';
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+const nodes = [
+  { key: 'mcp', x: 120, y: 60 },
+  { key: 'agents', x: 480, y: 60 },
+  { key: 'lan', x: 300, y: 180 },
+];
+---
+
+<section class="section eco" id="ecosystem">
+  <div class="container">
+    <div class="section-head">
+      <span class="section-tag">{t(locale, 'eco.tag')}</span>
+      <h2>{t(locale, 'eco.title')}</h2>
+      <p class="sub">{t(locale, 'eco.sub')}</p>
+    </div>
+
+    <div class="eco-grid">
+      <Reveal class="eco-card card">
+        <svg viewBox="0 0 600 260" class="eco-svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="lg" x1="0" x2="1"><stop offset="0" stop-color="#1854b0"/><stop offset="1" stop-color="#6ee7ff"/></linearGradient>
+          </defs>
+          {nodes.map((n) => (<>
+            <line class="wire" x1="300" y1="130" x2={n.x} y2={n.y} stroke="url(#lg)" />
+            <line class="wire-pulse" x1="300" y1="130" x2={n.x} y2={n.y} stroke="#7cc4ff" />
+          </>))}
+          <circle cx="300" cy="130" r="34" fill="#121a30" stroke="#4a9dff" stroke-width="2" />
+          <text x="300" y="136" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="16" font-weight="700" fill="#fff">&gt;_</text>
+          {nodes.map((n) => (<>
+            <rect x={n.x - 44} y={n.y - 20} width="88" height="40" rx="10" fill="#0f1424" stroke="#27355a" />
+            <text x={n.x} y={n.y + 5} text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#7cc4ff">{t(locale, `eco.${n.key}.title`)}</text>
+          </>))}
+        </svg>
+      </Reveal>
+      <div class="eco-list">
+        {nodes.map((n, i) => (
+          <Reveal as="div" class="card eco-item" delay={i}>
+            <h3>{t(locale, `eco.${n.key}.title`)}</h3>
+            <p>{t(locale, `eco.${n.key}.text`)}</p>
+          </Reveal>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .eco-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr); gap: var(--space-5); align-items: stretch; }
+  .eco-card { padding: var(--space-4); display: grid; place-items: center; }
+  .eco-svg { width: 100%; height: auto; }
+  .wire { stroke-width: 1.5; opacity: 0.6; }
+  .wire-pulse { stroke-width: 2; stroke-linecap: round; stroke-dasharray: 10 60; animation: pulse 2.2s linear infinite; }
+  .wire-pulse:nth-of-type(2) { animation-delay: 0.7s; } .wire-pulse:nth-of-type(4) { animation-delay: 1.4s; }
+  @keyframes pulse { from { stroke-dashoffset: 70; opacity: 0 } 20% { opacity: 1 } to { stroke-dashoffset: 0; opacity: 0 } }
+  .eco-list { display: flex; flex-direction: column; gap: var(--space-4); }
+  .eco-item { padding: var(--space-5); flex: 1; }
+  .eco-item h3 { font-size: var(--text-lg); margin-bottom: var(--space-2); }
+  .eco-item p { color: var(--text-muted); font-size: var(--text-sm); }
+  @media (max-width: 1024px) { .eco-grid { grid-template-columns: 1fr; } }
+  @media (prefers-reduced-motion: reduce) { .wire-pulse { display: none; } }
+</style>

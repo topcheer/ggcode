@@ -1,0 +1,10 @@
+---
+interface Props { as?: string; delay?: number; class?: string }
+const { as = 'div', delay = 0, class: cls } = Astro.props;
+// Astro's JSX types do not model arbitrary dynamic tags; cast keeps `as` flexible.
+const Tag = as as any;
+---
+
+<Tag data-reveal style={`--i:${delay}`} class={cls}>
+  <slot />
+</Tag>

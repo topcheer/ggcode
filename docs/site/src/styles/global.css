@@ -1,0 +1,96 @@
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+img, video, canvas, svg { display: block; max-width: 100%; }
+img { height: auto; }
+a { color: var(--accent); text-decoration: none; transition: color var(--dur-1) var(--ease-out); }
+a:hover { color: var(--accent-soft); }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+code, pre, kbd { font-family: var(--font-mono); }
+h1, h2, h3, h4 { margin: 0; line-height: var(--leading-tight); letter-spacing: -0.02em; font-weight: 700; text-wrap: balance; }
+p { margin: 0; }
+ul { margin: 0; padding: 0; list-style: none; }
+
+.container { width: min(var(--container), 100% - 2 * var(--space-5)); margin-inline: auto; }
+.section { padding-block: var(--space-9); position: relative; }
+.section-head { max-width: 720px; margin-bottom: var(--space-7); }
+.section-tag {
+  display: inline-block; font-family: var(--font-mono); font-size: var(--text-xs);
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent);
+  border: 1px solid var(--border-bright); border-radius: 999px; padding: 4px 12px; margin-bottom: var(--space-4);
+  background: rgba(74, 157, 255, 0.06);
+}
+.section-head h2 { font-size: var(--text-3xl); }
+.muted { color: var(--text-muted); }
+.gradient-text {
+  background: linear-gradient(92deg, var(--accent) 0%, var(--accent-soft) 45%, var(--accent-3) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.sub { color: var(--text-muted); font-size: var(--text-lg); margin-top: var(--space-4); max-width: 60ch; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  padding: 12px 22px; border-radius: var(--radius); font-weight: 600; font-size: var(--text-base);
+  transition: transform var(--dur-2) var(--ease-out), background var(--dur-2), border-color var(--dur-2), color var(--dur-2);
+  will-change: transform;
+}
+.btn:active { transform: translateY(1px) scale(0.99); }
+.btn-primary {
+  color: #fff;
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-deep) 100%);
+  box-shadow: 0 8px 28px -8px var(--accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.btn-primary:hover { color: #fff; transform: translateY(-2px); box-shadow: 0 14px 34px -8px var(--accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.2); }
+.btn-ghost { color: var(--text); border: 1px solid var(--border-bright); background: rgba(255, 255, 255, 0.02); }
+.btn-ghost:hover { border-color: var(--accent); color: var(--text); transform: translateY(-2px); }
+.btn svg { flex: none; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.skip-link { position: absolute; left: -999px; top: 8px; z-index: 100; background: var(--bg-card); padding: 8px 14px; border-radius: var(--radius-sm); }
+.skip-link:focus { left: 8px; }
+
+/* Reveal-on-scroll: hidden only when JS is present (html.js), visible by default. */
+html.js [data-reveal] { opacity: 0; transform: translateY(22px); transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out); transition-delay: calc(var(--i, 0) * 70ms); }
+html.js [data-reveal].is-visible { opacity: 1; transform: none; }
+/* Safety net: if the reveal script never loads, show everything after 2.5 s. */
+html.reveal-timeout:not(.reveal-ready) [data-reveal] { opacity: 1; transform: none; }
+
+/* Card primitives */
+.card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0)) , var(--bg-card);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  transition: border-color var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out), background var(--dur-2);
+}
+.card:hover { border-color: var(--border-bright); }
+
+/* Prose (legal pages) */
+.prose { max-width: 720px; margin-inline: auto; padding-block: var(--space-8) var(--space-9); }
+.prose h1 { font-size: var(--text-2xl); margin-bottom: var(--space-5); }
+.prose h2 { font-size: var(--text-xl); margin: var(--space-6) 0 var(--space-3); }
+.prose p, .prose li { color: var(--text-muted); }
+.prose p { margin-bottom: var(--space-3); }
+.prose ul { list-style: disc; padding-left: var(--space-5); margin-bottom: var(--space-3); }
+.prose a { color: var(--accent); }
+.prose strong { color: var(--text); }
+
+/* Reduced motion: everything instant and static. */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  html.js [data-reveal] { opacity: 1; transform: none; }
+  .btn:hover, .card:hover { transform: none; }
+}
+
+@media (max-width: 768px) {
+  .section { padding-block: var(--space-8); }
+  .sub { font-size: var(--text-base); }
+}

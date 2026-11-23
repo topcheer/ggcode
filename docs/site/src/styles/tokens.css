@@ -1,0 +1,51 @@
+/* Design tokens — blue family derived from the app icon (#1854b0) and the
+   existing favicon glyph (#58a6ff) on a navy-tinted dark surface. */
+:root {
+  --bg: #0a0e1a;
+  --bg-surface: #0f1424;
+  --bg-card: #121a30;
+  --bg-card-hover: #16203a;
+  --border: #1b2540;
+  --border-bright: #27355a;
+
+  --text: #e6ecf7;
+  --text-muted: #8e9dbf;   /* ≥ 5.2:1 on --bg-card */
+  --text-dim: #5b6a8c;
+
+  --accent: #4a9dff;
+  --accent-deep: #1854b0;
+  --accent-soft: #7cc4ff;
+  --accent-glow: rgba(74, 157, 255, 0.45);
+  --accent-2: #1854b0;
+  --accent-3: #6ee7ff;
+  --success: #34d399;
+  --warning: #fbbf24;
+
+  --radius-sm: 8px;
+  --radius: 14px;
+  --radius-lg: 24px;
+
+  --font-sans: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, 'SFMono-Regular', Menlo, monospace;
+
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px; --space-9: 96px;
+
+  --text-xs: 12px; --text-sm: 14px; --text-base: 16px; --text-lg: 20px; --text-xl: 24px;
+  --text-2xl: clamp(28px, 3vw, 36px);
+  --text-3xl: clamp(32px, 4.2vw, 52px);
+  --text-hero: clamp(40px, 6.2vw, 84px);
+  --leading-tight: 1.08;
+  --leading: 1.6;
+
+  --dur-1: 150ms;
+  --dur-2: 300ms;
+  --dur-3: 600ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  --container: 1200px;
+  --nav-h: 68px;
+
+  color-scheme: dark;
+}

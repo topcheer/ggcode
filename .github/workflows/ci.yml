@@ -191,3 +191,33 @@ jobs:
           # (cache entries are immutable per key). Only Test seeds the cache.
           cache: false
       - run: test -z "$(gofmt -l .)"
+
+  # Gate: docs/site (Astro) must build and type-check when it changes.
+  site:
+    name: Site build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            site:
+              - 'docs/site/**'
+              - '.github/workflows/pages-deploy.yml'
+      - uses: actions/setup-node@v4
+        if: steps.filter.outputs.site == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+      - name: Build + type-check + link-check
+        if: steps.filter.outputs.site == 'true'
+        run: |
+          cd docs/site
+          npm ci --no-audit --no-fund
+          npx astro check
+          npm run build
+
