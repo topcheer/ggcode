@@ -1,0 +1,113 @@
+---
+import '@fontsource/space-grotesk/latin-400.css';
+import '@fontsource/space-grotesk/latin-500.css';
+import '@fontsource/space-grotesk/latin-700.css';
+import '@fontsource/jetbrains-mono/latin-400.css';
+import '@fontsource/jetbrains-mono/latin-600.css';
+import '../styles/tokens.css';
+import '../styles/global.css';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import { t, localeHtmlLang, localeOgLocale, localeHreflang, localizedPath, DEFAULT_LOCALE, type Locale } from '../i18n/utils';
+
+interface Props {
+  locale: Locale;
+  /** i18n key for the <title>, or a literal title when titleIsLiteral */
+  titleKey?: string;
+  titleIsLiteral?: boolean;
+  descriptionKey?: string;
+  descriptionIsLiteral?: boolean;
+  /** Site-relative path of this page WITHOUT locale prefix, e.g. '' or 'privacy' */
+  path?: string;
+  noindex?: boolean;
+}
+
+const {
+  locale,
+  titleKey = 'meta.title',
+  titleIsLiteral = false,
+  descriptionKey = 'meta.description',
+  descriptionIsLiteral = false,
+  path = '',
+  noindex = false,
+} = Astro.props;
+
+const title = titleIsLiteral ? titleKey : t(locale, titleKey);
+const description = descriptionIsLiteral ? descriptionKey : t(locale, descriptionKey);
+const site = Astro.site ?? new URL('https://ggcode.dev');
+const route = path ? `/${path}` : '/';
+const selfPath = locale === DEFAULT_LOCALE ? route : `/zh${route === '/' ? '/' : route}`;
+const canonical = new URL(selfPath, site).href;
+const enHref = new URL(localizedPath('en', selfPath), site).href;
+const zhHref = new URL(localizedPath('zh', selfPath), site).href;
+const ogImage = new URL(`/og/${locale}.jpg`, site).href;
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'ggcode',
+  url: site.href,
+  description: t('en', 'meta.description'),
+  applicationCategory: 'DeveloperApplication',
+  operatingSystem: 'macOS, Linux, Windows, iOS, Android',
+  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+  featureList: [
+    t('en', 'features.terminal.title'),
+    t('en', 'features.mcp.title'),
+    t('en', 'features.agent.title'),
+    t('en', 'features.im.title'),
+    t('en', 'features.lanchat.title'),
+    t('en', 'features.modes.title'),
+    t('en', 'features.worktrees.title'),
+    t('en', 'features.mobile.title'),
+    t('en', 'features.sessions.title'),
+  ],
+};
+---
+
+<!doctype html>
+<html lang={localeHtmlLang(locale)}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#0a0e1a" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/ggcode-banner.png" />
+    {noindex ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={canonical} />}
+    {!noindex && <link rel="alternate" hreflang={localeHreflang('en')} href={enHref} />}
+    {!noindex && <link rel="alternate" hreflang={localeHreflang('zh')} href={zhHref} />}
+    {!noindex && <link rel="alternate" hreflang="x-default" href={enHref} />}
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ggcode" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content={localeOgLocale(locale)} />
+    <meta property="og:locale:alternate" content={locale === 'en' ? 'zh_CN' : 'en_US'} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+    <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+
+    <script>document.documentElement.classList.add('js');setTimeout(function(){document.documentElement.classList.add('reveal-timeout')},2500);</script>
+    <script defer src="https://analytics.ggcode.dev/script.js" data-website-id="9750498f-aebd-462d-a46c-dda0e7d4d1a2"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">{t(locale, 'a11y.skip')}</a>
+    <Nav locale={locale} currentPath={selfPath} />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer locale={locale} />
+    <script>
+      import '../scripts/reveal';
+    </script>
+  </body>
+</html>

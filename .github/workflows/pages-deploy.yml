@@ -33,13 +33,25 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v6
-
-      # docs/site is the published root (index.html, assets, ...). Copy it
-      # to the artifact root so URLs resolve at the site base path.
+      # docs/site is an Astro static site (see specs/site-redesign). Build it
+      # with the Node version pinned in docs/site/package.json, then publish
+      # dist/ (hashed assets, /zh/, legacy /privacy.html + /terms.html kept by
+      # scripts/postbuild.mjs). `npm run build` also fails on broken internal
+      # links (scripts/check-links.mjs).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+      - name: Build site
+        run: |
+          cd docs/site
+          npm ci --no-audit --no-fund
+          npm run build
       - name: Stage site content
         run: |
           mkdir -p /tmp/site
-          cp -R docs/site/. /tmp/site/
+          cp -R docs/site/dist/. /tmp/site/
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

@@ -1,0 +1,87 @@
+---
+import { t, localizedPath, type Locale } from '../i18n/utils';
+
+interface Props { locale: Locale; currentPath: string }
+const { locale, currentPath } = Astro.props;
+const other: Locale = locale === 'en' ? 'zh' : 'en';
+const otherHref = localizedPath(other, currentPath);
+const links = [
+  { href: '#product', key: 'nav.product' },
+  { href: '#features', key: 'nav.features' },
+  { href: '#how', key: 'nav.how' },
+  { href: '#install', key: 'nav.install' },
+];
+---
+
+<header class="nav" id="top">
+  <div class="container nav-inner">
+    <a class="brand" href={locale === 'en' ? '/' : '/zh/'} aria-label="ggcode">
+      <span class="brand-mark" aria-hidden="true">&gt;_</span>
+      <span class="brand-name">ggcode</span>
+    </a>
+    <nav aria-label={t(locale, 'a11y.nav')}>
+      <ul>
+        {links.map((l) => (
+          <li><a href={l.href}>{t(locale, l.key)}</a></li>
+        ))}
+      </ul>
+    </nav>
+    <div class="nav-actions">
+      <a class="lang-switch" href={otherHref} hreflang={other === 'zh' ? 'zh-Hans' : 'en'} lang={other === 'zh' ? 'zh-CN' : 'en'} data-lang-switch>{t(locale, 'lang.switch')}</a>
+      <a class="btn btn-primary btn-sm" href="#install">{t(locale, 'nav.install')} <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+    </div>
+  </div>
+</header>
+
+<style>
+  .nav {
+    position: sticky; top: 0; z-index: 50;
+    height: var(--nav-h);
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+    backdrop-filter: blur(14px) saturate(1.4);
+    -webkit-backdrop-filter: blur(14px) saturate(1.4);
+    border-bottom: 1px solid transparent;
+    transition: border-color var(--dur-2) var(--ease-out);
+  }
+  .nav.is-scrolled { border-bottom-color: var(--border); }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 100%; gap: var(--space-5); }
+  .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; letter-spacing: -0.01em; }
+  .brand:hover { color: var(--text); }
+  .brand-mark {
+    font-family: var(--font-mono); font-weight: 600; font-size: 14px; color: #fff;
+    background: linear-gradient(160deg, var(--accent) 0%, var(--accent-deep) 100%);
+    border-radius: 8px; padding: 5px 8px; line-height: 1;
+    box-shadow: 0 4px 18px -4px var(--accent-glow);
+  }
+  .brand-name { font-size: 18px; }
+  nav ul { display: flex; gap: var(--space-5); }
+  nav a { color: var(--text-muted); font-weight: 500; font-size: var(--text-sm); }
+  nav a:hover { color: var(--text); }
+  .nav-actions { display: flex; align-items: center; gap: var(--space-3); }
+  .lang-switch {
+    font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px;
+    transition: color var(--dur-2), border-color var(--dur-2);
+  }
+  .lang-switch:hover { color: var(--text); border-color: var(--border-bright); }
+  .btn-sm { padding: 8px 14px; font-size: var(--text-sm); }
+
+  @media (max-width: 768px) {
+    nav { display: none; }
+  }
+</style>
+
+<script>
+  // Sticky nav: show the divider only once the page has scrolled.
+  const nav = document.querySelector('.nav');
+  const onScroll = () => nav?.classList.toggle('is-scrolled', window.scrollY > 8);
+  onScroll();
+  window.addEventListener('scroll', onScroll, { passive: true });
+
+  // Remember the chosen language so the switch can pre-suggest it next time.
+  document.querySelectorAll('[data-lang-switch]').forEach((a) => {
+    a.addEventListener('click', () => {
+      try { localStorage.setItem('ggcode-lang', a.getAttribute('lang') || ''); } catch {}
+    });
+  });
+</script>

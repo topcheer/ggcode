@@ -1,0 +1,29 @@
+---
+import { t, th, type Locale } from '../i18n/utils';
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+---
+
+<section class="cta">
+  <div class="container cta-inner">
+    <div class="cta-glow" aria-hidden="true"></div>
+    <h2 set:html={th(locale, 'cta.title')} />
+    <p class="sub">{t(locale, 'cta.text')}</p>
+    <div class="cta-actions">
+      <a class="btn btn-primary" href="#install">{t(locale, 'cta.cta')}
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+      <a class="btn btn-ghost" href="https://github.com/topcheer/ggcode" rel="noopener" target="_blank">{t(locale, 'cta.github')}</a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .cta { position: relative; padding-block: var(--space-9); overflow: hidden; }
+  .cta-inner { position: relative; text-align: center; padding: var(--space-8) var(--space-5); border-radius: var(--radius-lg); border: 1px solid var(--border-bright); background: linear-gradient(180deg, rgba(24,84,176,0.12), rgba(18,26,48,0.6)); overflow: hidden; }
+  .cta-glow { position: absolute; left: 50%; top: -140px; width: 520px; height: 300px; margin-left: -260px; background: var(--accent-2); filter: blur(100px); opacity: 0.45; pointer-events: none; animation: float 18s ease-in-out infinite; }
+  .cta h2 { font-size: var(--text-3xl); position: relative; }
+  .cta .sub { margin-inline: auto; position: relative; }
+  .cta-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-6); position: relative; }
+  @keyframes float { 0%,100% { transform: translateX(-20px) } 50% { transform: translateX(20px) } }
+  @media (prefers-reduced-motion: reduce) { .cta-glow { animation: none; } }
+</style>

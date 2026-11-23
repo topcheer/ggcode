@@ -1,0 +1,8 @@
+---
+import Base from '../layouts/Base.astro';
+import body from '../legacy/terms-body.html?raw';
+import '../styles/legal.css';
+---
+<Base locale="en" titleKey="terms.title" descriptionKey="meta.description" path="terms.html">
+  <article class="prose legal" set:html={body} />
+</Base>

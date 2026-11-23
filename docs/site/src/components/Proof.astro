@@ -1,0 +1,47 @@
+---
+import { t, type Locale } from '../i18n/utils';
+import Reveal from './Reveal.astro';
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+const items = [
+  { n: t(locale, 'proof.platforms.n'), l: t(locale, 'proof.platforms.l') },
+  { n: t(locale, 'proof.install.n'), l: t(locale, 'proof.install.l') },
+  { n: import.meta.env.PUBLIC_GH_STARS || t(locale, 'proof.stars.fallback'), l: t(locale, 'proof.stars.l') },
+];
+---
+
+<section class="proof" aria-label="proof">
+  <div class="container proof-grid">
+    {items.map((it, i) => (
+      <Reveal as="div" class="proof-item" delay={i}>
+        <span class="proof-n" data-count={/^\d/.test(it.n) ? it.n.replace(/\D/g, '') : ''}>{it.n}</span>
+        <span class="proof-l">{it.l}</span>
+      </Reveal>
+    ))}
+  </div>
+</section>
+
+<style>
+  .proof { padding-block: var(--space-6) var(--space-7); border-block: 1px solid var(--border); background: rgba(255, 255, 255, 0.015); }
+  .proof-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-5); }
+  .proof-item { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; }
+  .proof-n { font-size: clamp(32px, 4vw, 48px); font-weight: 700; letter-spacing: -0.03em; font-family: var(--font-mono); color: var(--text); }
+  .proof-l { color: var(--text-muted); font-size: var(--text-sm); }
+  @media (max-width: 768px) { .proof-grid { gap: var(--space-3); } .proof-l { font-size: var(--text-xs); } }
+</style>
+
+<script>
+  // Count-up for numeric proof metrics (once, on reveal). Skips under reduced motion.
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const els = document.querySelectorAll<HTMLElement>('[data-count]');
+  if (!reduce && els.length) {
+    const run = (el: HTMLElement) => {
+      const target = parseInt(el.dataset.count || '0', 10); if (!target) return;
+      const start = performance.now(), dur = 900;
+      const step = (now: number) => { const p = Math.min(1, (now - start) / dur), e = 1 - Math.pow(1 - p, 3); el.textContent = String(Math.round(target * e)); if (p < 1) requestAnimationFrame(step); };
+      requestAnimationFrame(step);
+    };
+    const io = new IntersectionObserver((entries) => { for (const e of entries) if (e.isIntersecting) { run(e.target as HTMLElement); io.unobserve(e.target); } }, { threshold: 0.5 });
+    els.forEach((el) => io.observe(el));
+  }
+</script>

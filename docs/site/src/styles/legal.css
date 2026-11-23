@@ -1,0 +1,4 @@
+.legal { padding-top: var(--space-6); }
+.legal-note { color: var(--text-dim); font-size: var(--text-sm); border-left: 3px solid var(--accent); padding-left: var(--space-3); margin-bottom: var(--space-5); }
+.legal > a:first-child { font-family: var(--font-mono); font-size: var(--text-sm); }
+.legal p > :first-child, .legal > div > a { display: inline-block; margin-bottom: var(--space-4); }

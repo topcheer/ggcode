@@ -1,0 +1,145 @@
+---
+import { t, th, type Locale } from '../i18n/utils';
+import Reveal from './Reveal.astro';
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+
+const cards = [
+  { key: 'terminal', span: 2, art: 'toolkit' },
+  { key: 'mcp', span: 1, art: 'mcp' },
+  { key: 'agent', span: 1, art: 'agents' },
+  { key: 'im', span: 1, art: 'im' },
+  { key: 'lanchat', span: 1, art: 'lan' },
+  { key: 'modes', span: 1, art: 'modes' },
+  { key: 'worktrees', span: 1, art: 'worktree' },
+  { key: 'mobile', span: 1, art: 'mobile' },
+  { key: 'sessions', span: 2, art: 'sessions' },
+] as const;
+---
+
+<section class="section" id="features">
+  <div class="container">
+    <div class="section-head">
+      <span class="section-tag">capabilities</span>
+      <h2 set:html={th(locale, 'features.title')} />
+    </div>
+    <div class="bento" data-tilt-group>
+      {cards.map((c, i) => (
+        <Reveal as="article" class={`card bento-card span-${c.span}`} delay={Math.min(i, 4)}>
+          <div class="bento-art" aria-hidden="true">
+            {c.art === 'toolkit' && (
+              <svg viewBox="0 0 320 140" class="art">
+                <rect x="8" y="8" width="300" height="124" rx="10" fill="#0f1424" stroke="#27355a"/>
+                <circle cx="24" cy="22" r="4" fill="#ff5f57"/><circle cx="36" cy="22" r="4" fill="#febc2e"/><circle cx="48" cy="22" r="4" fill="#28c840"/>
+                <text x="20" y="52" font-family="ui-monospace,Menlo,monospace" font-size="12" fill="#4a9dff">$</text>
+                <text x="34" y="52" font-family="ui-monospace,Menlo,monospace" font-size="12" fill="#e6ecf7">ggcode</text>
+                <text x="20" y="76" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#8e9dbf">● read_file  auth/session.go</text>
+                <text x="20" y="94" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#8e9dbf">● edit_file  +42 −7</text>
+                <text x="20" y="112" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#34d399">✓ go test ./... passed</text>
+                <rect x="200" y="40" width="96" height="80" rx="6" fill="#121a30" stroke="#1b2540"/>
+                <text x="210" y="60" font-family="ui-monospace,Menlo,monospace" font-size="10" fill="#7cc4ff">diff</text>
+                <rect x="210" y="68" width="76" height="6" rx="2" fill="#1854b0"/><rect x="210" y="80" width="60" height="6" rx="2" fill="#1854b0"/><rect x="210" y="92" width="70" height="6" rx="2" fill="#2b1a1a"/><rect x="210" y="104" width="52" height="6" rx="2" fill="#34d399" opacity=".5"/>
+              </svg>
+            )}
+            {c.art === 'mcp' && (
+              <svg viewBox="0 0 160 140" class="art">
+                <circle cx="80" cy="70" r="22" fill="#1854b0"/><text x="80" y="75" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="14" fill="#fff">&gt;_</text>
+                {[0,60,120,180,240,300].map((a) => { const r=50, x=80+r*Math.cos(a*Math.PI/180), y=70+r*Math.sin(a*Math.PI/180); return <><line x1="80" y1="70" x2={x} y2={y} stroke="#27355a" stroke-dasharray="3 4" class="flow"/><circle cx={x} cy={y} r="9" fill="#121a30" stroke="#4a9dff"/></>; })}
+              </svg>
+            )}
+            {c.art === 'agents' && (
+              <svg viewBox="0 0 160 140" class="art">
+                <rect x="55" y="14" width="50" height="26" rx="6" fill="#4a9dff"/><text x="80" y="31" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#fff">leader</text>
+                {[30,80,130].map((x) => (<><path d={`M80 40 C80 60 ${x} 60 ${x} 80`} stroke="#27355a" fill="none" class="flow"/><rect x={x-22} y="80" width="44" height="22" rx="6" fill="#121a30" stroke="#27355a"/><circle cx={x-12} cy="91" r="3" fill="#34d399" class="blink"/></>))}
+                <rect x="18" y="116" width="124" height="12" rx="4" fill="#0f1424" stroke="#1b2540"/><rect x="22" y="119" width="60" height="6" rx="2" fill="#4a9dff" opacity=".6"/>
+              </svg>
+            )}
+            {c.art === 'im' && (
+              <svg viewBox="0 0 160 140" class="art">
+                <rect x="8" y="20" width="144" height="100" rx="12" fill="#121a30" stroke="#27355a"/>
+                <rect x="18" y="36" width="124" height="18" rx="8" fill="#1854b0"/><text x="28" y="49" font-family="ui-monospace,Menlo,monospace" font-size="10" fill="#fff">/ggcode fix auth</text>
+                <rect x="52" y="62" width="90" height="18" rx="8" fill="#0f1424" stroke="#27355a"/><text x="62" y="75" font-family="ui-monospace,Menlo,monospace" font-size="10" fill="#7cc4ff">● editing 3 files…</text>
+                <rect x="18" y="88" width="70" height="18" rx="8" fill="#0f1424" stroke="#27355a"/><text x="28" y="101" font-family="ui-monospace,Menlo,monospace" font-size="10" fill="#34d399">✓ done</text>
+              </svg>
+            )}
+            {c.art === 'lan' && (
+              <svg viewBox="0 0 160 140" class="art">
+                {[40,80,120].map((x,i)=>(<><line x1="80" y1="70" x2={x} y2={i===1?24:24} stroke="#27355a" stroke-dasharray="3 4" class="flow"/><circle cx={x} cy="24" r="10" fill="#121a30" stroke="#4a9dff"/></>))}
+                <circle cx="80" cy="70" r="16" fill="#1854b0"/><text x="80" y="75" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="12" fill="#fff">LAN</text>
+                {[40,80,120].map((x)=>(<><line x1="80" y1="70" x2={x} y2="116" stroke="#27355a" stroke-dasharray="3 4" class="flow"/><circle cx={x} cy="116" r="10" fill="#121a30" stroke="#4a9dff"/></>))}
+              </svg>
+            )}
+            {c.art === 'modes' && (
+              <svg viewBox="0 0 160 140" class="art">
+                {['supervised','bypass'].map((m,i)=>(<><rect x="20" y={26+i*50} width="120" height="38" rx="10" fill={i===0?'#121a30':'#0f1424'} stroke={i===0?'#4a9dff':'#27355a'}/><circle cx="40" cy={45+i*50} r="8" fill={i===0?'#4a9dff':'#1b2540'}/><text x="56" y={49+i*50} font-family="ui-monospace,Menlo,monospace" font-size="11" fill={i===0?'#e6ecf7':'#8e9dbf'}>{m}</text></>))}
+                <rect x="40" y="104" width="80" height="6" rx="3" fill="#1b2540"/><rect x="40" y="104" width="40" height="6" rx="3" fill="#4a9dff" class="slide"/>
+              </svg>
+            )}
+            {c.art === 'worktree' && (
+              <svg viewBox="0 0 160 140" class="art">
+                <line x1="40" y1="20" x2="40" y2="120" stroke="#4a9dff" stroke-width="2"/>
+                <line x1="40" y1="60" x2="80" y2="40" stroke="#7cc4ff" stroke-width="2" class="grow"/><line x1="80" y1="40" x2="120" y2="40" stroke="#7cc4ff" stroke-width="2"/>
+                <line x1="40" y1="90" x2="80" y2="104" stroke="#6ee7ff" stroke-width="2" class="grow"/><line x1="80" y1="104" x2="120" y2="104" stroke="#6ee7ff" stroke-width="2"/>
+                <circle cx="40" cy="20" r="5" fill="#4a9dff"/><circle cx="40" cy="60" r="5" fill="#4a9dff"/><circle cx="40" cy="90" r="5" fill="#4a9dff"/><circle cx="40" cy="120" r="5" fill="#4a9dff"/>
+                <circle cx="120" cy="40" r="6" fill="#7cc4ff"/><circle cx="120" cy="104" r="6" fill="#6ee7ff"/>
+                <text x="128" y="44" font-family="ui-monospace,Menlo,monospace" font-size="9" fill="#8e9dbf">feat</text><text x="128" y="108" font-family="ui-monospace,Menlo,monospace" font-size="9" fill="#8e9dbf">fix</text>
+              </svg>
+            )}
+            {c.art === 'mobile' && (
+              <svg viewBox="0 0 160 140" class="art">
+                <rect x="56" y="14" width="48" height="112" rx="10" fill="#121a30" stroke="#4a9dff"/>
+                <rect x="64" y="30" width="32" height="14" rx="4" fill="#1854b0"/><rect x="64" y="50" width="32" height="10" rx="4" fill="#0f1424" stroke="#27355a"/>
+                <rect x="64" y="90" width="32" height="12" rx="6" fill="#34d399" opacity=".7"/><rect x="64" y="106" width="32" height="12" rx="6" fill="#1b2540"/>
+                <path d="M40 50 q-14 20 0 40" stroke="#4a9dff" fill="none" stroke-dasharray="2 4" class="flow"/><path d="M120 50 q14 20 0 40" stroke="#4a9dff" fill="none" stroke-dasharray="2 4" class="flow"/>
+              </svg>
+            )}
+            {c.art === 'sessions' && (
+              <svg viewBox="0 0 320 140" class="art">
+                {[0,1,2].map((i)=>(<><rect x="16" y={18+i*38} width="288" height="28" rx="8" fill={i===0?'#121a30':'#0f1424'} stroke={i===0?'#4a9dff':'#1b2540'}/><circle cx="32" cy={32+i*38} r="4" fill={i===0?'#34d399':'#5b6a8c'}/><text x="46" y={36+i*38} font-family="ui-monospace,Menlo,monospace" font-size="10" fill="#e6ecf7">{['auth-refactor  ·  2h ago  ·  resumable','fix-flaky-tests  ·  yesterday','release-notes  ·  nov 20'][i]}</text></>))}
+              </svg>
+            )}
+          </div>
+          <h3>{t(locale, `features.${c.key}.title`)}</h3>
+          <p>{t(locale, `features.${c.key}.text`)}</p>
+        </Reveal>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .bento { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-4); }
+  .bento-card { padding: var(--space-5); display: flex; flex-direction: column; gap: var(--space-3); position: relative; overflow: hidden; transform-style: preserve-3d; }
+  .bento-card:hover { background-color: var(--bg-card-hover); }
+  .span-2 { grid-column: span 2; }
+  .bento-card h3 { font-size: var(--text-lg); margin-top: auto; }
+  .bento-card p { color: var(--text-muted); font-size: var(--text-sm); }
+  .bento-art { margin: calc(var(--space-2) * -1) calc(var(--space-2) * -1) 0; border-radius: var(--radius); overflow: hidden; }
+  .art { width: 100%; height: auto; }
+  .flow { stroke-dasharray: 3 5; animation: dash 1.6s linear infinite; }
+  .grow { stroke-dasharray: 60; stroke-dashoffset: 60; animation: grow 1.4s var(--ease-out) forwards; }
+  .blink { animation: blink 1.8s ease-in-out infinite; }
+  .slide { animation: slide 2.4s ease-in-out infinite alternate; transform-origin: left; }
+  @keyframes dash { to { stroke-dashoffset: -16; } }
+  @keyframes grow { to { stroke-dashoffset: 0; } }
+  @keyframes blink { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+  @keyframes slide { from { transform: translateX(0) } to { transform: translateX(40px) } }
+  @media (max-width: 1024px) { .bento { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .bento { grid-template-columns: 1fr; } .span-2 { grid-column: span 1; } }
+  @media (prefers-reduced-motion: reduce) { .flow, .blink, .slide { animation: none; } .grow { stroke-dashoffset: 0; animation: none; } }
+</style>
+
+<script>
+  // Subtle hover tilt on cards (desktop, fine pointer, motion allowed). Transform only.
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!reduce && matchMedia('(pointer: fine)').matches && matchMedia('(min-width: 1024px)').matches) {
+    document.querySelectorAll<HTMLElement>('.bento-card').forEach((card) => {
+      card.addEventListener('pointermove', (e) => {
+        const r = card.getBoundingClientRect();
+        const rx = ((e.clientY - r.top) / r.height - 0.5) * -4, ry = ((e.clientX - r.left) / r.width - 0.5) * 4;
+        card.style.transform = `perspective(900px) rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg)`;
+      });
+      card.addEventListener('pointerleave', () => { card.style.transform = ''; });
+    });
+  }
+</script>
