@@ -276,21 +276,6 @@ func ptCatalog(key string) string {
 	case "config.usage":
 		return "Uso: /config set <chave> <valor>\n\nChaves: model, vendor, endpoint, language, apikey [--vendor]\n\nEndpoints: /config add-endpoint <nome> <url_base> [--protocol openai] [--apikey sk-xxx]\n          /config remove-endpoint <nome>\n\n"
 
-	case "follow.active_agent":
-		return "Seguindo agente %s — entrada pausada. Pressione Esc para retornar."
-	case "follow.active_teammate":
-		return "Seguindo companheiro %s — entrada pausada. Pressione Esc para retornar."
-	case "follow.hint":
-		return "  ↑↓←→ alternar  Esc fechar"
-	case "follow.loading":
-		return "  Carregando visualização de acompanhamento..."
-	case "follow.more":
-		return "  +%d mais"
-	case "follow.status_done":
-		return "concluído"
-	case "follow.status_running":
-		return "em execução"
-
 	case "header.terminal_native":
 		return "codificação AI nativa em terminal"
 
@@ -302,8 +287,6 @@ func ptCatalog(key string) string {
 		return "Ctrl+C limpar/sair"
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R barra lateral"
-	case "hint.follow_panel":
-		return "Ctrl+N acompanhar"
 	case "hint.help":
 		return "/? ajuda"
 	case "hint.image_attached_count":
@@ -314,8 +297,6 @@ func ptCatalog(key string) string {
 		return "modo"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab modo"
-	case "hint.unfollow_panel":
-		return "Ctrl+N parar de acompanhar"
 
 	case "image.clipboard_failed":
 		return "Não foi possível colar uma imagem da área de transferência: %v"
@@ -1010,7 +991,6 @@ Atalhos de teclado:
   Ctrl+R             Alternar barra lateral
   Ctrl+\             Alternar modo compacto (chat em largura total)
   Ctrl+L             Iniciar nova sessão (igual a /clear)
-  Ctrl+N             Alternar painel de acompanhamento de subagente
   Ctrl+T             Alternar escopo de salvamento da configuração (global/instância)
   Ctrl+Shift+C       Copiar última resposta do assistente para a área de transferência
   Esc                Cancelar autocompletar / sair do modo shell ocioso

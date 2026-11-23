@@ -154,10 +154,6 @@ func enCatalog(key string) string {
 		return "Ctrl+C clear/exit"
 	case "hint.image_attached_count":
 		return "%d image(s) attached"
-	case "hint.follow_panel":
-		return "Ctrl+N follow"
-	case "hint.unfollow_panel":
-		return "Ctrl+N unfollow"
 	case "queued.count":
 		return "%d queued"
 	case "interrupt.delivered":
@@ -192,20 +188,6 @@ func enCatalog(key string) string {
 		return "active"
 	case "output.style.list.header":
 		return "Available output styles:"
-	case "follow.loading":
-		return "  Loading follow view..."
-	case "follow.active_agent":
-		return "Following agent %s — input paused. Press Esc to return."
-	case "follow.active_teammate":
-		return "Following teammate %s — input paused. Press Esc to return."
-	case "follow.status_running":
-		return "running"
-	case "follow.status_done":
-		return "done"
-	case "follow.more":
-		return "  +%d more"
-	case "follow.hint":
-		return "  ↑↓←→ switch  Esc close"
 	case "status.tools_used":
 		return "%d tools used"
 	case "approval.rejected":
@@ -1123,7 +1105,6 @@ Keyboard shortcuts:
   Ctrl+R             Toggle sidebar
   Ctrl+\             Toggle compact mode (full-width chat)
   Ctrl+L             Start new session (same as /clear)
-  Ctrl+N             Toggle sub-agent follow panel
   Ctrl+T             Toggle config save scope (global/instance)
   Ctrl+Shift+C       Copy last assistant response to clipboard
   Esc                Cancel autocomplete / exit idle shell mode

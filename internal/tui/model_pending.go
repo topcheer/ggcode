@@ -245,9 +245,6 @@ func (m *Model) shutdownAll() {
 			}
 		})
 	}
-	if m.extPaneMgr != nil {
-		m.extPaneMgr.CloseAll()
-	}
 	if m.cmdPaneMgr != nil {
 		m.cmdPaneMgr.Close()
 	}

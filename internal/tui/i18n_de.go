@@ -148,10 +148,6 @@ func deCatalog(key string) string {
 		return "Ctrl+C löschen/beenden"
 	case "hint.image_attached_count":
 		return "%d Bild(er) angehängt"
-	case "hint.follow_panel":
-		return "Ctrl+N folgen"
-	case "hint.unfollow_panel":
-		return "Ctrl+N nicht mehr folgen"
 
 	case "queued.count":
 		return "%d eingereiht"
@@ -176,21 +172,6 @@ func deCatalog(key string) string {
 		return "Denkanstrengung vom aktuellen Anbieter nicht unterstützt"
 	case "reasoning.effort.unsupported":
 		return "Denkanstrengung wird vom aktuellen Anbieter nicht unterstützt"
-
-	case "follow.loading":
-		return "  Folgen-Ansicht wird geladen..."
-	case "follow.active_agent":
-		return "Folge Agent %s — Eingabe pausiert. Esc drücken zum Zurückkehren."
-	case "follow.active_teammate":
-		return "Folge Teammitglied %s — Eingabe pausiert. Esc drücken zum Zurückkehren."
-	case "follow.status_running":
-		return "aktiv"
-	case "follow.status_done":
-		return "fertig"
-	case "follow.more":
-		return "  +%d mehr"
-	case "follow.hint":
-		return "  ↑↓←→ wechseln  Esc schließen"
 
 	case "status.tools_used":
 		return "%d Werkzeuge verwendet"
@@ -942,7 +923,6 @@ Tastenkürzel:
   Tab                Autovervollständigung oder Genehmigungsoptionen durchschalten
   Shift+Tab          Rückwärts durchschalten, sonst Berechtigungsmodus umschalten
   Ctrl+R             Seitenleiste umschalten
-  Ctrl+N/P           Neue/vorherige Sitzung
   Ctrl+T             Tunnel öffnen (Mobile-Freigabe)
   Enter              Nachricht senden / aktuelle Auswahl anwenden
   Esc                Autovervollständigung abbrechen / Idle-Shell-Modus verlassen

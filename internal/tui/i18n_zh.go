@@ -150,10 +150,6 @@ func zhCatalog(key string) string {
 		return "Ctrl+C 清空/退出"
 	case "hint.image_attached_count":
 		return "已附加 %d 张图片"
-	case "hint.follow_panel":
-		return "Ctrl+N 跟随"
-	case "hint.unfollow_panel":
-		return "Ctrl+N 取消跟随"
 	case "tunnel.not_active":
 		return "当前没有活跃的共享会话。"
 	case "tunnel.stopped":
@@ -198,20 +194,6 @@ func zhCatalog(key string) string {
 		return "当前"
 	case "output.style.list.header":
 		return "可用输出风格:"
-	case "follow.loading":
-		return "  正在加载跟随视图..."
-	case "follow.active_agent":
-		return "正在跟随 agent %s — 输入已暂停。按 Esc 返回。"
-	case "follow.active_teammate":
-		return "正在跟随 teammate %s — 输入已暂停。按 Esc 返回。"
-	case "follow.status_running":
-		return "运行中"
-	case "follow.status_done":
-		return "完成"
-	case "follow.more":
-		return "  +%d 个更多"
-	case "follow.hint":
-		return "  ↑↓←→ 切换  Esc 关闭"
 	case "status.tools_used":
 		return "已调用 %d 个工具"
 	case "approval.rejected":
@@ -1130,7 +1112,6 @@ func zhCatalog(key string) string {
   Ctrl+R             切换侧边栏
   Ctrl+\             切换紧凑模式（全宽对话）
   Ctrl+L             新建会话（等同 /clear）
-  Ctrl+N             切换子 Agent 跟随面板
   Ctrl+T             切换配置保存范围（全局/实例）
   Ctrl+Shift+C       复制最后一条助手回复到剪贴板
   Esc                取消补全 / 在空闲 shell 模式下退出命令模式

@@ -148,10 +148,6 @@ func ruCatalog(key string) string {
 		return "Ctrl+C очистить/выйти"
 	case "hint.image_attached_count":
 		return "%d изображ.(й) прикреплено"
-	case "hint.follow_panel":
-		return "Ctrl+N следовать"
-	case "hint.unfollow_panel":
-		return "Ctrl+N перестать следовать"
 
 	case "queued.count":
 		return "%d в очереди"
@@ -176,21 +172,6 @@ func ruCatalog(key string) string {
 		return "Усилие размышления не поддерживается текущим поставщиком"
 	case "reasoning.effort.unsupported":
 		return "Усилие размышления не поддерживается текущим поставщиком"
-
-	case "follow.loading":
-		return "  Загрузка представления следования..."
-	case "follow.active_agent":
-		return "Следование за агентом %s — ввод приостановлен. Нажмите Esc для возврата."
-	case "follow.active_teammate":
-		return "Следование за участником %s — ввод приостановлен. Нажмите Esc для возврата."
-	case "follow.status_running":
-		return "активно"
-	case "follow.status_done":
-		return "готово"
-	case "follow.more":
-		return "  +%d ещё"
-	case "follow.hint":
-		return "  ↑↓←→ переключать  Esc закрыть"
 
 	case "status.tools_used":
 		return "%d инструментов использовано"
@@ -920,7 +901,6 @@ func ruCatalog(key string) string {
   Tab                Автодополнение или переключение опций подтверждения
   Shift+Tab          Переключение назад, или переключение режима разрешений
   Ctrl+R             Переключить боковую панель
-  Ctrl+N/P           Новая/предыдущая сессия
   Ctrl+T             Открыть туннель (мобильный доступ)
   Enter              Отправить сообщение / применить выбор
   Esc                Отменить автодополнение / выйти из режима shell

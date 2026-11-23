@@ -228,42 +228,15 @@ func (m Model) renderComposerPanel() string {
 		}
 	}
 
-	if len(m.subAgentFollow.slots) > 0 {
-		key := "hint.follow_panel"
-		if m.subAgentFollow.isActive() {
-			key = "hint.unfollow_panel"
-		}
-		followHint := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#00FFFF")).
-			Background(lipgloss.Color("#333333")).
-			Bold(true).
-			Padding(0, 1).
-			Render(m.t(key))
-		hints = append(hints, followHint)
-	}
-
 	hintLine := strings.Join(hints, " • ")
-
-	var followStrip string
-	if m.subAgentFollow.slots != nil && len(m.subAgentFollow.slots) > 0 {
-		followStrip = m.renderSubAgentFollowStrip() + "\n"
-	}
 
 	var inputPart string
 	if m.tmuxMenuOpen {
 		inputPart = m.renderTmuxMenu()
-	} else if m.subAgentFollow.isActive() {
-		if strings.HasPrefix(m.subAgentFollow.activeID, "tm-") {
-			inputPart = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
-				fmt.Sprintf(m.t("follow.active_teammate"), shortID(m.subAgentFollow.activeID)))
-		} else {
-			inputPart = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
-				fmt.Sprintf(m.t("follow.active_agent"), shortID(m.subAgentFollow.activeID)))
-		}
 	} else {
 		inputPart = m.renderComposerInput()
 	}
-	body := followStrip + inputPart + "\n" + hintLine
+	body := inputPart + "\n" + hintLine
 
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
