@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -190,46 +189,5 @@ func TestRecencyWeightedScore(t *testing.T) {
 	staleHigh := recencyWeightedScore(10, now.Add(-14*24*time.Hour), now)
 	if recentLow >= staleHigh {
 		t.Errorf("expected stale high-hit (%.2f) to outrank recent low-hit (%.2f)", staleHigh, recentLow)
-	}
-}
-
-func TestTopRulesForPrompt_RecencyWeighting(t *testing.T) {
-	dir := t.TempDir()
-	rs := NewRuleStore(dir)
-
-	rs.AddRule(Rule{
-		Category:     "build",
-		Rule:         "stale high-hit rule",
-		MatchPattern: "stale_rule_pattern",
-	})
-	rs.mu.Lock()
-	rs.load()
-	rs.rules[0].HitCount = 20
-	rs.rules[0].LastSeen = time.Now().Add(-60 * 24 * time.Hour)
-	rs.mu.Unlock()
-
-	rs.AddRule(Rule{
-		Category:     "test",
-		Rule:         "recent low-hit rule",
-		MatchPattern: "recent_rule_pattern",
-	})
-	rs.mu.Lock()
-	rs.load()
-	rs.rules[1].HitCount = 3
-	rs.rules[1].LastSeen = time.Now()
-	rs.mu.Unlock()
-
-	prompt := rs.TopRulesForPrompt(5)
-	if prompt == "" {
-		t.Fatal("expected non-empty prompt")
-	}
-
-	idxRecent := strings.Index(prompt, "recent low-hit rule")
-	idxStale := strings.Index(prompt, "stale high-hit rule")
-	if idxRecent < 0 || idxStale < 0 {
-		t.Fatalf("both rules should be present in prompt")
-	}
-	if idxRecent > idxStale {
-		t.Errorf("expected recent rule to rank before stale rule in prompt output")
 	}
 }

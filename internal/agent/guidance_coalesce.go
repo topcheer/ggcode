@@ -182,19 +182,15 @@ func appendSuppressedSummary(result, suppressed []string) []string {
 
 func (a *Agent) applyToolResultGuidance(
 	result *tool.Result,
-	loopGuidance, searchParamHint, redundancyHint, equivHint, undoBlindHint string,
+	loopGuidance, searchParamHint, redundancyHint, equivHint string,
 ) {
-	if loopGuidance == "" && searchParamHint == "" && redundancyHint == "" && equivHint == "" && undoBlindHint == "" {
+	if loopGuidance == "" && searchParamHint == "" && redundancyHint == "" && equivHint == "" {
 		return
 	}
 
 	var hints []string
 	if searchParamHint != "" {
 		hints = append(hints, searchParamHint)
-	}
-	if undoBlindHint != "" {
-
-		hints = append(hints, undoBlindHint)
 	}
 	if loopGuidance != "" {
 		hints = append(hints, loopGuidance)

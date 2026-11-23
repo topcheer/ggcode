@@ -48,16 +48,6 @@ func (a *Agent) runStreamSetup(ctx context.Context, content []provider.ContentBl
 		a.experienceFailureRecallFired = false
 
 		a.experienceInjectedCaseIDs = nil
-
-		a.toolflowHintFired = false
-		a.runToolNames = nil
-		if idx := a.recallExperience(userPromptForStats); idx != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "system",
-				Content: []provider.ContentBlock{{Type: "text", Text: "## Relevant Experience\n" + idx}},
-			})
-			debug.Log("agent", "injected experience recall (%d chars)", len(idx))
-		}
 	}
 
 	asyncVerifyStats := (*RunStats)(nil)
@@ -195,7 +185,6 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 
 	a.plannerAnalyze(userText)
 
-	a.resetTodoStaleness()
 	a.resetTodoDrop()
 	a.resetScopeDrift()
 	a.bgVerifyJobs = newBgVerifyRegistry()
@@ -223,8 +212,6 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 	if a.errorBudget != nil {
 		a.errorBudget.reset()
 	}
-	a.verifDebt.reset()
-	a.undoBlind.reset()
 	a.toolCallBudget.reset()
 	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
 
@@ -289,7 +276,6 @@ func (a *Agent) buildRunTurnContextD2(ctx context.Context, content []provider.Co
 	a.verifyRegression.reset()
 	a.resetSelfCorrectionGate()
 	a.argSizeGuardFires = 0
-	a.patchExhaust.reset()
 	a.searchParamGuard.reset()
 	a.toolRedundancy.reset()
 	a.toolSequence.reset()
@@ -327,14 +313,12 @@ func (a *Agent) buildRunTurnContextD2(ctx context.Context, content []provider.Co
 	a.reversibility.reset()
 	a.constraintViolation.reset()
 	a.inputUnderspec.reset()
-	a.tunnelVision.reset()
 	a.queryConverge.reset()
 	a.failureMode.reset()
 	a.toolFallback.reset()
 	a.errorCascade.reset()
 	a.errorPropagate.reset()
 	a.readHash.reset()
-	a.toolThermal.reset()
 	a.cacheEffMonitor.reset()
 
 	a.changeReconcile.reset()

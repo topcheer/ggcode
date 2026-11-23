@@ -69,7 +69,6 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 			runStats.recordCompaction()
 		}
 		if injected, kind := a.injectPendingInterruptions(i + 1); injected {
-			a.recordIntervention(i + 1)
 
 			if a.maxIter > 0 && i == a.maxIter-1 {
 				st.guidanceAtBudget = true
@@ -107,19 +106,6 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 			msgs = a.contextManager.Messages()
 		}
 
-		if staleReminder := a.maybeRemindStaleTodo(i + 1); staleReminder != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: staleReminder}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-
-		if thermalMsg := a.toolThermal.maybeWarn(i); thermalMsg != "" {
-			debug.Log("thermal-profile", "imbalanced tool usage detected at iteration %d: %s", i+1, a.toolThermal.categoryBreakdown())
-			msgs = a.guidanceEmit(thermalMsg, msgs)
-		}
-
 		if ecMsg := a.errorCompound.maybeWarn(i + 1); ecMsg != "" {
 
 			if a.injectGuidance(ecMsg) {
@@ -127,14 +113,6 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 			} else {
 				a.errorCompound.markUndelivered()
 			}
-		}
-
-		if csMsg := a.correctionSpiral.maybeWarn(i + 1); csMsg != "" {
-			msgs = a.guidanceEmit(csMsg, msgs)
-		}
-
-		if vdMsg := a.verifyDebt.maybeWarn(i + 1); vdMsg != "" {
-			msgs = a.guidanceEmit(vdMsg, msgs)
 		}
 
 		if epMsg := a.editPropagation.maybeWarn(i + 1); epMsg != "" {
@@ -186,10 +164,6 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 				a.queryConverge.markUndelivered()
 			}
 		}
-		if bgOrphanMsg := a.maybeWarnBgOrphan(i + 1); bgOrphanMsg != "" {
-			msgs = a.guidanceEmit(bgOrphanMsg, msgs)
-		}
-
 		if rrMsg := a.reasoningRedund.maybeWarn(i+1, a.maxIter); rrMsg != "" {
 			debug.Log("reasoning-redund", "Iteration %d: reasoning redundancy detected -- consecutive text-only overthinking", i+1)
 
@@ -198,10 +172,6 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 			} else {
 				a.reasoningRedund.markUndelivered()
 			}
-		}
-
-		if ipMsg := a.maybeWarnIterPressure(i + 1); ipMsg != "" {
-			msgs = a.guidanceEmit(ipMsg, msgs)
 		}
 
 		if ptMsg := a.maybeWarnTermination(); ptMsg != "" {

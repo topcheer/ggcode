@@ -544,28 +544,6 @@ func TestDetectResearchMode(t *testing.T) {
 	}
 }
 
-func TestReadOnlyTablesIncludeFormerGaps(t *testing.T) {
-
-	for _, name := range []string{
-		"code_search", "git_stash_list", "lsp_workspace_symbols",
-		"lsp_implementation", "lsp_code_actions", "dep_graph",
-		"scan_todos", "code_health",
-	} {
-		if !readOnlyTools[name] {
-			t.Errorf("readOnlyTools missing pure-read tool %q (stall nudge suppressed)", name)
-		}
-		if !effortReadOnlyTools[name] {
-			t.Errorf("effortReadOnlyTools missing pure-read tool %q", name)
-		}
-	}
-	if !effortReadOnlyTools["screenshot"] {
-		t.Error("effortReadOnlyTools missing screenshot (capture-only)")
-	}
-	if toolCategoryMap["screenshot"] != thermalExplore {
-		t.Errorf("screenshot must be thermalExplore, got %v", toolCategoryMap["screenshot"])
-	}
-}
-
 func TestExtractWrittenPaths(t *testing.T) {
 	got := extractWrittenPaths(`{"written_files":1,"written_paths":["/a.go"],"failed_files":1,"failed_paths":["/b.go"]}`)
 	if len(got) != 1 || got[0] != "/a.go" {

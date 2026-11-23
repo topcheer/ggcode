@@ -89,14 +89,14 @@ func TestIssue607_B2_ToolResultHintsRespectBudget(t *testing.T) {
 
 	for i := 0; i < guidanceBudgetPerTurn; i++ {
 		res := &tool.Result{Content: "ok"}
-		a.applyToolResultGuidance(res, "", "[advisory-"+string(rune('a'+i))+"] hint number "+string(rune('a'+i)), "", "", "")
+		a.applyToolResultGuidance(res, "", "[advisory-"+string(rune('a'+i))+"] hint number "+string(rune('a'+i)), "", "")
 		if !strings.Contains(res.Content, "[advisory-") {
 			t.Fatalf("result %d: advisory hint unexpectedly suppressed before budget cap; content=%q", i, res.Content)
 		}
 	}
 
 	res := &tool.Result{Content: "ok"}
-	a.applyToolResultGuidance(res, "", "[advisory-over] should be suppressed", "", "", "")
+	a.applyToolResultGuidance(res, "", "[advisory-over] should be suppressed", "", "")
 	if strings.Contains(res.Content, "[advisory-over]") {
 		t.Errorf("tool-result hint bypassed per-turn budget cap (B2); content=%q", res.Content)
 	}
@@ -109,11 +109,11 @@ func TestIssue607_B2_CriticalHintPassesExhaustedBudget(t *testing.T) {
 	a := issue607Agent()
 	for i := 0; i < guidanceBudgetPerTurn; i++ {
 		res := &tool.Result{Content: "ok"}
-		a.applyToolResultGuidance(res, "", "[advisory-"+string(rune('a'+i))+"] filler", "", "", "")
+		a.applyToolResultGuidance(res, "", "[advisory-"+string(rune('a'+i))+"] filler", "", "")
 	}
 
 	res := &tool.Result{Content: "ok"}
-	a.applyToolResultGuidance(res, "[CRITICAL] critical failure detected", "", "", "", "")
+	a.applyToolResultGuidance(res, "[CRITICAL] critical failure detected", "", "", "")
 	if !strings.Contains(res.Content, "[CRITICAL]") {
 		t.Error("critical hint suppressed by exhausted budget; want bypass")
 	}
@@ -125,7 +125,7 @@ func TestIssue607_B3_ConflictHintCountsTowardCap(t *testing.T) {
 
 	a.applyToolResultGuidance(res, "",
 		"[analysis-paralysis] ACT NOW: make your best-guess edit.",
-		"[explore-expand] Explore more to understand before editing.", "", "")
+		"[explore-expand] Explore more to understand before editing.", "")
 
 	injectedMsgs := a.guidanceBudget.injected
 	if injectedMsgs > guidanceBudgetPerTurn {
@@ -141,12 +141,12 @@ func TestIssue607_B3_ExemptHintBypassesCapWithoutConsumingBudget(t *testing.T) {
 
 	for i := 0; i < guidanceBudgetPerTurn; i++ {
 		res := &tool.Result{Content: "ok"}
-		a.applyToolResultGuidance(res, "", "[advisory-"+string(rune('a'+i))+"] filler", "", "", "")
+		a.applyToolResultGuidance(res, "", "[advisory-"+string(rune('a'+i))+"] filler", "", "")
 	}
 	before := a.guidanceBudget.injected
 
 	res := &tool.Result{Content: "ok"}
-	a.applyToolResultGuidance(res, "", "[guidance-conflict] contradictory directives detected; proceed with the retained hint", "", "", "")
+	a.applyToolResultGuidance(res, "", "[guidance-conflict] contradictory directives detected; proceed with the retained hint", "", "")
 	if !strings.Contains(res.Content, "[guidance-conflict]") {
 		t.Error("exempt hint suppressed by exhausted budget; want bypass")
 	}
@@ -162,14 +162,14 @@ func TestIssue607_B3_MetaHintDedupedAcrossResults(t *testing.T) {
 	conflict := "[analysis-paralysis] ACT NOW: make your best-guess edit."
 
 	res1 := &tool.Result{Content: "ok"}
-	a.applyToolResultGuidance(res1, "", conflict, "", "", "")
+	a.applyToolResultGuidance(res1, "", conflict, "", "")
 	if !strings.Contains(res1.Content, "[analysis-paralysis]") {
 		t.Fatalf("first result: expected advisory hint; content=%q", res1.Content)
 	}
 
 	for i := 2; i <= 3; i++ {
 		res := &tool.Result{Content: "ok"}
-		a.applyToolResultGuidance(res, "", conflict, "", "", "")
+		a.applyToolResultGuidance(res, "", conflict, "", "")
 		if strings.Contains(res.Content, "[analysis-paralysis]") {
 			t.Errorf("result %d: duplicate hint repeated across tool results; content=%q", i, res.Content)
 		}
@@ -185,7 +185,7 @@ func TestIssue607_B3_ConflictDetectionStripsCoalescedSummaries(t *testing.T) {
 	res := &tool.Result{Content: "ok"}
 	a.applyToolResultGuidance(res, "",
 		"[analysis-paralysis] ACT NOW: make your best-guess edit.",
-		"[explore-expand] Explore more to understand before editing.", "", "")
+		"[explore-expand] Explore more to understand before editing.", "")
 	if strings.Contains(res.Content, "[guidance-conflict]") {
 		t.Errorf("pseudo-conflict fabricated from [guidance-coalesced] summary: %q", res.Content)
 	}
@@ -225,7 +225,7 @@ func TestIssue607_B3_ConflictHintDoesNotExceedCap(t *testing.T) {
 	res := &tool.Result{Content: "ok"}
 	a.applyToolResultGuidance(res, "",
 		"[analysis-paralysis] ACT NOW: make your best-guess edit.",
-		"[explore-expand] Explore more to understand before editing.", "", "")
+		"[explore-expand] Explore more to understand before editing.", "")
 
 	messages := strings.Count(res.Content, "\n\n")
 
@@ -238,13 +238,13 @@ func TestIssue607_B3_ConflictDetectedAcrossResults(t *testing.T) {
 	a := issue607Agent()
 
 	res1 := &tool.Result{Content: "ok"}
-	a.applyToolResultGuidance(res1, "", "[explore-expand] Explore more to understand before editing.", "", "", "")
+	a.applyToolResultGuidance(res1, "", "[explore-expand] Explore more to understand before editing.", "", "")
 	if !strings.Contains(res1.Content, "[explore-expand]") {
 		t.Fatalf("first result: expected advisory hint; content=%q", res1.Content)
 	}
 
 	res2 := &tool.Result{Content: "ok"}
-	a.applyToolResultGuidance(res2, "", "[analysis-paralysis] ACT NOW: make your best-guess edit.", "", "", "")
+	a.applyToolResultGuidance(res2, "", "[analysis-paralysis] ACT NOW: make your best-guess edit.", "", "")
 	if !strings.Contains(res2.Content, "[guidance-conflict]") {
 		t.Errorf("conflicting hint delivered on a later tool result did not trigger conflict meta-hint; content=%q", res2.Content)
 	}

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,43 +120,6 @@ func TestSA149_RunPolicyDistillRoundTrip(t *testing.T) {
 		return "", context.DeadlineExceeded
 	}); len(got) != 0 {
 		t.Fatal("failed chat must yield empty result")
-	}
-}
-
-func TestSA149_RenderPrefersRefined(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".ggcode"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	mixed := []trajectoryLearning{
-		pdEntry(t, 5, 5, 0, "raw statistical insight A", "Refined policy A: batch first."),
-	}
-	second := pdEntry(t, 5, 5, 0, "raw statistical insight B", "")
-	second.Category = "pd-probe-cat-b"
-	mixed = append(mixed, second)
-	var b strings.Builder
-	enc := json.NewEncoder(&b)
-	for _, l := range mixed {
-		if err := enc.Encode(l); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(dir, ".ggcode", "trajectory-learnings.jsonl"), []byte(b.String()), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	s := newTrajIntelState()
-	section := s.RenderPromptSection(dir)
-	if section == "" {
-		t.Fatal("section must render for confident entries")
-	}
-	if !strings.Contains(section, "Refined policy A: batch first.") {
-		t.Fatalf("refined text must win over insight: %s", section)
-	}
-	if !strings.Contains(section, "raw statistical insight B") {
-		t.Fatalf("unrefined entry must fall back to insight: %s", section)
-	}
-	if strings.Contains(section, "raw statistical insight A") {
-		t.Fatalf("raw insight A must be replaced by refined text: %s", section)
 	}
 }
 

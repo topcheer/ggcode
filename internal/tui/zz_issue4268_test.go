@@ -29,7 +29,7 @@ func TestInterventionsRefusalsCompletable_Issue4268(t *testing.T) {
 	for _, c := range SlashCommands {
 		inList[c] = true
 	}
-	for _, cmd := range []string{"/interventions", "/refusals"} {
+	for _, cmd := range []string{"/refusals"} {
 		if !inList[cmd] {
 			t.Errorf("%s must appear in SlashCommands for Tab completion", cmd)
 		}

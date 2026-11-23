@@ -425,7 +425,7 @@ var SlashCommands = []string{
 
 	"/pin", "/style", "/goal",
 
-	"/interventions", "/refusals",
+	"/refusals",
 }
 
 var SlashCommandDescriptions = map[string]string{
@@ -478,7 +478,6 @@ var SlashCommandDescriptions = map[string]string{
 	"/checkpoints":     "List checkpoints",
 	"/plugins":         "List loaded plugins",
 	"/inspector":       "Open inspector panel (sessions|checkpoints|memory|plugins|config|status)",
-	"/interventions":   "Show user-takeover history (/interventions clear wipes it)",
 	"/refusals":        "Show persisted user refusals enforced on write tools (/refusals clear wipes them)",
 	"/chat":            "Open LAN chat panel",
 	"/nick":            "Set LAN chat nickname, role, and team",

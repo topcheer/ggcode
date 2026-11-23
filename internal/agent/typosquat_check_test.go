@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -19,7 +20,7 @@ func TestCheckTyposquatting_NPMAlert(t *testing.T) {
 	}
 	found := false
 	for _, w := range warnings {
-		if containsAny(w, "lodahs", "lodash") {
+		if strings.Contains(w, "lodahs") || strings.Contains(w, "lodash") {
 			found = true
 			break
 		}

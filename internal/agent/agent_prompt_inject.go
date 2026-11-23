@@ -59,13 +59,6 @@ func (a *Agent) maybeInjectStableSystemHead() {
 		debug.Log("agent", "Injected keyed session instructions into system prompt (%d announce line(s))", len(announced))
 	}
 
-	if workingDir := a.WorkingDir(); workingDir != "" && a.trajIntel != nil {
-		if sec := a.trajIntel.RenderPromptSection(workingDir); sec != "" {
-			headParts = append(headParts, sec)
-			debug.Log("agent", "Injected past-run trajectory learnings into system prompt")
-		}
-	}
-
 	base = a.withTemporalContext(base)
 	if base == "" && len(headParts) == 0 {
 		return
@@ -148,25 +141,7 @@ func (a *Agent) renderVolatileTurnContext(runPrompt string) string {
 		}
 	}
 
-	if rs := a.getRuleStore(); rs != nil {
-		intent := classifyTaskType(runPrompt)
-		rs.SetRunIntent(intent)
-		rulesText := rs.TopRulesForPromptFiltered(5, intent)
-		if rulesText != "" {
-			parts = append(parts, rulesText)
-			debug.Log("agent", "Injected learned ratchet rules into turn context (intent=%s)", intent)
-		}
-	}
-
 	if workingDir := a.WorkingDir(); workingDir != "" {
-		if pb := NewPlaybook(workingDir); pb != nil {
-			playbookText := pb.HintsForPrompt(runPrompt, 3)
-			if playbookText != "" {
-				parts = append(parts, playbookText)
-				debug.Log("agent", "Injected playbook strategy hints into turn context")
-			}
-		}
-
 		if ft := FailureHintsForPrompt(workingDir, runPrompt, 2); ft != "" {
 			parts = append(parts, ft)
 			debug.Log("agent", "Injected failure attribution memory into turn context")

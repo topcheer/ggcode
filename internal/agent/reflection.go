@@ -538,8 +538,6 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 		}()
 		fn(s)
 
-		a.recordPlaybook(&s)
-
 		a.runRatchet(&s)
 	})
 }

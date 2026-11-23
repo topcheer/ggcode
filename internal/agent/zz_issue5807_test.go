@@ -15,7 +15,9 @@ import (
 )
 
 // newIssue5807Agent builds an agent whose volatile inputs are deterministic:
-// a fixed injector, no layers, and an in-memory rule store carrying one rule
+// a fixed injector and no layers. (The intent-filtered ratchet rules that
+// used to ride the volatile tail were removed; the byte-stability contract
+// of the head is what this test pins.)
 // per intent so different prompts classify to different rule sets.
 func newIssue5807Agent(t *testing.T) (*Agent, *RuleStore) {
 	t.Helper()
@@ -63,12 +65,6 @@ func TestIssue5807HeadByteStableAcrossIntents(t *testing.T) {
 
 	vol2 := issue5807Turn(t, a, cm, "refactor the parser and rename symbols")
 
-	if !strings.Contains(vol1, "RULE-FOR-TEST-INTENT-A") || strings.Contains(vol1, "RULE-FOR-REFACTOR-INTENT-A") {
-		t.Fatalf("turn-1 volatile context must carry only the test-intent rule:\n%s", vol1)
-	}
-	if !strings.Contains(vol2, "RULE-FOR-REFACTOR-INTENT-A") || strings.Contains(vol2, "RULE-FOR-TEST-INTENT-A") {
-		t.Fatalf("turn-2 volatile context must carry only the refactor-intent rule:\n%s", vol2)
-	}
 	if !strings.Contains(vol1, "PEER ALERT") || !strings.Contains(vol2, "PEER ALERT") {
 		t.Fatal("injector output must ride the volatile turn context")
 	}

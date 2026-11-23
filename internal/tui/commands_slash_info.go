@@ -1435,22 +1435,6 @@ func (m *Model) handleGoalCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-func (m *Model) handleInterventionsCommand(parts []string) tea.Cmd {
-	if len(parts) > 1 && strings.ToLower(parts[1]) == "clear" {
-		if m.agent != nil {
-			m.agent.ClearInterventions()
-		}
-		m.chatWriteSystem(nextSystemID(), "Intervention history cleared.")
-		return nil
-	}
-	if m.agent == nil {
-		m.chatWriteSystem(nextSystemID(), "No agent session yet.")
-		return nil
-	}
-	m.chatWriteSystem(nextSystemID(), m.agent.InterventionSummary())
-	return nil
-}
-
 func (m *Model) handleRefusalsCommand(parts []string) tea.Cmd {
 	if len(parts) > 1 && strings.ToLower(parts[1]) == "clear" {
 		if m.agent != nil {
