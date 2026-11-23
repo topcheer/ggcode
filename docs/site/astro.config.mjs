@@ -11,7 +11,7 @@ export default defineConfig({
   site: 'https://ggcode.dev',
   base: SITE_BASE,
   output: 'static',
-  build: { inlineStylesheets: 'auto' },
+  build: { inlineStylesheets: 'always' },
   compressHTML: true,
   i18n: {
     defaultLocale: 'en',

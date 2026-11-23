@@ -227,4 +227,14 @@ jobs:
         run: |
           cd docs/site
           npm run build
+      # Performance/a11y/SEO budgets from the redesign spec (R6). Runs against
+      # the root-base build served by `astro preview` (lighthouserc.json).
+      - name: Lighthouse CI budgets (perf>=0.9, a11y/bp/seo>=0.95, CLS<=0.1)
+        if: steps.filter.outputs.site == 'true'
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: |
+          cd docs/site
+          npm run build
+          npx lhci autorun
 

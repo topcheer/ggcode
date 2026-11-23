@@ -11,7 +11,7 @@ const { poster, alt } = Astro.props;
 
 <div class="hero3d" data-hero3d aria-label={alt} role="img">
   <canvas class="hero3d-canvas" aria-hidden="true"></canvas>
-  <img class="hero3d-poster" src={poster} alt="" aria-hidden="true" decoding="async" />
+  <img class="hero3d-poster" src={poster} alt="" aria-hidden="true" decoding="async" fetchpriority="high" width="1600" height="900" />
 </div>
 
 <style>
@@ -26,10 +26,14 @@ const { poster, alt } = Astro.props;
 <script>
   const root = document.querySelector<HTMLElement>('[data-hero3d]');
   if (root) {
-    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const mq = (q: string) => matchMedia(q).matches;
+    const reduce = mq('(prefers-reduced-motion: reduce)');
     const saveData = (navigator as any).connection?.saveData === true;
     const lowMem = (navigator as any).deviceMemory !== undefined && (navigator as any).deviceMemory <= 2;
-    const capable = !reduce && !saveData && !lowMem && (() => {
+    // Desktop-class only: on phones the particle scene costs seconds of main-thread
+    // time (Lighthouse mobile TBT ~3s) for a hero the poster already conveys.
+    const desktop = mq('(min-width: 768px)') && mq('(pointer: fine)');
+    const capable = desktop && !reduce && !saveData && !lowMem && (() => {
       try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch { return false; }
     })();
 
