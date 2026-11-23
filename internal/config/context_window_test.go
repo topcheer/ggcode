@@ -43,6 +43,18 @@ func TestInferContextWindow_KnownModels(t *testing.T) {
 			t.Errorf("region-suffixed row must resolve via the table, got %d", got)
 		}
 	}
+	// glm-5.4 (1M ctx, vision) shipped as a builtin known row before the
+	// online listing carried it - guard presence, window, and vision flag.
+	if cap, ok := knownModelCapabilities["glm-5.4"]; !ok {
+		t.Error("glm-5.4 must be a known builtin row")
+	} else {
+		if cap.ContextWindow != 1048576 {
+			t.Errorf("glm-5.4 ContextWindow = %d, want 1048576", cap.ContextWindow)
+		}
+		if !cap.SupportsVision {
+			t.Error("glm-5.4 must be flagged vision-capable")
+		}
+	}
 }
 
 // TestInferContextWindow_TablePlausibility guards the whole synced table:
