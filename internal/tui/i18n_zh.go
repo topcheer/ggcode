@@ -603,7 +603,7 @@ func zhCatalog(key string) string {
 	case "evidence.empty":
 		return "尚无可引用的结论——当 agent 的答复包含代码引用（file.go:42、`symbol`）后，/evidence 会把每条结论链接到支撑它的工具输出。"
 	case "traj.header":
-		return "历史运行学习库（共存 %d 条，其中 %d 条会注入提示词；> = 会注入）："
+		return "历史运行学习库（共存 %d 条，其中 %d 条符合提示词资格；> = 符合资格）："
 	case "traj.usage":
 		return "用法：/traj [list|clear|export|import [路径]]"
 	case "traj.no_home":

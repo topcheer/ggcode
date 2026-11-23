@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -373,102 +372,6 @@ func (rs *RuleStore) Rules() []Rule {
 	result := make([]Rule, len(rs.rules))
 	copy(result, rs.rules)
 	return result
-}
-
-func (rs *RuleStore) TopRulesForPrompt(maxRules int) string {
-	return rs.topRulesForPrompt(maxRules, "")
-}
-
-func (rs *RuleStore) SetRunIntent(intent string) {
-	rs.mu.Lock()
-	rs.runIntent = intent
-	rs.mu.Unlock()
-}
-
-func (rs *RuleStore) TopRulesForPromptFiltered(maxRules int, intent string) string {
-	return rs.topRulesForPrompt(maxRules, intent)
-}
-
-func (rs *RuleStore) topRulesForPrompt(maxRules int, filterIntent string) string {
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	rs.load()
-
-	if len(rs.rules) == 0 {
-		return ""
-	}
-
-	now := time.Now()
-	type ruleScore struct {
-		rule     string
-		hint     string
-		score    float64
-		taskType string
-	}
-	var active, intentActive []ruleScore
-	useIntent := filterIntent != "" && filterIntent != "other"
-	for _, r := range rs.rules {
-		if r.HitCount <= 0 {
-			continue
-		}
-		sc := ruleScore{
-			rule:     r.Rule,
-			hint:     r.FixHint,
-			score:    recencyWeightedScore(r.HitCount, r.LastSeen, now),
-			taskType: r.TaskType,
-		}
-		active = append(active, sc)
-		if useIntent && r.TaskType == filterIntent {
-			intentActive = append(intentActive, sc)
-		}
-	}
-	if len(active) == 0 {
-		return ""
-	}
-
-	if useIntent && len(intentActive) >= 2 {
-		sort.SliceStable(intentActive, func(i, j int) bool {
-			return intentActive[i].score > intentActive[j].score
-		})
-		intentSet := make(map[string]bool, len(intentActive))
-		for _, sc := range intentActive {
-			intentSet[sc.rule] = true
-		}
-		var universal []ruleScore
-		for _, sc := range active {
-			if sc.taskType == "" && !intentSet[sc.rule] {
-				universal = append(universal, sc)
-			}
-		}
-		sort.SliceStable(universal, func(i, j int) bool {
-			return universal[i].score > universal[j].score
-		})
-		mixed := make([]ruleScore, 0, len(intentActive)+len(universal))
-		mixed = append(mixed, intentActive...)
-		mixed = append(mixed, universal...)
-		active = mixed
-	}
-
-	for i := 1; i < len(active); i++ {
-		for j := i; j > 0 && active[j].score > active[j-1].score; j-- {
-			active[j], active[j-1] = active[j-1], active[j]
-		}
-	}
-
-	if maxRules > 0 && len(active) > maxRules {
-		active = active[:maxRules]
-	}
-
-	var b strings.Builder
-	b.WriteString("Lessons from previous runs in this workspace:\n")
-	for _, a := range active {
-		b.WriteString(fmt.Sprintf("- %s", a.rule))
-		if a.hint != "" {
-			b.WriteString(fmt.Sprintf(" → %s", a.hint))
-		}
-		b.WriteString("\n")
-	}
-	return b.String()
 }
 
 func recencyWeightedScore(hitCount int, lastSeen, now time.Time) float64 {

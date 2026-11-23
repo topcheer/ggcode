@@ -6,25 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-const experienceRecallTopK = 3
-
-func (a *Agent) recallExperience(task string) string {
-	workingDir := a.WorkingDir()
-	if workingDir == "" {
-		return ""
-	}
-	store := memory.NewProjectExperienceStore(workingDir)
-	if store == nil {
-		return ""
-	}
-
-	idx, ids := store.FormatIndexPointerTruncated(task, experienceRecallTopK)
-	if len(ids) > 0 {
-		a.experienceInjectedCaseIDs = append(a.experienceInjectedCaseIDs, ids...)
-	}
-	return idx
-}
-
 const experienceFailureRecallTopK = 2
 
 const (

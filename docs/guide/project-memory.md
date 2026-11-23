@@ -191,15 +191,15 @@ into a per-task *case* — the task, what the agent actually did (turns, tools,
 files, commands), and the outcome — stored under
 `.ggcode/memory/experience/` as one markdown file per case.
 
-At the start of every run, the agent retrieves the up-to-3 most relevant
-cases for the new task (lexical IDF scoring, no embeddings) and injects them
-once as a `## Relevant Experience` system block. Retrieval is one-hop
+Cases are **recalled on demand, not auto-injected**: the `recall_experience`
+tool returns the up-to-3 most relevant cases for a query (lexical IDF scoring,
+no embeddings) whenever the agent asks for them. Retrieval is one-hop
 spreading activation: a case with zero lexical overlap with the query but a
 strong associative tie to a direct hit (shared file paths, shared rare
 tokens) can be recalled at a decayed score — at most 2 such admits, ranked
 below direct hits, marked with a `spread:` audit field.
 
-```
+The tool returns an index like:
 Past experience with similar tasks in this project (case-based memory):
 - [outcome: success] Task: fix flaky login test in auth package
   Files touched: internal/auth/session.go, internal/auth/session_test.go
@@ -209,13 +209,12 @@ Treat these as hints about what worked before — verify against current code, n
 
 Key properties:
 
-- **Decision-time recall**: besides the run-start block, the case bank is
-  queried once more *at the moment a failing-strategy pattern is confirmed
-  mid-run* (error strategy loop detector). Up-to-2 cases matching task +
-  error excerpt are injected as `## Past Experience for This Failure`, so
-  the agent sees "how this was solved last time" exactly when a strategy
-  change is needed — run-start recall cannot see the error yet. One shot
-  per run; silent on cold or non-matching stores.
+- **Decision-time recall**: the case bank is also queried once *at the
+  moment a failing-strategy pattern is confirmed mid-run* (error strategy
+  loop detector). Up-to-2 cases matching task + error excerpt are injected
+  as `## Possibly Related Past Experience`, so the agent sees "how this was
+  solved last time" exactly when a strategy change is needed. One shot per
+  run; silent on cold or non-matching stores.
 
 - **Reconsolidation**: re-running the same logical task (normalized text
   match) updates the existing case instead of duplicating it — fresh outcome

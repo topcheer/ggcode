@@ -325,7 +325,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 			return chatTurnContinue, nil
 		}
 		if injected, kind := a.injectPendingInterruptions(iter + 1); injected {
-			a.recordIntervention(iter + 1)
 
 			if a.maxIter > 0 && iter == a.maxIter-1 {
 				st.guidanceAtBudget = true

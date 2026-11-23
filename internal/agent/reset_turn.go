@@ -17,14 +17,12 @@ func (a *Agent) resetTurnDetectors() {
 	a.taintInfluence.reset()
 	a.exfilChain.reset()
 	a.argSizeGuardFires = 0
-	a.patchExhaust.reset()
 	a.searchParamGuard.reset()
 	a.toolRedundancy.reset()
 	a.toolEquivDetect.reset()
 	a.toolSequence.reset()
 	a.obsContract.reset()
 	a.monorepoScoper.reset()
-	a.resetBgOrphan()
 	a.actionAnnihil.reset()
 	a.exploreFrag.reset()
 	a.batchCoupling.reset()
@@ -45,15 +43,11 @@ func (a *Agent) resetTurnDetectors() {
 	if a.effortAdapter != nil {
 		a.effortAdapter.reset()
 	}
-	if a.iterPressure != nil {
-		a.iterPressure.reset(a.maxIter)
-	}
 	a.diminishingEdit.reset()
 	a.overcorrection.reset()
 
 	a.giveupRevert = &giveupRevertState{}
 	a.errorCompound.reset()
-	a.correctionSpiral.reset()
 	a.bareEditStreak.reset()
 	a.editCoverage.reset()
 	a.strategyFixation.reset()
@@ -65,7 +59,6 @@ func (a *Agent) resetTurnDetectors() {
 	a.subgoalTrack.reset()
 	a.futileCycle.reset()
 	a.toolResultRedundancy.reset()
-	a.verifyDebt.reset()
 	a.editPropagation.reset()
 	a.successDeclare.reset()
 	a.criteriaDrift.reset()

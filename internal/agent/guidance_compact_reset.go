@@ -52,12 +52,6 @@ var guidanceCounterResets = []func(*Agent){
 	},
 
 	func(a *Agent) {
-		if a.iterPressure != nil {
-			a.iterPressure.warningsFired = 0
-		}
-	},
-
-	func(a *Agent) {
 	},
 
 	func(a *Agent) {
@@ -79,20 +73,6 @@ var guidanceCounterResets = []func(*Agent){
 	func(a *Agent) {
 		if a.toolRedundancy != nil {
 			a.toolRedundancy.warnings = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.tunnelVision != nil {
-			a.tunnelVision.warned = false
-		}
-	},
-
-	func(a *Agent) {
-		if a.verifyDebt != nil {
-			a.verifyDebt.mu.Lock()
-			a.verifyDebt.warningsIssued = 0
-			a.verifyDebt.mu.Unlock()
 		}
 	},
 
@@ -125,12 +105,6 @@ var guidanceCounterResets = []func(*Agent){
 	},
 
 	func(a *Agent) {
-		if a.correctionSpiral != nil {
-			a.correctionSpiral.warningCount = 0
-		}
-	},
-
-	func(a *Agent) {
 		if a.errorRush != nil {
 			a.errorRush.warnCount = 0
 		}
@@ -145,12 +119,6 @@ var guidanceCounterResets = []func(*Agent){
 	func(a *Agent) {
 		if a.attentionFragment != nil {
 			a.attentionFragment.warnCount = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.toolThermal != nil {
-			a.toolThermal.reset()
 		}
 	},
 
@@ -183,12 +151,6 @@ var guidanceCounterResets = []func(*Agent){
 			a.successDeclare.warnCount = 0
 			a.successDeclare.fired = false
 			a.successDeclare.mu.Unlock()
-		}
-	},
-
-	func(a *Agent) {
-		if a.undoBlind != nil {
-			a.undoBlind.warnCount = 0
 		}
 	},
 
@@ -241,12 +203,6 @@ var guidanceCounterResets = []func(*Agent){
 			a.actionAnnihil.mu.Lock()
 			a.actionAnnihil.warnsIssued = 0
 			a.actionAnnihil.mu.Unlock()
-		}
-	},
-
-	func(a *Agent) {
-		if a.verifDebt != nil {
-			a.verifDebt.warningsIssued = 0
 		}
 	},
 
@@ -621,12 +577,6 @@ var guidanceCounterResets = []func(*Agent){
 				delete(a.toolEff.firedCount, k)
 			}
 			a.toolEff.mu.Unlock()
-		}
-	},
-
-	func(a *Agent) {
-		if a.patchExhaust != nil {
-			a.patchExhaust.fires = 0
 		}
 	},
 }

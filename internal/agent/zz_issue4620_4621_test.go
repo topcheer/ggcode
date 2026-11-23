@@ -13,15 +13,12 @@ func TestIssue4620_CountersPastSkipGates(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	redactGate := strings.Index(text, "a.runToolNames = append(a.runToolNames, tc.Name)")
+	redactGate := strings.Index(text, "runStats.recordToolCall(tc.Name)")
 	if redactGate < 0 {
-		t.Fatal("runToolNames append not found")
+		t.Fatal("post-gate counter anchor not found")
 	}
 	for _, marker := range []string{
-		"runStats.recordToolCall(tc.Name)",
 		"a.toolCallBudget.record()",
-		"a.toolThermal.recordToolCall(tc.Name)",
-		"a.iterPressure.recordToolCall(tc.Name, iter+1)",
 		"extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)",
 	} {
 		idx := strings.Index(text, marker)

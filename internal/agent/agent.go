@@ -235,8 +235,6 @@ type Agent struct {
 	toolMemo                     *toolMemo
 	confidence                   *confidenceState
 	selfModel                    *AgentSelfModel
-	verifDebt                    *verificationDebtState
-	undoBlind                    *undoBlindState
 	toolCallBudget               *toolCallBudget
 	commandCache                 *commandCache
 	effectLedger                 *effectLedgerState
@@ -246,14 +244,11 @@ type Agent struct {
 	postEditVerify               postEditVerifyState
 	retraceGate                  retraceGateState
 	planner                      *planState
-	todoStaleness                *todoStalenessState
 	todoDrop                     *todoDropState
 	recurringError               *recurringErrorState
 	errStrategyLoop              *errStrategyState
 	experienceFailureRecallFired bool
 	experienceInjectedCaseIDs    []string
-	toolflowHintFired            bool
-	runToolNames                 []string
 	solutionFixation             *solutionFixationState
 	pivotDecision                *pivotDecisionTracker
 	fixCascade                   *fixCascadeState
@@ -306,11 +301,9 @@ type Agent struct {
 	toolFallback                 *toolFallbackState
 	argSizeGuardFires            int
 	readHash                     *readHashTracker
-	toolThermal                  *thermalState
 	latencyTracker               *LatencyTracker
 	toolSequence                 *toolSequenceValidator
 	obsContract                  *observationContractTracker
-	interventionLedger           *interventionLedger
 	refusalLedger                *refusalLedger
 	remoteRefusalInhibit         atomic.Bool
 	lastExecutedTool             string
@@ -324,7 +317,6 @@ type Agent struct {
 	turnImpact                   *turnImpactRecorder
 	errorBudget                  *errorBudget
 	monorepoScoper               *monorepoScoperState
-	bgOrphan                     *bgOrphanState
 	actionAnnihil                *actionAnnihilateState
 	exploreFrag                  *exploreFragState
 	batchCoupling                *batchCouplingState
@@ -342,9 +334,7 @@ type Agent struct {
 	attentionFragment            *attentionFragmentState
 	errorCompound                *errorCompoundState
 	fixAmnesia                   *fixAmnesiaState
-	correctionSpiral             *correctionSpiralState
 	toolResultRedundancy         *toolResultRedundancyState
-	tunnelVision                 *tunnelVisionState
 	selfMod                      *selfModState
 	bareEditStreak               *bareEditStreakState
 	editCoverage                 *editCoverageState
@@ -352,7 +342,6 @@ type Agent struct {
 	usageHints                   *toolUsageHintStore
 	bgVerifyJobs                 *bgVerifyRegistry
 	recklessExec                 *recklessExecState
-	verifyDebt                   *verifyDebtState
 	editPropagation              *editPropagationState
 	errorCascade                 *errorCascadeState
 	errorPropagate               *errorPropagateState
@@ -360,7 +349,6 @@ type Agent struct {
 	integrationMonitor           *integrationState
 	crossFileImpact              *crossFileImpactState
 	cacheEffMonitor              *cacheEffMonitor
-	patchExhaust                 *patchExhaustState
 	searchParamGuard             *searchParamGuardState
 	toolRedundancy               *toolRedundancyState
 	toolEquivDetect              *toolEquivDetectState
@@ -404,7 +392,6 @@ type Agent struct {
 	spiralState            *spiralHallucinationState
 	trajIntel              *trajIntelState
 	strategyStagnation     *strategyStagnationState
-	iterPressure           *iterPressureState
 	termGuard              *prematureTerminationGuard
 	askQualityGate         *askQualityGateState
 	diminishingEdit        *diminishingEditState
@@ -505,8 +492,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolMemo:               newToolMemo(),
 		confidence:             newConfidenceState(),
 		selfModel:              nil, // lazily bound in SetWorkingDir (#5498: cwd != workspace)
-		verifDebt:              newVerificationDebtState(),
-		undoBlind:              newUndoBlindState(),
 		toolCallBudget:         newToolCallBudget(),
 		commandCache:           newCommandCache(),
 		effectLedger:           newEffectLedger(),
@@ -514,7 +499,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		errorClassifier:        NewErrorClassifier(),
 		testFails:              newTestFailCollector(),
 		planner:                newPlanState(),
-		todoStaleness:          newTodoStalenessState(),
 		todoDrop:               newTodoDropState(),
 		recurringError:         newRecurringErrorState(),
 		errStrategyLoop:        newErrStrategyState(),
@@ -575,12 +559,10 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolDedup:              newToolDedupLedger(),
 		toolSequence:           newToolSequenceValidator(),
 		obsContract:            newObservationContractTracker(),
-		interventionLedger:     newInterventionLedger(""),
 		refusalLedger:          newRefusalLedger(""),
 		effortAdapter:          newAdaptiveEffortStateDetectOverride(p),
 		sessionTimeout:         newSessionTimeoutState(0),
 		readHash:               newReadHashTracker(),
-		toolThermal:            newThermalState(),
 		userSentiment:          newUserSentimentState(),
 		transientRetryBudget:   maxTransientRetryBudgetPerRun,
 		mutateLedger:           newMutatingLedger(),
@@ -588,11 +570,9 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		failureMode:            newFailureModeState(),
 		toolFallback:           newToolFallbackState(),
 		cacheEffMonitor:        newCacheEffMonitor(),
-		patchExhaust:           newPatchExhaustState(),
 		searchParamGuard:       newSearchParamGuard(),
 		toolRedundancy:         newToolRedundancyAnalyzer(),
 		toolEquivDetect:        newToolEquivDetectState(),
-		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
 		exploreFrag:            newExploreFragState(),
 		batchCoupling:          newBatchCouplingState(),
@@ -607,10 +587,8 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		attrExperiment:         newAttributionExperimentState(),
 		errorCompound:          newErrorCompoundState(),
 		fixAmnesia:             newFixAmnesiaState(),
-		correctionSpiral:       newCorrectionSpiralState(),
 		toolResultRedundancy:   newToolResultRedundancyState(),
 		selfMod:                newSelfModState(),
-		tunnelVision:           newTunnelVisionState(),
 		bareEditStreak:         newBareEditState(),
 		editCoverage:           newEditCoverageState(),
 		toolEff:                newToolEffTracker(),
@@ -620,7 +598,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		errorRush:              newErrorRushState(),
 		attentionFragment:      newAttentionFragmentState(),
 		recklessExec:           newRecklessExecState(),
-		verifyDebt:             newVerifyDebtState(),
 		editPropagation:        newEditPropagationState(),
 		editOscillation:        newOscillationState(),
 		phantomVerify:          newPhantomVerifyState(),
@@ -643,7 +620,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		tokenWasteBudget:       newTokenWasteBudgetState(),
 		mindlessAction:         newMindlessActionState(),
 		strategyStagnation:     newStrategyStagnationState(),
-		iterPressure:           newIterPressureState(maxIter),
 		termGuard:              newPrematureTerminationGuard(),
 		askQualityGate:         newAskQualityGateState(),
 		diminishingEdit:        newDiminishingEditState(),
@@ -1230,9 +1206,6 @@ func (a *Agent) SetWorkingDir(dir string) {
 	dirChanged := a.workingDir != dir
 	a.workingDir = dir
 
-	if a.interventionLedger == nil || a.interventionLedger.workingDir != dir {
-		a.interventionLedger = newInterventionLedger(dir)
-	}
 	if a.refusalLedger == nil || a.refusalLedger.workingDir != dir {
 		a.refusalLedger = newRefusalLedger(dir)
 	}
@@ -1252,10 +1225,6 @@ func (a *Agent) SetWorkingDir(dir string) {
 	}
 	if a.expiredRead != nil {
 		a.expiredRead.baseDir = dir
-	}
-
-	if a.tunnelVision != nil {
-		a.tunnelVision.baseDir = dir
 	}
 
 	if a.searchInvalidation != nil {

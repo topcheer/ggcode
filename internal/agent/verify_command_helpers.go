@@ -440,3 +440,122 @@ var verifyTools = map[string]bool{
 	"ci_status":           true,
 	"merge_preflight":     true,
 }
+
+// Residual command-action classification recovered from the removed
+// verification-debt injector (the debt tracker is gone; drift_recurrence_detect
+// and the bg-verify job path still classify commands with these).
+type debtAction int
+
+const (
+	debtGrounding debtAction = iota
+	debtModifying
+	debtVerifying
+	debtNeutral
+)
+
+var verificationDebtTools = map[string]debtAction{
+
+	"read_file":               debtGrounding,
+	"multi_file_read":         debtGrounding,
+	"search_files":            debtGrounding,
+	"grep":                    debtGrounding,
+	"glob":                    debtGrounding,
+	"code_search":             debtGrounding,
+	"list_directory":          debtGrounding,
+	"lsp_hover":               debtGrounding,
+	"lsp_definition":          debtGrounding,
+	"lsp_references":          debtGrounding,
+	"lsp_symbols":             debtGrounding,
+	"lsp_workspace_symbols":   debtGrounding,
+	"lsp_implementation":      debtGrounding,
+	"lsp_document_highlights": debtGrounding,
+	"web_search":              debtGrounding,
+	"web_fetch":               debtGrounding,
+
+	"edit_file":       debtModifying,
+	"write_file":      debtModifying,
+	"multi_edit_file": debtModifying,
+	"multi_file_edit": debtModifying,
+	"file_ops":        debtModifying,
+	"notebook_edit":   debtModifying,
+	"batch_replace":   debtModifying,
+
+	"run_command":     debtVerifying,
+	"lsp_diagnostics": debtVerifying,
+
+	"lsp_code_actions": debtGrounding,
+}
+
+func classifyDebtAction(toolName, args string) debtAction {
+	if action, ok := verificationDebtTools[toolName]; ok {
+		if action == debtVerifying && toolName == "run_command" {
+
+			if !isVerificationCommand(extractCommandFromArgs(json.RawMessage(args))) {
+				return debtNeutral
+			}
+		}
+		return action
+	}
+	return debtNeutral
+}
+
+func isCommandChannelTool(name string) bool {
+	switch name {
+	case "run_command", "bash", "powershell", "start_command", "wait_command", "read_command_output":
+		return true
+	}
+	return false
+}
+
+func isVerificationCommand(args string) bool {
+
+	args = stripLeadingShellComment(args)
+	tokens := strings.Fields(strings.ToLower(args))
+
+	i := 0
+	for i < len(tokens) && strings.Contains(tokens[i], "=") {
+		i++
+	}
+	if i >= len(tokens) {
+		return false
+	}
+	first := tokens[i]
+	rest := tokens[i+1:]
+
+	switch first {
+	case "pytest", "jest", "mypy", "flake8", "eslint", "prettier", "tsc",
+		"typecheck", "golangci-lint", "staticcheck", "ruff":
+		return true
+	}
+
+	switch first {
+	case "go", "make", "npm", "yarn", "pnpm", "cargo", "mvn", "mvnw", "./mvnw", "gradle",
+		"./gradlew", "dotnet", "tox", "nox":
+	default:
+		return false
+	}
+	verifyMarkers := []string{
+		"test", "build", "vet", "check", "lint", "verify", "clippy",
+		"e2e", "compile", "typecheck", "tsc",
+	}
+	for _, f := range rest {
+		f = strings.TrimPrefix(f, "run:")
+		f = strings.TrimSuffix(f, ";")
+		for _, m := range verifyMarkers {
+			if f == m || strings.HasPrefix(f, m+"-") || strings.HasPrefix(f, m+"_") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isASCIIPathStart(f string) bool {
+	if f == "" {
+		return false
+	}
+	c := f[0]
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+var editToolSet = sourceMutatingTools

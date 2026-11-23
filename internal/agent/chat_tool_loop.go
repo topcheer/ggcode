@@ -53,14 +53,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		}
 	}
 
-	if hint := a.maybeToolflowSuggestion(a.runToolNames); hint != "" {
-		debug.Log("agent", "injected toolflow next-step hint (%d chars)", len(hint))
-		a.contextManager.Add(provider.Message{
-			Role:    "user",
-			Content: []provider.ContentBlock{{Type: "text", Text: hint}},
-		})
-	}
-
 	a.cascade.beginBatch()
 
 	for _, tc := range toolCalls {
@@ -82,18 +74,11 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			debug.Log("agent", "Iteration %d: mid-tool retraction-stop: aborting remaining %d tool call(s)", iter+1, len(toolCalls)-idx)
 			a.fillCancelledToolResults(toolCalls[idx:], &toolResults)
 			a.flushStagedMidToolInterruptions(iter + 1)
-			a.recordIntervention(iter + 1)
 			return chatTurnFatal, context.Canceled, msgs
 		}
 		// #5635 P2: inflight face - mark this call as the main agent's
 		// current tool while it executes.
 		a.currentTool.begin(tc.Name, string(tc.Arguments))
-		var undoBlindHint string
-		if ub := a.undoBlind.recordToolCall(tc.Name, tc.Arguments); ub != "" {
-			debug.Log("agent", "Iteration %d: undo-blind mutation detected (pre-execution)", iter+1)
-			undoBlindHint = ub
-		}
-
 		a.orphanFile.recordPreExec(tc.Name, string(tc.Arguments), a.workingDir)
 		var loopGuidance string
 		if guidance := a.loopDetectionInjection(tc); guidance != "" {
@@ -177,12 +162,8 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			continue
 		}
 
-		a.runToolNames = append(a.runToolNames, tc.Name)
-
 		runStats.recordToolCall(tc.Name)
 		a.toolCallBudget.record()
-		a.toolThermal.recordToolCall(tc.Name)
-		a.iterPressure.recordToolCall(tc.Name, iter+1)
 		extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)
 		var result tool.Result
 		memoHit := false
@@ -232,9 +213,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		if tc.Name == "todo_write" && !result.IsError {
 			a.plannerMarkTodoCreated()
 
-			todoCount := parseTodoCount(tc.Arguments)
-			a.recordTodoStalenessUpdate(iter+1, todoCount)
-
 			if hint := a.checkTodoDrop(tc.Arguments); hint != "" {
 				a.appendGuidance(&result, hint)
 			}
@@ -261,7 +239,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 
 			for _, p := range extractCreateFilePaths(tc.Name, tc.Arguments) {
 				a.unreadEdit.recordCreated(p)
-				a.tunnelVision.recordFile(p)
 				a.readHash.recordWriteHash(p)
 				if a.turnImpact != nil {
 					a.turnImpact.recordFileEdit(tc.Name, resolveImpactPath(a.WorkingDir(), p))
@@ -297,25 +274,11 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 
 		if (tc.Name == "read_file" || tc.Name == "multi_file_read") && !result.IsError {
 
-			readPathsLen := len(extractReadFilePaths(tc.Name, tc.Arguments))
-
 			hasWindow := readArgsHaveWindow(tc.Arguments)
-			for pi, p := range extractReadFilePaths(tc.Name, tc.Arguments) {
+			for _, p := range extractReadFilePaths(tc.Name, tc.Arguments) {
 				a.unreadEdit.recordReadWindow(p, hasWindow)
-				a.tunnelVision.recordFile(p)
 				a.editFailRecovery.recordRead(p)
 				a.readHash.recordReadHash(p)
-				if pi == readPathsLen-1 {
-					if hint := a.patchExhaust.recordRead(p); hint != "" {
-						a.appendGuidance(&result, hint)
-					}
-				}
-			}
-		}
-
-		if searchResultTools[tc.Name] && !result.IsError {
-			for _, p := range extractSearchResultPaths(tc.Name, result.Content) {
-				a.tunnelVision.recordSearched(p)
 			}
 		}
 
@@ -337,8 +300,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 				if a.tokenWasteBudget != nil {
 					a.tokenWasteBudget.markFileEdited(p)
 				}
-				a.patchExhaust.recordEdit(p)
-
 				a.convergenceRecordEdit(tc.Name)
 
 				a.diminishingRecordEdit(tc.Name, tc.Arguments)
@@ -439,11 +400,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		a.mu.Lock()
 		a.lastExecutedTool = tc.Name
 		a.mu.Unlock()
-		if ivHint := a.interventionLedger.hint(tc.Name); ivHint != "" {
-			a.appendGuidance(&result, ivHint)
-		}
-
-		a.recordBgToolCall(tc.Name, tc.Arguments, result.Content, iter+1)
 
 		if !result.IsError {
 			if annihilWarn := a.actionAnnihil.recordToolCall(tc.Name, tc.Arguments, iter+1); annihilWarn != "" {
@@ -784,12 +740,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			a.appendGuidance(&result, confidenceGuidance)
 		}
 
-		a.verifDebt.recordToolCall(tc.Name, string(tc.Arguments))
-
-		if debtGuidance := a.verifDebt.maybeWarn(); debtGuidance != "" {
-			a.appendGuidance(&result, debtGuidance)
-		}
-
 		editPaths := extractEditedPaths(tc)
 		if result.IsError {
 			if written := extractWrittenPaths(result.Content); len(written) > 0 {
@@ -801,9 +751,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		if isEditTool(tc.Name) && len(editPaths) > 0 {
 
 			a.constraintAmnesia.noteEdit(iter + 1)
-			for _, p := range editPaths {
-				a.tunnelVision.recordFile(p)
-			}
 
 			a.editOscillation.recordEdit(tc.Name, tc.Arguments, iter+1)
 			if om := func() string {
@@ -816,20 +763,7 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			}
 		}
 
-		if tv := func() string {
-			if !shouldRunDetector(detectorTierRoutine, iter+1) {
-				return ""
-			}
-			return a.tunnelVision.check(runStats.Iterations)
-		}(); tv != "" {
-			a.appendGuidance(&result, tv)
-		}
-
 		a.maybeResetVerifyOnCommand(tc.Name, tc.Arguments, result.IsError)
-
-		if verifyDebtSpawnClearingTool(tc.Name) && !result.IsError && isVerificationCommand(extractCommandFromArgs(tc.Arguments)) {
-			a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
-		}
 
 		if tc.Name == "start_command" && !result.IsError {
 			a.bgVerifyJobs.register(psExtractJobID(result.Content), extractCommandFromArgs(tc.Arguments))
@@ -843,22 +777,15 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 
 					a.strategyFixation.recordVerification(tc.Name, result.Content, !passed)
 					if passed {
-						a.verifyDebt.recordVerifyCommand(cmd, false)
 						a.editPropagation.recordGreenBuild()
-
-						if isStrictVerifyCommand(cmd) {
-						}
 					}
 				}
 			}
 		}
 
-		if verifyDebtSpawnClearingTool(tc.Name) && !result.IsError {
+		if isCommandChannelTool(tc.Name) && tc.Name != "start_command" && !result.IsError {
 			if cmd := extractCommandFromArgs(tc.Arguments); cmd != "" && isVerifyCommand(cmd) {
 				a.editPropagation.recordGreenBuild()
-
-				if isStrictVerifyCommand(cmd) {
-				}
 			}
 		}
 
@@ -882,7 +809,7 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 				a.fixAmnesia.recordErrorObserved(cat, file)
 			}
 		}
-		if csIsEditTool(tc.Name) || tc.Name == "write_file" || tc.Name == "multi_edit_file" {
+		if isEditingTool(tc.Name) || tc.Name == "write_file" || tc.Name == "multi_edit_file" {
 			fp := extractFilePathFromArgs(tc.Name, tc.Arguments)
 			if result.IsError {
 
@@ -909,22 +836,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		if len(tc.Arguments) > 0 {
 			_ = json.Unmarshal(tc.Arguments, &psArgs)
 		}
-		if csIsEditTool(tc.Name) {
-			a.correctionSpiral.recordEdit(iter + 1)
-		} else if (tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell") && psIsVerifyCommand(sfCommandArg(psArgs)) {
-
-			a.correctionSpiral.recordVerifyResult(tc.Name, result.Content, result.IsError, iter+1)
-		} else if tc.Name == "wait_command" || tc.Name == "read_command_output" || tc.Name == "task_output" {
-
-			jobID, _ := psArgs["job_id"].(string)
-			if jobID == "" {
-				jobID, _ = psArgs["task_id"].(string)
-			}
-
-			if jobID != "" {
-			}
-		}
-
 		a.bareEditStreak.recordToolCall(tc.Name, string(tc.Arguments))
 
 		a.phantomVerify.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
@@ -997,7 +908,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			}
 		}
 		if mutatingSourceEdit(tc.Name) && !result.IsError { // #5249: apply_patch must feed edit trackers
-			a.verifyDebt.recordSourceEdit()
 			a.stalledConvergence.recordEdit()
 
 			if editPath := extractFilePathFromArgs(tc.Name, tc.Arguments); editPath != "" {
@@ -1112,7 +1022,7 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		if askAdvisory != "" && tc.Name == "ask_user" && !result.IsError {
 			result.Content = result.Content + "\n\n" + askAdvisory
 		}
-		a.applyToolResultGuidance(&result, loopGuidance, searchParamHint, redundancyHint, equivHint, undoBlindHint)
+		a.applyToolResultGuidance(&result, loopGuidance, searchParamHint, redundancyHint, equivHint)
 
 		llmContent := spotlightUntrustedOutput(tc.Name, result.Content)
 		if len(result.Images) > 0 && a.SupportsVision() {

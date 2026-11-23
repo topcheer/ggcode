@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -88,4 +89,14 @@ func readStoreRows(t *testing.T, path string) []trajectoryLearning {
 		t.Fatal(err)
 	}
 	return entries
+}
+
+func writeR460Store(t *testing.T, path string, entries []trajectoryLearning) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTrajFile(path, entries); err != nil {
+		t.Fatal(err)
+	}
 }
