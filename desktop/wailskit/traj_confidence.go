@@ -11,21 +11,22 @@ type TrajConfidenceEntry struct {
 	Insight    string  `json:"insight"`
 	Confidence float64 `json:"confidence"`
 	Reinforced int     `json:"reinforced"`
-	Injects    bool    `json:"injects"`
 	General    bool    `json:"general"`
-	Holdout    bool    `json:"holdout"`
 }
 
 const topTrajEntries = 5
 
 type TrajConfidenceOverview struct {
 	Total         int                   `json:"total"`
-	Injecting     int                   `json:"injecting"`
 	AvgConfidence float64               `json:"avgConfidence"`
 	Top           []TrajConfidenceEntry `json:"top"`
 	HasLearnings  bool                  `json:"hasLearnings"`
 }
 
+// TrajConfidenceOverview summarises the stored trajectory learnings for the
+// desktop panel. Learnings are no longer injected into prompts, so the
+// overview is a confidence view over the whole store (the former
+// "injecting"/"holdout" facets went with the injection channel).
 func (b *ChatBridge) TrajConfidenceOverview() TrajConfidenceOverview {
 	views := agent.TrajListLearnings(b.workingDir)
 	out := TrajConfidenceOverview{Total: len(views), Top: []TrajConfidenceEntry{}}
@@ -33,25 +34,19 @@ func (b *ChatBridge) TrajConfidenceOverview() TrajConfidenceOverview {
 		return out
 	}
 	out.HasLearnings = true
-	var injecting []agent.TrajLearningView
 	sum := 0.0
 	for _, v := range views {
-		if v.Injects && !v.Holdout {
-			out.Injecting++
-			sum += v.Confidence
-			injecting = append(injecting, v)
-		}
+		sum += v.Confidence
 	}
-	if out.Injecting > 0 {
-		out.AvgConfidence = sum / float64(out.Injecting)
-	}
-	sort.Slice(injecting, func(i, j int) bool {
-		if injecting[i].Confidence != injecting[j].Confidence {
-			return injecting[i].Confidence > injecting[j].Confidence
+	out.AvgConfidence = sum / float64(len(views))
+	sorted := append([]agent.TrajLearningView(nil), views...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].Confidence != sorted[j].Confidence {
+			return sorted[i].Confidence > sorted[j].Confidence
 		}
-		return injecting[i].Reinforced > injecting[j].Reinforced
+		return sorted[i].Reinforced > sorted[j].Reinforced
 	})
-	for i, v := range injecting {
+	for i, v := range sorted {
 		if i >= topTrajEntries {
 			break
 		}
@@ -60,9 +55,7 @@ func (b *ChatBridge) TrajConfidenceOverview() TrajConfidenceOverview {
 			Insight:    v.Insight,
 			Confidence: v.Confidence,
 			Reinforced: v.Reinforced,
-			Injects:    v.Injects,
 			General:    v.General,
-			Holdout:    v.Holdout,
 		})
 	}
 	return out

@@ -7,88 +7,46 @@ import (
 	"time"
 )
 
-func TestIssue3266_DecayCrossesFloorAndNoResurrect(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	old := time.Now().UTC().Add(-10 * trajConfidenceHalfLife)
-	fresh := trajectoryLearning{Category: "a", Type: "strategy", Insight: "fresh", Confidence: 0.95, LastReinforced: time.Now().UTC()}
-	if ef := fresh.EffectiveConfidence(); ef < trajPromptMinConfidence {
-		t.Fatalf("fresh high-confidence must inject, got %v", ef)
-	}
-
-	aged := fresh
-	aged.LastReinforced = old
-	if ef := aged.EffectiveConfidence(); ef >= trajPromptMinConfidence {
-		t.Fatalf("decay must cross the floor, got %v", ef)
-	}
-
-	zero := trajectoryLearning{Category: "b", Type: "pattern", Insight: "zero", Timestamp: old}
-	if ef := zero.EffectiveConfidence(); ef >= 0.5 {
-		t.Fatalf("zero-value entry must decay below baseline, got %v", ef)
-	}
-
-	failedOld := trajectoryLearning{Category: "c", Type: "failure", Insight: "failed", Confidence: 0.2, LastReinforced: old}
-	if ef := failedOld.EffectiveConfidence(); ef >= trajPromptMinConfidence {
-		t.Fatalf("failed-retired entry resurrected: %v", ef)
-	}
-}
-
-func TestIssue3266_PanelInjectsSimulatesAllLayers(t *testing.T) {
+// The learnings store is panel-only now (no prompt injection), so the list
+// view must still merge the global tier: a global entry whose category is
+// not shadowed by a local one shows up flagged General.
+func TestIssue3266_PanelMergesGlobalTier(t *testing.T) {
 	ws := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	trajHoldoutEnabled = false
-	t.Cleanup(func() { trajHoldoutEnabled = true })
 	now := time.Now().UTC()
 
 	writeR460Store(t, filepath.Join(ws, ".ggcode", "trajectory-learnings.jsonl"), []trajectoryLearning{
-		{Category: "c1", Type: "strategy", Insight: "quota-1", Confidence: 0.9, LastReinforced: now},
-		{Category: "c2", Type: "strategy", Insight: "quota-2", Confidence: 0.88, LastReinforced: now},
-		{Category: "c3", Type: "strategy", Insight: "quota-3", Confidence: 0.86, LastReinforced: now},
-		{Category: "c4", Type: "hint", Insight: "low", Confidence: 0.2, LastReinforced: now},
+		{Category: "c1", Type: "strategy", Insight: "local-1", Confidence: 0.9, LastReinforced: now},
 	})
 	writeR460Store(t, filepath.Join(home, ".ggcode", "trajectory-learnings.jsonl"), []trajectoryLearning{
 		{Category: "gcat", Type: "pattern", Insight: "global-only", Confidence: 0.9, LastReinforced: now},
+		{Category: "c1", Type: "pattern", Insight: "global-shadowed", Confidence: 0.9, LastReinforced: now},
 	})
 	views := TrajListLearnings(ws)
-	var q1, q2, q3, low, gen, genInjects bool
+	var sawLocal, sawGeneral, sawShadowed bool
 	for _, v := range views {
 		switch v.Insight {
-		case "quota-1":
-			q1 = v.Injects
-		case "quota-2":
-			q2 = v.Injects
-		case "quota-3":
-			q3 = v.Injects
-		case "low":
-			low = v.Injects
+		case "local-1":
+			sawLocal = true
+			if v.General {
+				t.Fatal("local entry must not be flagged General")
+			}
 		case "global-only (general, other projects)":
-			gen = v.General
-			genInjects = v.Injects
+			sawGeneral = true
+			if !v.General {
+				t.Fatal("global-tier entry must be flagged General")
+			}
+		case "global-shadowed (general, other projects)":
+			sawShadowed = true
 		}
 	}
-	if !q1 || !q2 {
-		t.Fatalf("top entries must inject: q1=%v q2=%v", q1, q2)
+	if !sawLocal || !sawGeneral {
+		t.Fatalf("local=%v general=%v: both tiers must be visible", sawLocal, sawGeneral)
 	}
-	if q3 && trajPromptPerType < 3 {
-		t.Fatal("per-Type quota not simulated")
+	if sawShadowed {
+		t.Fatal("global entry whose category a local entry covers must be hidden")
 	}
-	if low {
-		t.Fatal("below-floor entry reported as injecting")
-	}
-	if !gen || !genInjects {
-		t.Fatal("global-tier entry must be visible with General=true and Injects simulated")
-	}
-}
-
-func readStoreRows(t *testing.T, path string) []trajectoryLearning {
-	t.Helper()
-	s := newTrajIntelState()
-	s.filePath = path
-	entries, err := s.loadFromFile()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return entries
 }
 
 func writeR460Store(t *testing.T, path string, entries []trajectoryLearning) {

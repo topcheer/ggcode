@@ -79,7 +79,7 @@ func TestBuildAggregatesAllClasses(t *testing.T) {
 	if e := findEntry(rep, TypeMemory, "global", "release-v1"); e == nil || e.PromotionGate != GateAuto {
 		t.Errorf("release memory gate wrong: %+v", e)
 	}
-	if e := findEntry(rep, TypeTrajInsight, "project", "trajectory-learnings"); e == nil || e.PromotionGate != GateHoldout || e.Items != 2 {
+	if e := findEntry(rep, TypeTrajInsight, "project", "trajectory-learnings"); e == nil || e.PromotionGate != GateAuto || e.Items != 2 {
 		t.Errorf("traj entry wrong: %+v", e)
 	}
 }

@@ -21,7 +21,6 @@ const (
 const (
 	GateKnight        = "knight"
 	GateKnightStaging = "knight-staging"
-	GateHoldout       = "holdout"
 	GateAuto          = "auto"
 	GateManual        = "manual"
 )
@@ -199,7 +198,7 @@ func scanTraj(rep *Report, path, scope string) {
 		Bytes:         size,
 		Modified:      info.ModTime().UTC(),
 		Enabled:       true,
-		PromotionGate: GateHoldout,
+		PromotionGate: GateAuto,
 		Items:         items,
 	})
 }

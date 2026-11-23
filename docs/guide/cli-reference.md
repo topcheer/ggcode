@@ -252,8 +252,8 @@ ggcode bom --workspace /path    # Inventory for another workspace
 
 Aggregates skills, staged skills, memories, and trajectory insights into one
 deterministic JSON inventory with content hash, source path, and the promotion
-gate each artifact passed (`knight` / `knight-staging` / `auto` / `manual` /
-`holdout`). Read-only.
+gate each artifact passed (`knight` / `knight-staging` / `auto` / `manual`).
+Read-only.
 
 ### report
 

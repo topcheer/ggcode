@@ -1038,10 +1038,8 @@ export namespace wailskit {
 	    insight: string;
 	    confidence: number;
 	    reinforced: number;
-	    injects: boolean;
 	    general: boolean;
-	    holdout: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TrajConfidenceEntry(source);
 	    }
@@ -1052,14 +1050,11 @@ export namespace wailskit {
 	        this.insight = source["insight"];
 	        this.confidence = source["confidence"];
 	        this.reinforced = source["reinforced"];
-	        this.injects = source["injects"];
 	        this.general = source["general"];
-	        this.holdout = source["holdout"];
 	    }
 	}
 	export class TrajConfidenceOverview {
 	    total: number;
-	    injecting: number;
 	    avgConfidence: number;
 	    top: TrajConfidenceEntry[];
 	    hasLearnings: boolean;
@@ -1071,7 +1066,6 @@ export namespace wailskit {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.total = source["total"];
-	        this.injecting = source["injecting"];
 	        this.avgConfidence = source["avgConfidence"];
 	        this.top = this.convertValues(source["top"], TrajConfidenceEntry);
 	        this.hasLearnings = source["hasLearnings"];
