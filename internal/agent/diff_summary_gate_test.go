@@ -74,7 +74,7 @@ func TestDiffSummaryGateOutputFormat(t *testing.T) {
 
 	expectedPrefix := "[Self-review:"
 	var sb strings.Builder
-	sb.WriteString("[Self-review: you are about to finish. Here is a summary of ALL your changes (git diff --stat). ")
+	sb.WriteString("[Self-review: you are about to finish. Here is a summary of your changes (git diff --stat; .ggcode/ and git-ignored paths excluded). ")
 	sb.WriteString("Review this list, verify each change is intentional, complete, and matches the user's request.]\n")
 	msg := sb.String()
 	if !strings.HasPrefix(msg, expectedPrefix) {

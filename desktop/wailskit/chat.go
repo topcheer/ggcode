@@ -1560,18 +1560,10 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	swarmFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) swarm.AgentRunner {
 		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
 	}
+	// Single source of truth for what a teammate may hold (internal/tool/
+	// teammate_tools.go): denied-first, then allowedTools as a real allowlist.
 	toolBuilder := func(allowedTools []string) interface{} {
-		cloned := b.registry.Clone()
-
-		for _, name := range []string{
-			"ask_user", "spawn_agent", "wait_agent", "list_agents",
-			"teammate_spawn", "teammate_shutdown", "team_create", "team_delete",
-			"leader_inbox",
-			"lanchat", // #5917 round 2: no LAN identity for teammates
-		} {
-			cloned.Unregister(name)
-		}
-		return cloned
+		return tool.TeammateRegistry(b.registry, allowedTools)
 	}
 	swarms := agentruntime.NewSwarmManager(b.cfg.Swarm, b.CurrentSessionID(), p, b.registry, nil, swarmFactory, toolBuilder)
 	// #5464: teammates must be permission-gated like the primary agent

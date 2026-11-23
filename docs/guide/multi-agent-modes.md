@@ -122,25 +122,29 @@ For tasks where a single attempt frequently fails (tricky refactor, elusive bug,
 **Code**: `internal/swarm/` (manager.go, idle_runner.go, team.go)  
 **Spawned by**: `teammate_spawn` tool  
 **Wire-up**: `cmd/ggcode/root.go` → `swarm.NewManager(cfg, prov, factory, builder)`  
-**Persistence**: teammates survive restarts - journals, manifest, and the `team_restore` entry path are covered in [persistent-teams.md](persistent-teams.md) (#5829)
+**Persistence**: teammates survive restarts - journals, manifest, and the `team_restore` entry path are covered in [persistent-teams.md](persistent-teams.md) (#5829). Discover what exists with `team_list`: live teams with each member's status, plus persisted-but-not-restored teams with their manifest roster (the system-prompt `## Persistent Teams` section is only a build-time snapshot).
 
 ### Tool Access
 
-All teammates share a reference to the main agent's `*tool.Registry`:
+Teammates get a **clone** of the main agent's registry, built by `tool.TeammateRegistry` (`internal/tool/teammate_tools.go`) - the single source of truth shared by the CLI and desktop chains:
 
-```
+```go
 root.go:
-  swarmToolBuilder := func(_ []string) interface{} {
-      return registry  // shared reference, not a snapshot
+  swarmToolBuilder := func(allowedTools []string) interface{} {
+      return tool.TeammateRegistry(registry, allowedTools)
   }
 ```
 
+1. Every tool in `tool.TeammateDeniedTools` is removed: `ask_user`, agent-creation tools (`spawn_agent`, `best_of_n`, `workflow_run`, `use_namedagent`, `delegate`, `wait_agent`, `list_agents`, `cancel_agent`), team/teammate lifecycle (`team_create`, `team_delete`, `team_restore`, `teammate_spawn`, `teammate_shutdown`), leader-only review and inbox (`team_review_digest`, `team_review_decide`, `leader_inbox`), and leader-seat identity (`lanchat`, `a2a_remote`, `a2a_send_task`).
+2. If `teammate_spawn` was given `tools`, everything not in that list is removed too (real allowlist; an empty list inherits the full denied-filtered surface).
+
 | Tool Category | Available? | Notes |
 |---|---|---|
-| Built-in tools | ✅ | Shared instance |
-| Skill tool | ✅ | Shared instance |
-| MCP tools | ✅ | **Live** — MCP tools registered after teammate spawn are also available, because the registry reference is shared |
-| Swarm tools | ❌ | Not applicable |
+| Built-in tools | ✅ | Clone of the shared registry |
+| Skill tool | ✅ | |
+| MCP tools | ✅ | Live - tools registered after spawn are available because the clone is rebuilt per teammate |
+| Board + messaging | ✅ | `swarm_task_*`, `teammate_list`, `teammate_results`, `send_message`, `report_to_leader` |
+| Leader-only / nested-agent tools | ❌ | `TeammateDeniedTools` |
 
 ### Workspace
 
@@ -162,6 +166,14 @@ root.go:
 3. On task/message received → `handleMessage()` → `executeTask()` → `agent.RunStream()`
 4. Output collected in `strings.Builder`, stored as `LastResult`
 5. Leader retrieves via `teammate_results` or `send_message` reply channel. A per-teammate query (`teammate_id`) returns the archived result of that teammate's most recently completed board task when one exists, falling back to the session-level `LastResult` — so later unrelated work does not overwrite the answer to the task you asked about (#5890); whole-team queries return each teammate's latest session output
+
+### Review gate (delivery is not acceptance)
+
+A teammate marks its own task complete (`swarm_task_complete`) with a concise result when it *believes* it is done - that is a **delivery**. The leader owns acceptance:
+
+1. `team_review_digest` lists every teammate's latest delivery (task subject, result head, VERIFIED/unverified flag).
+2. `team_review_decide` per item: `approve` completes the board task; `changes` / `reject` (note required) sends `[review <verdict>] <note>` to the teammate's inbox, wakes it, and resets a completed task to `pending` for rework.
+3. The leader assigns follow-up tasks that build on a delivery **only after** `approve`; the teammate re-delivers with `swarm_task_complete` after rework so the leader re-reviews.
 
 ### Task Ordering with `depends_on`
 

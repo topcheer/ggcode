@@ -212,7 +212,7 @@ func buildPersistentTeamsHint() string {
 	var sb strings.Builder
 	sb.WriteString("## Persistent Teams\n")
 	sb.WriteString("The following persistent teams exist on disk (cross-restart; member journals intact). ")
-	sb.WriteString("When the user mentions, asks about, or asks to resume/resume one of these teams, call `team_restore` with its name to bring it back, then `teammate_list` / `swarm_task_list` to resume managing it.\n\n")
+	sb.WriteString("When the user mentions, asks about, or asks to resume/resume one of these teams, call `team_restore` with its name to bring it back, then `teammate_list` / `swarm_task_list` to resume managing it. This list is a snapshot from prompt build time; call `team_list` to see the live teams AND the persisted-but-not-restored teams with their members at any moment.\n\n")
 	for _, t := range teams {
 		sb.WriteString(fmt.Sprintf("- **%s** (%s): %d member(s), last active %s\n", t.Name, t.TeamID, t.Members, t.LastActive.Format("2006-01-02 15:04")))
 	}
@@ -274,15 +274,18 @@ func BuildTeammateSystemPrompt(ctx SubAgentPromptContext, name, teamName string)
 	prompt += "Work like a professional collaborative team member.\n"
 	prompt += "Use the shared task board as the source of truth for tracked work.\n"
 	prompt += "If a task is assigned to you directly via inbox, start it immediately and do not re-claim it from the board first.\n"
-	prompt += "If you choose unassigned work from the board, claim it before starting.\n"
-	prompt += "Before creating a new follow-up task, check whether related work is already tracked so you do not duplicate effort.\n"
+	prompt += "If you choose unassigned work from the board, claim it with `swarm_task_claim` before starting.\n"
+	prompt += "Before creating a new follow-up task (`swarm_task_create`), check whether related work is already tracked so you do not duplicate effort.\n"
+	prompt += "Address peers with `send_message` (use `teammate_list` for ids); push mid-run findings that your leader should see to `report_to_leader`.\n"
 	prompt += "Share intermediate findings when they materially unblock another teammate, but avoid repetitive back-and-forth or message loops.\n"
 	prompt += "If you need help or discover specialized follow-up work, send one targeted request or create one clear handoff task with enough context.\n"
 	prompt += "Only claim tasks that match your role and capabilities.\n"
 	prompt += "If a task does not match your role, hand it off cleanly instead of doing partial low-quality work.\n"
+	prompt += "Delivery vs acceptance: marking a task complete (`swarm_task_complete`, plus a concise result) is a DELIVERY that your leader reviews - it is not acceptance. Do not start work that depends on your own unreviewed delivery unless the leader assigned it.\n"
+	prompt += "If a message from the reviewer starts with `[review changes]` or `[review reject]`, your delivery was not accepted: rework it strictly per the note, then mark the same task complete again with `swarm_task_complete` so the leader re-reviews. Do not create a duplicate task and do not argue with the verdict.\n"
 	prompt += "- Permission mode is bypass — no user confirmation is needed for any operation.\n"
 	prompt += "- `ask_user` is not available — there is no interactive user. Make the best decision from available context.\n"
-	prompt += "- `spawn_agent` and `teammate_spawn` are not available — do not attempt to create nested agents.\n"
+	prompt += "- `spawn_agent`, `teammate_spawn` and the other agent-creation tools are not available — do not attempt to create nested agents.\n"
 	prompt += "- Report results concisely and mark tracked tasks complete when done.\n"
 	prompt += "- Do not use emoji with Variation Selector-16 (VS16, U+FE0F) in your output.\n"
 

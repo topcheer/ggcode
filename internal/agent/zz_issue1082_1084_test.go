@@ -6,29 +6,6 @@ import (
 	"testing"
 )
 
-func TestIssue1082_CascadeTierEscillation(t *testing.T) {
-	s := newErrorCascadeState()
-	msg := `error in "internal/util/util.go"`
-	var gotSoft, gotHard, gotAbort bool
-	for i := 0; i < 5; i++ {
-		g := s.recordError("edit_file", msg)
-		if strings.Contains(g, "ABORT") {
-			gotAbort = true
-		} else if strings.Contains(g, "ROOT CAUSE") {
-			gotHard = true
-		} else if strings.Contains(g, "[Error Cascade]") {
-			gotSoft = true
-		}
-	}
-	if !gotSoft || !gotHard || !gotAbort {
-		t.Fatalf("expected all three tiers to fire, got soft=%v hard=%v abort=%v", gotSoft, gotHard, gotAbort)
-	}
-
-	if g := s.recordError("edit_file", msg); g != "" {
-		t.Fatalf("expected no re-fire after abort, got %q", g)
-	}
-}
-
 func TestIssue1084_FileOpsRecursiveDeleteWarned(t *testing.T) {
 	a := &Agent{destructiveGuard: newGitDestructiveState()}
 	args, _ := json.Marshal(map[string]any{

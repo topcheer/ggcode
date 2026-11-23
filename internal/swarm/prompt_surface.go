@@ -46,24 +46,59 @@ func SummarizePersistedTeams() []PersistedTeamInfo {
 // (unclaimed) ones. Foreign-session teams are invisible (#5837). An empty
 // session ID keeps the unfiltered legacy behavior.
 func SummarizeVisibleTeams(sessionID string) []PersistedTeamInfo {
+	details := DescribeVisibleTeams(sessionID)
+	infos := make([]PersistedTeamInfo, 0, len(details))
+	for _, d := range details {
+		infos = append(infos, d.PersistedTeamInfo)
+	}
+	return infos
+}
+
+// PersistedMemberInfo is one member of a persisted team, from the manifest.
+// Only what a leader needs to decide whether to restore: who is in it.
+type PersistedMemberInfo struct {
+	ID   string
+	Name string
+	Role string
+}
+
+// PersistedTeamDetail is PersistedTeamInfo plus the member roster.
+type PersistedTeamDetail struct {
+	PersistedTeamInfo
+	Members []PersistedMemberInfo
+}
+
+// DescribeVisibleTeams is SummarizeVisibleTeams with the member roster.
+// Used by the team_list tool so the leader can see a persisted (not yet
+// restored) team's members without restoring it first.
+func DescribeVisibleTeams(sessionID string) []PersistedTeamDetail {
 	// #5860 rewrite: session namespace on disk - the visible set is simply
 	// everything under swarm/teams/<sessionID>/.
 	if sessionID == "" {
 		return nil
 	}
 	root := util.ConfigDir()
-	return summarizePersistedTeamsUnder(filepath.Join(root, "swarm", "teams", sessionID))
+	return describePersistedTeamsUnder(filepath.Join(root, "swarm", "teams", sessionID))
 }
 
-// summarizePersistedTeamsUnder scans <root>/swarm/teams (test entry for
-// arbitrary board roots).
 func summarizePersistedTeamsUnder(root string) []PersistedTeamInfo {
+	details := describePersistedTeamsUnder(root)
+	infos := make([]PersistedTeamInfo, 0, len(details))
+	for _, d := range details {
+		infos = append(infos, d.PersistedTeamInfo)
+	}
+	return infos
+}
+
+// describePersistedTeamsUnder scans <root>/swarm/teams (test entry for
+// arbitrary board roots).
+func describePersistedTeamsUnder(root string) []PersistedTeamDetail {
 	teamsDir := filepath.Join(root, "swarm", "teams")
 	entries, err := os.ReadDir(teamsDir)
 	if err != nil {
 		return nil // no teams dir yet — nothing to surface
 	}
-	var infos []PersistedTeamInfo
+	var infos []PersistedTeamDetail
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -73,15 +108,18 @@ func summarizePersistedTeamsUnder(root string) []PersistedTeamInfo {
 			debug.Log("swarm", "prompt surface: manifest of %s unreadable: %v", e.Name(), err)
 			continue
 		}
-		info := PersistedTeamInfo{
-			TeamID:   mf.TeamID,
-			Name:     mf.Name,
-			LeaderID: mf.LeaderID,
-			Members:  len(mf.Teammates),
+		info := PersistedTeamDetail{
+			PersistedTeamInfo: PersistedTeamInfo{
+				TeamID:   mf.TeamID,
+				Name:     mf.Name,
+				LeaderID: mf.LeaderID,
+				Members:  len(mf.Teammates),
+			},
 		}
-		for i := range mf.Teammates {
-			if mf.Teammates[i].LastActiveAt.After(info.LastActive) {
-				info.LastActive = mf.Teammates[i].LastActiveAt
+		for _, mt := range mf.Teammates {
+			info.Members = append(info.Members, PersistedMemberInfo{ID: mt.ID, Name: mt.Name, Role: mt.Role})
+			if mt.LastActiveAt.After(info.LastActive) {
+				info.LastActive = mt.LastActiveAt
 			}
 		}
 		if info.LastActive.IsZero() {

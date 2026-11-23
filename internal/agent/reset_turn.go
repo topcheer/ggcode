@@ -33,7 +33,6 @@ func (a *Agent) resetTurnDetectors() {
 	a.foresightCalib.reset()
 	a.expiredRead.reset()
 
-	a.resetConvergenceLock()
 	a.integrationResetForRun()
 	a.resetSelfMod()
 	a.resetOvercorrection()

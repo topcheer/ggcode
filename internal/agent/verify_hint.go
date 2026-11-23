@@ -2,7 +2,6 @@ package agent
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,19 +12,12 @@ import (
 )
 
 type postEditVerifyState struct {
-	sourceEditsSinceHint int
-	buildCmd             string
-	buildCmdChecked      bool
-	lastBuildFailed      bool
-
 	sourceEditsThisRun        int
 	lastSourceFileThisRun     string
 	buildOrTestRunThisRun     bool
 	realBuildOrTestRunThisRun bool
 	finalGateFiredThisRun     bool
 }
-
-const postEditVerifyInterval = 3
 
 var sourceMutatingTools = map[string]bool{
 	"edit_file":        true,
@@ -532,97 +524,22 @@ func mutatingSourceEdit(toolName string) bool {
 	return fileEditingTools[toolName] || toolName == "apply_patch"
 }
 
-func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string {
+// noteSourceEdit records that a tool mutated a source file so the
+// end-of-turn evidence gate (final_turn_evidence_gate.go) knows whether the
+// run touched code. The "[Verification reminder] / [Test coverage gap]"
+// post-edit hints that used to be built here were removed as noise.
+func (a *Agent) noteSourceEdit(toolName string, args json.RawMessage) {
 	if !mutatingSourceEdit(toolName) { // #5249: was bare fileEditingTools - apply_patch never incremented sourceEditsThisRun
-		return ""
+		return
 	}
-
 	filePath := extractFilePathFromArgs(toolName, args)
 	if filePath == "" || !isSourceCodeFile(filePath) {
-		return ""
+		return
 	}
-
 	a.mu.Lock()
 	defer a.mu.Unlock()
-
-	a.postEditVerify.sourceEditsSinceHint++
 	a.postEditVerify.sourceEditsThisRun++
 	a.postEditVerify.lastSourceFileThisRun = filePath
-
-	if a.postEditVerify.sourceEditsSinceHint < postEditVerifyInterval {
-		return ""
-	}
-
-	if !a.postEditVerify.buildCmdChecked {
-		a.postEditVerify.buildCmd = detectBuildSystem(a.workingDir)
-		a.postEditVerify.buildCmdChecked = true
-	}
-
-	cmd := a.postEditVerify.buildCmd
-	if cmd == "" {
-
-		a.postEditVerify.sourceEditsSinceHint = 0
-		return ""
-	}
-
-	a.postEditVerify.sourceEditsSinceHint = 0
-
-	targeted := targetedVerifyCommand(a.workingDir, filePath)
-	fileName := filepath.Base(filePath)
-
-	impact := impactScopedTestCommandMulti(a.workingDir)
-
-	coverageNudge := funcLevelCoverageNudgeMulti(a.workingDir)
-	if coverageNudge == "" {
-		coverageNudge = testCoverageNudgeMulti(a.workingDir)
-	}
-
-	debug.Log("agent", "post-edit verify hint: targeted=%q impact=%q full=%q after %d source-code edits", targeted, impact, cmd, postEditVerifyInterval)
-
-	fastCmd := targeted
-	if impact != "" && impact != targeted {
-		fastCmd = impact
-	}
-
-	if a.postEditVerify.lastBuildFailed {
-		var hint string
-		if fastCmd != "" {
-			hint = fmt.Sprintf(
-				"[Verification reminder: you've edited %d source files since the last build check (which FAILED). "+
-					"Run `%s` for a fast check of the affected packages (`%s`), or `%s` for the full suite before finishing.]",
-				postEditVerifyInterval, fastCmd, fileName, cmd,
-			)
-		} else {
-			hint = fmt.Sprintf(
-				"[Verification reminder: you've edited %d source files since the last build check (which FAILED). "+
-					"Run `%s` to verify your fixes compile before making further edits.]",
-				postEditVerifyInterval, cmd,
-			)
-		}
-		if coverageNudge != "" {
-			hint += " " + coverageNudge
-		}
-		return hint
-	}
-
-	var hint string
-	if fastCmd != "" {
-		hint = fmt.Sprintf(
-			"[Verification reminder: you've edited %d source files since the last build check. "+
-				"Run `%s` for a fast check of the affected packages (`%s`), or `%s` for the full suite before finishing.]",
-			postEditVerifyInterval, fastCmd, fileName, cmd,
-		)
-	} else {
-		hint = fmt.Sprintf(
-			"[Verification reminder: you've edited %d source files since the last build check. "+
-				"Run `%s` to verify your changes compile before making further edits.]",
-			postEditVerifyInterval, cmd,
-		)
-	}
-	if coverageNudge != "" {
-		hint += " " + coverageNudge
-	}
-	return hint
 }
 
 var verifyCommands = map[string]bool{
@@ -704,15 +621,10 @@ func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage,
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	a.postEditVerify.sourceEditsSinceHint = 0
 	a.postEditVerify.buildOrTestRunThisRun = true
 
 	if isRealTestExecution(cmd) {
 		a.postEditVerify.realBuildOrTestRunThisRun = true
-	}
-
-	if isRealTestExecution(cmd) && toolName == "run_command" {
-		a.postEditVerify.lastBuildFailed = resultErr
 	}
 
 	// Ring-noise control: full command strings (which can embed multi-KB
@@ -865,44 +777,6 @@ func isRealTestSegment(seg string) bool {
 		return true
 	}
 	return false
-}
-
-func funcLevelCoverageNudge(workingDir string) string {
-	gaps := funcLevelCoverageGaps(workingDir, 3, 4)
-	if len(gaps) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("[Untested functions: ")
-	for i, gap := range gaps {
-		if i > 0 {
-			b.WriteString("; ")
-		}
-		b.WriteString(gap.File)
-		b.WriteString(": ")
-		b.WriteString(strings.Join(gap.Funcs, ", "))
-	}
-	b.WriteString(". Consider generating tests for these functions.]")
-	return b.String()
-}
-
-func funcLevelCoverageNudgeMulti(workingDir string) string {
-	gaps := funcLevelCoverageGapsMulti(workingDir, 3, 4)
-	if len(gaps) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("[Untested functions: ")
-	for i, gap := range gaps {
-		if i > 0 {
-			b.WriteString("; ")
-		}
-		b.WriteString(gap.File)
-		b.WriteString(": ")
-		b.WriteString(strings.Join(gap.Funcs, ", "))
-	}
-	b.WriteString(". Consider generating tests for these functions.]")
-	return b.String()
 }
 
 func (a *Agent) resetPostEditVerify() {

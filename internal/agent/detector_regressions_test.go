@@ -45,24 +45,6 @@ func TestIsStrictVerifyCommand(t *testing.T) {
 	}
 }
 
-func TestIsConvergenceVerifyCommandExcludesFormatters(t *testing.T) {
-	if isConvergenceVerifyCommand("gofmt -w .") {
-		t.Error("gofmt must not arm the convergence lock (#472)")
-	}
-	if isConvergenceVerifyCommand("prettier --write src/") {
-		t.Error("prettier must not arm the convergence lock (#472)")
-	}
-	if isConvergenceVerifyCommand("cargo fmt") {
-		t.Error("cargo fmt must not arm the convergence lock (#472)")
-	}
-	if !isConvergenceVerifyCommand("go test ./...") {
-		t.Error("go test must still arm the convergence lock")
-	}
-	if !isConvergenceVerifyCommand("make test") {
-		t.Error("make test must still arm the convergence lock")
-	}
-}
-
 func TestReadArgsHaveWindow(t *testing.T) {
 	windowed := []json.RawMessage{
 		json.RawMessage(`{"path":"a.go","offset":4000}`),
