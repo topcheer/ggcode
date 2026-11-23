@@ -37,7 +37,7 @@ func Test2244SymmetricArmAmbiguityProbe(t *testing.T) {
 	ca.recordEdit("edit_file", "/w/internal/api/types.go", 2)
 	hint := ca.attributeFailure("compile: internal/api/types.go:12: undefined: X\n(warning: not unique)")
 
-	if hint != "" && containsStr(hint, "/w/pkg/api/types.go") && containsStr(hint, "references this file") {
-		t.Fatalf("#2244-B: authoritative phrasing on ambiguous suffix arm:\n%s", hint)
+	if hint != nil && hint.step.filePath == "/w/pkg/api/types.go" && hint.fileMatch {
+		t.Fatalf("#2244-B: ambiguous suffix arm must not count as file-tier evidence: %+v", hint)
 	}
 }

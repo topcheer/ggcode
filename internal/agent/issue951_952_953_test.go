@@ -162,28 +162,6 @@ func TestTokenWasteBudgetOriginalLenDrivesMetering(t *testing.T) {
 	}
 }
 
-func TestAgentGoOriginalContentLenCapturedBeforeDetectorChain(t *testing.T) {
-	src, err := readAgentAndProcessingSources()
-	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
-	}
-	captureIdx := strings.Index(string(src), "measuredLen := len(result.Content)")
-	applyIdx := strings.Index(string(src), "a.applyToolResultGuidance(")
-	shrinkIdx := strings.LastIndex(string(src), "guardToolOutput(result.Content")
-	if alt := strings.LastIndex(string(src), "guardToolOutputReport(result.Content"); alt > shrinkIdx {
-		shrinkIdx = alt
-	}
-	if captureIdx < 0 {
-		t.Fatal("measuredLen capture not found in agent.go")
-	}
-	if applyIdx < 0 || captureIdx > applyIdx {
-		t.Fatalf("measuredLen capture (%d) must precede applyToolResultGuidance (%d)", captureIdx, applyIdx)
-	}
-	if shrinkIdx < 0 || captureIdx < shrinkIdx {
-		t.Fatalf("measuredLen capture (%d) must follow the last shrink site (%d) - #1819 case 2", captureIdx, shrinkIdx)
-	}
-}
-
 func TestSyncVerifyAndGateReturnContract(t *testing.T) {
 	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
 
@@ -258,29 +236,4 @@ func runFutileCycleScenario(t *testing.T, editPath, oldText, newText string) *Ag
 		}
 	})
 	return a
-}
-
-func TestFutileCycleFailedEditDoesNotResetEpoch(t *testing.T) {
-
-	a := runFutileCycleScenario(t, "src/missing.go", "A", "B")
-
-	if len(a.futileCycle.pastEpochs) != 0 {
-		t.Fatalf("failed edit must not finalize an epoch, got %d past epochs", len(a.futileCycle.pastEpochs))
-	}
-	if a.futileCycle.warningsFired != 0 {
-		t.Fatalf("failed edit + legitimate re-reads must not fire futile-cycle warnings, got %d", a.futileCycle.warningsFired)
-	}
-}
-
-func TestFutileCycleSuccessfulEditStillDetectsRevisit(t *testing.T) {
-
-	a := runFutileCycleScenario(t, "src/a.go", "const X = 1", "const X = 2")
-
-	if len(a.futileCycle.pastEpochs) == 0 {
-		t.Fatalf("successful edit must finalize the read epoch (currentEpoch=%d, warnings=%d)",
-			len(a.futileCycle.currentEpoch), a.futileCycle.warningsFired)
-	}
-	if a.futileCycle.warningsFired == 0 {
-		t.Fatal("identical re-read set after a successful edit must fire the futile-cycle warning")
-	}
 }

@@ -184,10 +184,6 @@ func (a *Agent) executeToolWithPermissionGate(ctx context.Context, tc provider.T
 		debug.Log("agent", "slow tool: %s took %v", tc.Name, toolDur)
 	}
 
-	if latencyHint := a.latencyTracker.RecordAndCheck(tc.Name, toolDur); latencyHint != "" {
-		a.appendGuidance(&result, latencyHint)
-	}
-
 	errMsg := ""
 	if result.IsError {
 		errMsg = truncateString(result.Content, 200)
@@ -662,13 +658,6 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		result.Content += "\n" + postResult.Output
 	}
 
-	if result.IsError || toolFallbackHintOnSuccess(t.Name()) {
-		if hint := toolFallbackHint(t.Name(), result.Content); hint != "" {
-
-			a.appendGuidance(&result, strings.TrimLeft(hint, "\n"))
-		}
-	}
-
 	if destructiveWarning != "" {
 		a.appendGuidance(&result, destructiveWarning)
 	}
@@ -989,15 +978,9 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	}
 
 	if !result.IsError {
-		if warning := CheckMissingTestCompanionWithFS(filePath, oldContent, newContent); warning != "" {
-			a.appendGuidance(&result, warning)
-		}
 	}
 
 	if !result.IsError {
-		if debugWarning := checkDebugStmts(filePath, oldContent, newContent); debugWarning != "" {
-			a.appendGuidance(&result, debugWarning)
-		}
 	}
 
 	postEnv := env
@@ -1807,7 +1790,6 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 
 		isNew := !cp.Existed
 
-		a.expiredRead.recordUndo(cp.FilePath)
 		result := tool.FormatUndoResult(cp.FilePath, cp.ToolCall, isNew)
 
 		if !isNew && diff.HasChanges(cp.NewContent, cp.OldContent) {
@@ -1837,7 +1819,7 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 				Content: "checkpoint_id is required for action=revert. Use action=list to see available checkpoint IDs.",
 			}
 		}
-		cp, revertedFiles, err := cpMgr.RevertWithFilesSource(args.CheckpointID, "agent")
+		cp, _, err := cpMgr.RevertWithFilesSource(args.CheckpointID, "agent")
 		if err != nil {
 			return tool.Result{
 				IsError: true,
@@ -1846,9 +1828,6 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 		}
 		isNew := !cp.Existed
 
-		for _, f := range revertedFiles {
-			a.expiredRead.recordUndo(f)
-		}
 		result := tool.FormatUndoResult(cp.FilePath, cp.ToolCall, isNew)
 		result += fmt.Sprintf("\n\nAll edits after checkpoint %s have also been reverted.", args.CheckpointID)
 		debug.Log("agent", "undo_edit: reverted to %s for %s", args.CheckpointID, cp.FilePath)

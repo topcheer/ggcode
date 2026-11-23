@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -11,8 +10,6 @@ import (
 
 const (
 	causalMaxEdits = 30
-
-	causalMaxWarnings = 3
 
 	causalLookback = 10
 
@@ -32,8 +29,7 @@ type causalEditStep struct {
 }
 
 type causalAttributionState struct {
-	edits    []causalEditStep
-	warnings int
+	edits []causalEditStep
 
 	lastSuspect string
 
@@ -300,19 +296,29 @@ func looksLikeReadCommand(cmd string) bool {
 	return false
 }
 
-func (s *causalAttributionState) attributeFailureCmd(output, cmd string, errored bool) string {
+// causalSuspect is the edit a build/test failure is attributed to.
+type causalSuspect struct {
+	step      causalEditStep
+	score     int
+	rank      int
+	fileMatch bool
+	dirMatch  bool
+}
+
+// attributeFailureCmd records (and returns) the edit most likely behind a
+// failing command, or nil. The "[causal-attribution]" in-loop hint that used to
+// be rendered here was removed as noise; the state is kept because the
+// end-of-run failure attribution (playbook_failures.go) reads lastSuspect.
+func (s *causalAttributionState) attributeFailureCmd(output, cmd string, errored bool) *causalSuspect {
 	if !errored && looksLikeReadCommand(cmd) {
-		return ""
+		return nil
 	}
 	return s.attributeFailure(output)
 }
 
-func (s *causalAttributionState) attributeFailure(output string) string {
-	if s.warnings >= causalMaxWarnings {
-		return ""
-	}
+func (s *causalAttributionState) attributeFailure(output string) *causalSuspect {
 	if len(s.edits) == 0 {
-		return ""
+		return nil
 	}
 
 	looksVerify := causalVerifyRe.MatchString(output)
@@ -326,7 +332,7 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 		strings.Contains(output, "build failed") ||
 		strings.Contains(output, "vet:")
 	if !looksFail || (!looksVerify && !looksLikeCmdOutput) {
-		return ""
+		return nil
 	}
 
 	errorFiles := extractErrorFiles(output)
@@ -337,24 +343,16 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 	}
 	recent := s.edits[start:]
 
-	type scored struct {
-		step      causalEditStep
-		score     int
-		rank      int
-		fileMatch bool
-		dirMatch  bool
-	}
-
-	var results []scored
+	var results []causalSuspect
 	for i, edit := range recent {
 
 		recencyRank := i + 1
 		score, matched, dirHit := computeCRSDetail(edit, errorFiles, recencyRank, bareAmbiguousNames(s.edits, errorFiles))
-		results = append(results, scored{step: edit, score: score, rank: i, fileMatch: matched, dirMatch: dirHit})
+		results = append(results, causalSuspect{step: edit, score: score, rank: i, fileMatch: matched, dirMatch: dirHit})
 	}
 
 	if len(results) == 0 {
-		return ""
+		return nil
 	}
 
 	best := results[0]
@@ -365,31 +363,14 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 	}
 
 	if best.score < causalSuspectThreshold {
-		return ""
+		return nil
 	}
 
-	s.warnings++
 	s.lastSuspect = best.step.filePath
 	stepCopy := best.step
 	s.lastSuspectStep = &stepCopy
 	s.lastSuspectCRS = best.score
-
-	var sb strings.Builder
-	sb.WriteString("[causal-attribution] ")
-	if best.fileMatch {
-		sb.WriteString(fmt.Sprintf("Build/test failure likely caused by your %s to %s (step %d, CRS=%d — error output references this file). ",
-			best.step.toolName, best.step.filePath, best.step.iteration, best.score))
-	} else if best.dirMatch {
-		sb.WriteString(fmt.Sprintf("Build/test failure most likely originated from your %s to %s (step %d, CRS=%d — same package/directory as error). ",
-			best.step.toolName, best.step.filePath, best.step.iteration, best.score))
-	} else {
-		sb.WriteString(fmt.Sprintf("Build/test failure most likely originated from your %s to %s (step %d, CRS=%d — error-file overlap). ",
-			best.step.toolName, best.step.filePath, best.step.iteration, best.score))
-	}
-	sb.WriteString("Review that change first before attempting a blind fix. ")
-	sb.WriteString("Consider: git diff that file, check if the error line maps to your edit, or revert and re-verify.")
-
-	return sb.String()
+	return &best
 }
 
 func looksLikeFailure(output string) bool {
@@ -409,7 +390,6 @@ func looksLikeFailure(output string) bool {
 
 func (s *causalAttributionState) reset() {
 	s.edits = s.edits[:0]
-	s.warnings = 0
 	s.lastSuspectStep = nil
 	s.lastSuspectCRS = 0
 }

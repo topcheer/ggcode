@@ -31,25 +31,3 @@ func TestIssue4014PreviewIsRuneSafe(t *testing.T) {
 		t.Fatal("truncated preview is not valid UTF-8")
 	}
 }
-
-func TestIssue4010ErrorPropagateRecordsConsensusFiring(t *testing.T) {
-	src, err := readAgentAndProcessingSources()
-	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
-	}
-	text := string(src)
-	anchor := "if propGuidance := a.errorPropagate.recordResult"
-	idx := strings.Index(text, anchor)
-	if idx < 0 {
-		t.Fatal("errorPropagate branch not found")
-	}
-	window := text[idx : idx+900]
-	fireAt := strings.Index(window, `recordFiring("Error Propagation"`)
-	appendAt := strings.Index(window, "appendGuidance(&result, propGuidance)")
-	if fireAt < 0 {
-		t.Fatal("errorPropagate branch must recordFiring for cross-detector consensus (#4010)")
-	}
-	if appendAt < 0 || fireAt > appendAt {
-		t.Fatal("recordFiring must accompany the guidance append (firing-before-append order)")
-	}
-}

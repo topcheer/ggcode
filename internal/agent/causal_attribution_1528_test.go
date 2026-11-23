@@ -25,13 +25,13 @@ func Test1528ReadCommandBypassGuard(t *testing.T) {
 	s := newCausalAttributionState()
 	s.recordEdit("edit_file", "pkg/a.go", 1)
 	output := "--- FAIL: TestX\npkg/a.go:12: boom\nFAIL\n"
-	if got := s.attributeFailureCmd(output, "grep -rn FAIL ./...", false); got != "" {
-		t.Fatalf("succeeded grep must not attribute, got %q", got)
+	if got := s.attributeFailureCmd(output, "grep -rn FAIL ./...", false); got != nil {
+		t.Fatalf("succeeded grep must not attribute, got %+v", got.step)
 	}
 
 	s2 := newCausalAttributionState()
 	s2.recordEdit("edit_file", "pkg/a.go", 1)
-	if got := s2.attributeFailureCmd(output, "go test ./...", true); got == "" {
+	if got := s2.attributeFailureCmd(output, "go test ./...", true); got == nil {
 		t.Fatal("errored real test command with file evidence must attribute")
 	}
 }

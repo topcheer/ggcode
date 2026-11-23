@@ -26,18 +26,6 @@ func TestIssue5242_TrackerViewIncludesFileOps(t *testing.T) {
 	}
 }
 
-func TestIssue5242_GuardViewStillExcludesFileOps(t *testing.T) {
-	args := json.RawMessage(`{"operations":[{"action":"delete","source":"tmp/junk.go"}]}`)
-	if got := extractEditFilePaths("file_ops", args); got != nil {
-		t.Fatalf("guard view must stay file_ops-free (#5240), got %v", got)
-	}
-	// classic tools unchanged in both views
-	a := json.RawMessage(`{"file_path":"a.go"}`)
-	if got := extractTrackedEditPaths("edit_file", a); !reflect.DeepEqual(got, extractEditFilePaths("edit_file", a)) {
-		t.Errorf("non-file_ops tools must be identical across views")
-	}
-}
-
 func TestIssue5242_MalformedOpsSafe(t *testing.T) {
 	if got := extractTrackedEditPaths("file_ops", json.RawMessage(`{"operations":"oops"}`)); got != nil {
 		t.Errorf("non-array operations must yield nil, got %v", got)

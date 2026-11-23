@@ -2,16 +2,6 @@ package agent
 
 import "testing"
 
-func TestQueryConvergeGlobIsNotAQuery(t *testing.T) {
-	q := newQueryConvergeState()
-	q.recordToolCall("glob", `{"pattern":"internal/agent/*.go"}`, 1)
-	q.recordToolCall("glob", `{"pattern":"internal/tool/*.go"}`, 2)
-	q.recordToolCall("glob", `{"pattern":"internal/config/*.go"}`, 3)
-	if msg := q.maybeWarn(4); msg != "" {
-		t.Fatalf("expected no warning: globs are path syntax, not rephrased queries, got: %s", msg)
-	}
-}
-
 func TestCountConcurrencyPrimitivesAliasedImports(t *testing.T) {
 	src := `package x
 

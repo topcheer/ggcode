@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/provider"
@@ -55,71 +54,3 @@ func TestEvaluateExpectCheck(t *testing.T) {
 }
 
 func mkTC(name string) provider.ToolCallDelta { return provider.ToolCallDelta{Name: name} }
-
-func TestRecordPredictionPreferStructuredDeclaration(t *testing.T) {
-	s := newForesightCalibrateState()
-
-	s.recordPrediction("checking now\nEXPECT: grep >=1_match", []provider.ToolCallDelta{mkTC("read_file"), mkTC("grep")}, 3)
-	if len(s.predictions) != 1 {
-		t.Fatalf("want 1 attributed declaration, got %d", len(s.predictions))
-	}
-	p := s.predictions[0]
-	if p.toolName != "grep" || p.expectCheck != ">=1_match" || p.iteration != 3 {
-		t.Fatalf("prediction = %+v", p)
-	}
-
-	hint := s.checkCalibration("read_file", "file contents here", false, 3)
-	if hint != "" {
-		t.Fatalf("read_file must not consume grep-attributed declaration, got %q", hint)
-	}
-	hint = s.checkCalibration("grep", "no matches found", false, 3)
-	if hint == "" || !strings.Contains(hint, ">=1_match") {
-		t.Fatalf("expected immediate asymmetric warning, got %q", hint)
-	}
-}
-
-func TestAsymmetricNegativeDeclarationSilent(t *testing.T) {
-	s := newForesightCalibrateState()
-
-	s.recordPrediction("EXPECT: run_command fail", []provider.ToolCallDelta{mkTC("run_command")}, 1)
-	hint := s.checkCalibration("run_command", "ok\nexit code 0", false, 1)
-	if hint != "" {
-		t.Fatalf("declared-fail-but-passed must stay silent, got %q", hint)
-	}
-	if len(s.predictions) != 0 {
-		t.Fatal("declaration must be consumed")
-	}
-}
-
-func TestLegacyRegexFallbackIntact(t *testing.T) {
-	s := newForesightCalibrateState()
-
-	s.recordPrediction("The test should pass now.", []provider.ToolCallDelta{mkTC("run_command")}, 2)
-	if len(s.predictions) != 1 {
-		t.Fatalf("legacy prediction not recorded, got %d", len(s.predictions))
-	}
-	if s.predictions[0].expectCheck != "" {
-		t.Fatalf("legacy path must leave expectCheck empty, got %q", s.predictions[0].expectCheck)
-	}
-
-	if hint := s.checkCalibration("run_command", "exit code 1", false, 2); hint != "" {
-		t.Fatalf("legacy path must respect threshold of 3, got %q", hint)
-	}
-	if s.mismatches != 1 {
-		t.Fatalf("mismatch not counted: %d", s.mismatches)
-	}
-}
-
-func TestExpectProtocolHintOnce(t *testing.T) {
-	s := newForesightCalibrateState()
-	if h := s.expectProtocolHint([]provider.ToolCallDelta{mkTC("read_file")}); h != "" {
-		t.Fatalf("read-only turn must not announce protocol, got %q", h)
-	}
-	h1 := s.expectProtocolHint([]provider.ToolCallDelta{mkTC("run_command")})
-	if h1 == "" || !strings.Contains(h1, "EXPECT:") {
-		t.Fatalf("first side-effect turn must announce protocol, got %q", h1)
-	}
-	if h2 := s.expectProtocolHint([]provider.ToolCallDelta{mkTC("edit_file")}); h2 != "" {
-		t.Fatalf("protocol must be announced once per run, got %q", h2)
-	}
-}

@@ -4,22 +4,6 @@ import (
 	"testing"
 )
 
-func Test1499DiagnosticListNotPlan(t *testing.T) {
-	s := newSubgoalState()
-	diag := "Found 3 problems:\n1. missing nil check in foo\n2. off-by-one in bar loop\n3. unhandled error in baz\n"
-	s.recordAssistantText(diag, 1)
-	if len(s.subgoals) != 0 {
-		t.Fatalf("diagnostic list must not become a plan (got %d subgoals)", len(s.subgoals))
-	}
-
-	s2 := newSubgoalState()
-	plan := "My plan:\n1. fix nil check in foo\n2. fix off-by-one in bar loop\n3. handle error in baz\n"
-	s2.recordAssistantText(plan, 1)
-	if len(s2.subgoals) == 0 {
-		t.Fatal("plan-intent list must be adopted")
-	}
-}
-
 func Test1499NegatedDeclarationIgnored(t *testing.T) {
 	s := newSuccessDeclareState()
 	s.recordAssistantText("This part isn't done — I'll continue with the remaining work.", 2)

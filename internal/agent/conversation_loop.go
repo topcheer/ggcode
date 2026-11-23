@@ -98,170 +98,7 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 				i+1, a.maxIter, len(msgs), a.contextManager.TokenCount(), a.contextManager.AutoCompactThreshold(), a.contextManager.UsageRatio(), a.contextManager.ContextWindow())
 		}
 
-		if planHint := a.maybeSuggestPlan(i + 1); planHint != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: planHint}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-
-		if ecMsg := a.errorCompound.maybeWarn(i + 1); ecMsg != "" {
-
-			if a.injectGuidance(ecMsg) {
-				msgs = a.contextManager.Messages()
-			} else {
-				a.errorCompound.markUndelivered()
-			}
-		}
-
-		if epMsg := a.editPropagation.maybeWarn(i + 1); epMsg != "" {
-			msgs = a.guidanceEmit(epMsg, msgs)
-		}
-
-		if a.claimsSupervision {
-			if sgMsg := a.subgoalTrack.maybeWarn(i + 1); sgMsg != "" {
-				debug.Log("agent", "Iteration %d: subgoal completion gap detected", i+1)
-
-				if a.injectGuidance(sgMsg) {
-					msgs = a.contextManager.Messages()
-				} else {
-					a.subgoalTrack.markUndelivered()
-				}
-			}
-		}
-
-		if a.claimsSupervision {
-			if sdMsg := a.successDeclare.maybeWarn(i + 1); sdMsg != "" {
-				debug.Log("agent", "Iteration %d: premature success declaration detected", i+1)
-
-				if a.injectGuidance(sdMsg) {
-					msgs = a.contextManager.Messages()
-				} else {
-					a.successDeclare.markUndelivered()
-				}
-			}
-		}
-		if cdMsg := a.criteriaDrift.maybeWarn(i + 1); cdMsg != "" {
-			debug.Log("agent", "Iteration %d: success criteria drift detected", i+1)
-			msgs = a.guidanceEmit(cdMsg, msgs)
-		}
-
-		if abMsg := a.attemptBrief.maybeBrief(i + 1); abMsg != "" {
-			debug.Log("agent", "Iteration %d: injecting attempt brief", i+1)
-			msgs = a.guidanceEmit(abMsg, msgs)
-		}
-
-		if scentMsg := a.infoScent.maybeWarn(i + 1); scentMsg != "" {
-			msgs = a.guidanceEmit(scentMsg, msgs)
-		}
-
-		if qcMsg := a.queryConverge.maybeWarn(i + 1); qcMsg != "" {
-
-			if a.injectGuidance(qcMsg) {
-				msgs = a.contextManager.Messages()
-			} else {
-				a.queryConverge.markUndelivered()
-			}
-		}
-		if rrMsg := a.reasoningRedund.maybeWarn(i+1, a.maxIter); rrMsg != "" {
-			debug.Log("reasoning-redund", "Iteration %d: reasoning redundancy detected -- consecutive text-only overthinking", i+1)
-
-			if a.injectGuidance(rrMsg) {
-				msgs = a.contextManager.Messages()
-			} else {
-				a.reasoningRedund.markUndelivered()
-			}
-		}
-
-		if ptMsg := a.maybeWarnTermination(); ptMsg != "" {
-			msgs = a.guidanceEmit(ptMsg, msgs)
-		}
-
-		if bsMsg := a.bareEditStreak.maybeWarn(i + 1); bsMsg != "" {
-
-			if a.injectGuidance(bsMsg) {
-				msgs = a.contextManager.Messages()
-			} else {
-				a.bareEditStreak.markUndelivered()
-			}
-		}
-
-		if sfMsg := a.strategyFixation.check(); sfMsg != "" {
-			msgs = a.guidanceEmit(sfMsg, msgs)
-		}
-
-		if erMsg := a.errorRush.check(); erMsg != "" {
-			msgs = a.guidanceEmit(erMsg, msgs)
-		}
-
-		if afMsg := a.attentionFragment.analyze(); afMsg != "" {
-			msgs = a.guidanceEmit(afMsg, msgs)
-		}
-
 		a.driftRecurrence.recordIteration(i + 1)
-
-		if fcMsg := a.futileCycle.maybeWarn(i + 1); fcMsg != "" {
-
-			if a.injectGuidance(fcMsg) {
-				msgs = a.contextManager.Messages()
-			} else {
-				a.futileCycle.markUndelivered()
-			}
-		}
-
-		if caMsg := a.constraintAmnesia.maybeWarn(i + 1); caMsg != "" {
-
-			if a.injectGuidance(caMsg) {
-				msgs = a.contextManager.Messages()
-			} else {
-				a.constraintAmnesia.markUndelivered()
-			}
-		}
-
-		if a.delegationOrch != nil {
-
-			if delegationOrphanGateEnabled {
-				if delOrchMsg := a.delegationOrch.maybeWarnOrphanedDelegations(i + 1); delOrchMsg != "" {
-					debug.Log("agent", "Iteration %d: delegation orphan gate injected guidance", i+1)
-					msgs = a.guidanceEmit(delOrchMsg, msgs)
-				}
-			}
-			if delegationSerialGateEnabled {
-				if serialMsg := a.delegationOrch.maybeWarnSerialDelegation(); serialMsg != "" {
-					debug.Log("agent", "Iteration %d: serial delegation gate injected guidance", i+1)
-					msgs = a.guidanceEmit(serialMsg, msgs)
-				}
-			}
-			if overDelMsg := a.delegationOrch.maybeWarnOverDelegation(); overDelMsg != "" {
-				debug.Log("agent", "Iteration %d: over-delegation gate injected guidance", i+1)
-				msgs = a.guidanceEmit(overDelMsg, msgs)
-			}
-		}
-
-		if monorepoMsg := a.monorepoScoper.maybeWarnScopeSprawl(); monorepoMsg != "" {
-			debug.Log("monorepo-scope", "package scope sprawl detected: %s", monorepoMsg)
-
-			if a.injectGuidance(monorepoMsg) {
-				msgs = a.contextManager.Messages()
-			} else {
-				a.monorepoScoper.markUndelivered()
-			}
-		}
-
-		if a.maxIter >= 20 && !st.progressCheckInjected && i+1 >= a.maxIter*3/5 {
-			st.progressCheckInjected = true
-			debug.Log("agent", "Injecting mid-point progress checkpoint at iteration %d/%d", i+1, a.maxIter)
-
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf(
-					"Progress checkpoint: iteration %d/%d. Assess - on track? If not, switch strategy.",
-					i+1, a.maxIter,
-				)}},
-			})
-			msgs = a.contextManager.Messages()
-		}
 
 		effortApplied, effortPrev := a.applyAdaptiveEffort()
 
@@ -331,12 +168,7 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 			}
 		}
 
-		if cacheGuidance := a.cacheEffMonitor.record(resp.Usage); cacheGuidance != "" {
-
-			a.crossDetectorConsensus.recordFiring("Cache Efficiency", i+1)
-			a.injectGuidance(cacheGuidance)
-			debug.Log("cache-efficiency", "injecting cache bust storm guidance at iteration %d", i+1)
-		}
+		a.cacheEffMonitor.record(resp.Usage)
 
 		if len(toolCalls) == 0 || (resp.Usage.OutputTokens == 0 && strings.TrimSpace(textBuf) == "" && !hasNonThinkingContent(resp.Message.Content)) {
 			// #5543 knife-2: the empty-response / no-tool-calls path lives in
@@ -367,38 +199,9 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 		if hedgingHint := a.maybeWarnActionHedging(textBuf, hedgingHasMutation); hedgingHint != "" {
 			debug.Log("agent", "Iteration %d: action hedging detector detected verbalized uncertainty during mutation", i+1)
 			a.recordUncertainty("hedging", weightHedging)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: hedgingHint,
-				}},
-			})
-		}
-
-		if compHint := a.maybeWarnCompoundedUncertainty(); compHint != "" {
-			debug.Log("agent", "Iteration %d: compounded trajectory uncertainty threshold crossed", i+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: compHint,
-				}},
-			})
 		}
 
 		a.recordSpiralTurn(textBuf)
-		if spiralHint := a.maybeWarnSpiralHallucination(); spiralHint != "" {
-			debug.Log("agent", "Iteration %d: spiral of hallucination pattern detected", i+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: spiralHint,
-				}},
-			})
-		}
-
 		a.strategistNoProgressCount = 0
 		preExecuted := a.preExecuteReadOnlyTools(ctx, toolCalls)
 
@@ -407,16 +210,6 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 		action, aerr, msgs := a.runToolBatch(ctx, onEvent, msgs, toolCalls, i, textBuf, reasoningChars, userPromptForStats, preExecuted, waitPreExecuted, runStats, st)
 		if action != chatTurnContinue || aerr != nil {
 			return aerr
-		}
-
-		if serialWarn := a.serialRead.endTurn(i + 1); serialWarn != "" {
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: serialWarn,
-				}},
-			})
 		}
 
 		if len(toolCalls) > 0 {

@@ -8,18 +8,6 @@ var guidanceCounterResets = []func(*Agent){
 	},
 
 	func(a *Agent) {
-		if a.scopeDrift != nil {
-			a.scopeDrift.fired = false
-		}
-	},
-
-	func(a *Agent) {
-		if a.errStrategyLoop != nil {
-			a.errStrategyLoop.warningCount = 0
-		}
-	},
-
-	func(a *Agent) {
 		if a.commitHint != nil {
 			a.commitHint.fired = false
 		}
@@ -57,85 +45,8 @@ var guidanceCounterResets = []func(*Agent){
 	},
 
 	func(a *Agent) {
-		if a.reversibility != nil {
-			a.reversibility.mu.Lock()
-			a.reversibility.warnCount = 0
-			a.reversibility.mu.Unlock()
-		}
-	},
-
-	func(a *Agent) {
-		if a.toolRedundancy != nil {
-			a.toolRedundancy.warnings = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.infoScent != nil {
-			a.infoScent.mu.Lock()
-			a.infoScent.injectionCount = 0
-			a.infoScent.mu.Unlock()
-		}
-	},
-
-	func(a *Agent) {
-		if a.futileCycle != nil {
-			a.futileCycle.warningsFired = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.editPropagation != nil {
-			a.editPropagation.mu.Lock()
-			a.editPropagation.warningsIssued = 0
-			a.editPropagation.mu.Unlock()
-		}
-	},
-
-	func(a *Agent) {
 		if a.constraintAmnesia != nil {
 			a.constraintAmnesia.warnings = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.errorRush != nil {
-			a.errorRush.warnCount = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.bareEditStreak != nil {
-			a.bareEditStreak.warnCount = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.attentionFragment != nil {
-			a.attentionFragment.warnCount = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.strategyFixation != nil {
-			a.strategyFixation.warnCount = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.queryConverge != nil {
-			a.queryConverge.mu.Lock()
-			a.queryConverge.warnCount = 0
-			a.queryConverge.warned = false
-			a.queryConverge.mu.Unlock()
-		}
-	},
-
-	func(a *Agent) {
-		if a.errorCompound != nil {
-			a.errorCompound.mu.Lock()
-			a.errorCompound.warningCount = 0
-			a.errorCompound.mu.Unlock()
 		}
 	},
 
@@ -161,45 +72,16 @@ var guidanceCounterResets = []func(*Agent){
 	},
 
 	func(a *Agent) {
-		if a.foresightCalib != nil {
-			a.foresightCalib.warnCount = 0
-		}
-	},
-
-	func(a *Agent) {
 		if a.criteriaDrift != nil {
 			a.criteriaDrift.warnCount = 0
 		}
 	},
 
 	func(a *Agent) {
-		if a.editOscillation != nil {
-			a.editOscillation.fired = 0
-		}
-	},
-	func(a *Agent) {
-		if a.subgoalTrack != nil {
-			a.subgoalTrack.fired = false
-		}
-	},
-	func(a *Agent) {
 		if a.reasoningRedund != nil {
 			a.reasoningRedund.warnCount = 0
 		}
 	},
-	func(a *Agent) {
-		if a.strategyStagnation != nil {
-			a.strategyStagnation.warnings = 0
-		}
-	},
-	func(a *Agent) {
-		if a.actionAnnihil != nil {
-			a.actionAnnihil.mu.Lock()
-			a.actionAnnihil.warnsIssued = 0
-			a.actionAnnihil.mu.Unlock()
-		}
-	},
-
 	func(a *Agent) {
 		if a.spiralState != nil {
 			a.spiralState.warnings = 0
@@ -208,14 +90,6 @@ var guidanceCounterResets = []func(*Agent){
 	func(a *Agent) {
 		if a.capBoundary != nil {
 			a.capBoundary.warnings = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.overcorrection != nil {
-			a.overcorrection.mu.Lock()
-			a.overcorrection.warnCount = 0
-			a.overcorrection.mu.Unlock()
 		}
 	},
 
@@ -232,11 +106,6 @@ var guidanceCounterResets = []func(*Agent){
 	func(a *Agent) {
 	},
 	func(a *Agent) {
-		if a.constraintViolation != nil {
-			a.constraintViolation.warnings = 0
-		}
-	},
-	func(a *Agent) {
 		if a.reasonAction != nil {
 			a.reasonAction.mu.Lock()
 			a.reasonAction.warnings = 0
@@ -249,24 +118,8 @@ var guidanceCounterResets = []func(*Agent){
 		}
 	},
 	func(a *Agent) {
-		if a.strategyExhaustion != nil {
-			a.strategyExhaustion.mu.Lock()
-			a.strategyExhaustion.warningCount = 0
-			a.strategyExhaustion.mu.Unlock()
-		}
-	},
-	func(a *Agent) {
 		if a.actionHedging != nil {
 			a.actionHedging.warnings = 0
-		}
-	},
-	func(a *Agent) {
-		if a.delegationOrch != nil {
-			a.delegationOrch.mu.Lock()
-			a.delegationOrch.orphanWarnCount = 0
-			a.delegationOrch.serialWarnCount = 0
-			a.delegationOrch.overDelWarned = false
-			a.delegationOrch.mu.Unlock()
 		}
 	},
 	func(a *Agent) {
@@ -277,18 +130,8 @@ var guidanceCounterResets = []func(*Agent){
 		}
 	},
 	func(a *Agent) {
-		if a.toolResultRedundancy != nil {
-			a.toolResultRedundancy.warningsFired = 0
-		}
-	},
-	func(a *Agent) {
 		if a.outcomeMisattrib != nil {
 			a.outcomeMisattrib.warnings = 0
-		}
-	},
-	func(a *Agent) {
-		if a.causalAttribution != nil {
-			a.causalAttribution.warnings = 0
 		}
 	},
 	func(a *Agent) {
@@ -302,11 +145,6 @@ var guidanceCounterResets = []func(*Agent){
 		}
 	},
 	func(a *Agent) {
-		if a.toolEquivDetect != nil {
-			a.toolEquivDetect.warnings = 0
-		}
-	},
-	func(a *Agent) {
 		if a.tokenWasteBudget != nil {
 			a.tokenWasteBudget.mu.Lock()
 			a.tokenWasteBudget.warnings = 0
@@ -316,24 +154,6 @@ var guidanceCounterResets = []func(*Agent){
 	func(a *Agent) {
 		if a.truncClaim != nil {
 			a.truncClaim.warnings = 0
-		}
-	},
-	func(a *Agent) {
-		if a.solutionFixation != nil {
-			a.solutionFixation.warningCount = 0
-		}
-	},
-	func(a *Agent) {
-		if a.fixAmnesia != nil {
-
-			a.fixAmnesia.mu.Lock()
-			a.fixAmnesia.warned = make(map[string]bool)
-			a.fixAmnesia.mu.Unlock()
-		}
-	},
-	func(a *Agent) {
-		if a.errRegression != nil {
-			a.errRegression.warningCount = 0
 		}
 	},
 	func(a *Agent) {
@@ -360,31 +180,7 @@ var guidanceCounterResets = []func(*Agent){
 		}
 	},
 	func(a *Agent) {
-		if a.stalledConvergence != nil {
-			a.stalledConvergence.warningCount = 0
-		}
 	},
-	func(a *Agent) {
-		if a.expiredRead != nil {
-
-			a.expiredRead.warningCount = 0
-		}
-	},
-	func(a *Agent) {
-		if a.searchInvalidation != nil {
-			a.searchInvalidation.warningCount = 0
-		}
-	},
-	func(a *Agent) {
-	},
-	func(a *Agent) {
-		if a.exploreFrag != nil {
-			a.exploreFrag.mu.Lock()
-			a.exploreFrag.warnings = 0
-			a.exploreFrag.mu.Unlock()
-		}
-	},
-
 	func(a *Agent) {
 	},
 	func(a *Agent) {
@@ -434,11 +230,6 @@ var guidanceCounterResets = []func(*Agent){
 		}
 	},
 	func(a *Agent) {
-		if a.compoundingFailure != nil {
-			a.compoundingFailure.fired = false
-		}
-	},
-	func(a *Agent) {
 		if a.branchGuard != nil {
 			a.branchGuard.fired = false
 		}
@@ -479,19 +270,8 @@ var guidanceCounterResets = []func(*Agent){
 	},
 
 	func(a *Agent) {
-		if a.envDrift != nil {
-			a.envDrift.fired = false
-		}
-	},
-	func(a *Agent) {
 		if a.diskSpace != nil {
 			a.diskSpace.fired = false
-		}
-	},
-
-	func(a *Agent) {
-		if a.batchCoupling != nil {
-			a.batchCoupling.warnsIssued = 0
 		}
 	},
 
@@ -500,12 +280,6 @@ var guidanceCounterResets = []func(*Agent){
 			a.taintInfluence.warnedDirect = 0
 			a.taintInfluence.warnedInfluence = 0
 
-		}
-	},
-
-	func(a *Agent) {
-		if a.orphanFile != nil {
-			a.orphanFile.warnings = 0
 		}
 	},
 
@@ -522,12 +296,6 @@ var guidanceCounterResets = []func(*Agent){
 	func(a *Agent) {
 		if a.scopeCreep != nil {
 			a.scopeCreep.warnings = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.searchParamGuard != nil {
-			a.searchParamGuard.fires = 0
 		}
 	},
 
@@ -549,18 +317,6 @@ var guidanceCounterResets = []func(*Agent){
 	func(a *Agent) {
 		if a.complexityGate != nil {
 			a.complexityGate.fires = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.permDenyStreak != nil {
-			a.permDenyStreak.fires = 0
-		}
-	},
-
-	func(a *Agent) {
-		if a.wtInvalidation != nil {
-			a.wtInvalidation.warnedCount = 0
 		}
 	},
 

@@ -69,16 +69,6 @@ func TestIssue5321_NormalizePassthroughShapes(t *testing.T) {
 	}
 }
 
-func TestIssue5321_UnreadEditGuardTrackersSeeNestedPath(t *testing.T) {
-	args := json.RawMessage(issue5321Nested)
-	if got := extractEditFilePaths("apply_patch", args); len(got) != 1 || got[0] != "internal/foo.go" {
-		t.Errorf("guard view: want [internal/foo.go], got %v", got)
-	}
-	if got := extractTrackedEditPaths("apply_patch", args); len(got) != 1 || got[0] != "internal/foo.go" {
-		t.Errorf("tracker view: want [internal/foo.go], got %v", got)
-	}
-}
-
 func TestIssue5321_CreateFileExtractionNested(t *testing.T) {
 	got := extractCreateFilePaths("apply_patch", json.RawMessage(issue5321NestedCreate))
 	if len(got) != 1 || got[0] != "internal/new.go" {
@@ -115,18 +105,6 @@ func TestIssue5321_FilePathFromArgsSeesNestedPath(t *testing.T) {
 	}
 }
 
-func TestIssue5321_PropagationRepetitionSeeNestedPath(t *testing.T) {
-	s := newEditPropagationState()
-	if !s.recordEdit("apply_patch", issue5321Nested) {
-		t.Fatal("edit propagation blind to nested form")
-	}
-	rt := newRepetitionTracker()
-	rt.recordEditAttempt("apply_patch", json.RawMessage(issue5321Nested), true)
-	if rt.failedEditsByFile["internal/foo.go"] != 1 {
-		t.Fatal("repetition tracker blind to nested form")
-	}
-}
-
 func TestIssue5321_ExtractEditedPathsAndRunStatsSeeNestedPath(t *testing.T) {
 	tc := issue5321ToolCall("apply_patch", issue5321Nested)
 	if got := extractEditedPaths(tc); len(got) != 1 || got[0] != "internal/foo.go" {
@@ -140,15 +118,5 @@ func TestIssue5321_ExtractEditedPathsAndRunStatsSeeNestedPath(t *testing.T) {
 	s.ToolCalls = map[string]int{"apply_patch": 1}
 	if !codeChangedInRun(&s) {
 		t.Fatal("todo discipline blind to nested-form edit")
-	}
-}
-
-func TestIssue5321_TopLevelFormStillWorks(t *testing.T) {
-	args := json.RawMessage(`{"type":"update_file","path":"internal/foo.go","diff":"x"}`)
-	if got := extractEditFilePaths("apply_patch", args); len(got) != 1 || got[0] != "internal/foo.go" {
-		t.Errorf("top-level form regressed: %v", got)
-	}
-	if got := extractFilePathFromArgs("apply_patch", args); got != "internal/foo.go" {
-		t.Errorf("top-level extractFilePathFromArgs regressed: %q", got)
 	}
 }

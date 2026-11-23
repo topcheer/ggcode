@@ -166,7 +166,6 @@ type Agent struct {
 	// auditToolResult call and cleared.
 	pendingAuditRationale string
 
-	llmOverseer                llmOverseerState
 	tools                      *tool.Registry
 	contextManager             ctxpkg.ContextManager
 	maxIter                    int
@@ -226,7 +225,6 @@ type Agent struct {
 	strategistBudgetAnnounced  bool
 	strategistNoProgressCount  int
 	reflectionFunc             ReflectionFunc
-	loopDetector               loopDetector
 	errorClassifier            *ErrorClassifier
 	testFails                  *testFailCollector
 	overseer                   *overseerState
@@ -236,6 +234,7 @@ type Agent struct {
 	confidence                 *confidenceState
 	selfModel                  *AgentSelfModel
 	toolCallBudget             *toolCallBudget
+	latencyTracker             *LatencyTracker
 	commandCache               *commandCache
 
 	toolSearch                   *toolSearchState
@@ -244,29 +243,12 @@ type Agent struct {
 	postEditVerify               postEditVerifyState
 	retraceGate                  retraceGateState
 	planner                      *planState
-	todoDrop                     *todoDropState
-	recurringError               *recurringErrorState
-	errStrategyLoop              *errStrategyState
 	experienceFailureRecallFired bool
 	experienceInjectedCaseIDs    []string
-	solutionFixation             *solutionFixationState
-	pivotDecision                *pivotDecisionTracker
-	fixCascade                   *fixCascadeState
-	errRegression                *errRegressionState
-	stalledConvergence           *stalledConvergenceState
-	unreadEdit                   *unreadEditState
-	expiredRead                  *expiredReadState
-	searchInvalidation           *searchInvalidationState
-	wtInvalidation               *wtInvalidationState
-	strategyExhaustion           *seStrategyExhaustionState
-	editFailRecovery             *editFailState
-	scopeDrift                   *scopeDriftState
 	driftRecurrence              *driftRecurrenceState
 	constraintAmnesia            *constraintAmnesiaState
-	constraintViolation          *constraintViolationState
 	exportGuard                  *exportGuardState
 	hubPackageGuard              *hubPackageState
-	artifactGuard                *generatedArtifactState
 	fulfillmentGate              *fulfillmentGateState
 	constraintAudit              *constraintAuditState
 	constraintFollowup           *constraintFollowupState
@@ -276,7 +258,6 @@ type Agent struct {
 	scopeNarrow                  *scopeNarrowState
 	complexityGate               *complexityGateState
 	changeReconcile              *changeReconcileState
-	permDenyStreak               *permDenyStreakState
 	diffSummary                  *diffSummaryState
 	goalFinish                   *goalFinishState
 	oversightTriage              *oversightTriageState
@@ -290,20 +271,12 @@ type Agent struct {
 	lastGoodCheckpoint           *lastGoodCheckpoint
 	sessionTimeout               *sessionTimeoutState
 	diskSpace                    *diskSpaceState
-	envDrift                     *envDriftState
 	transientRetryBudget         int
 	mutateLedger                 *mutatingLedger
 	toolDedup                    *toolDedupLedger
 	toolDedupOnce                sync.Once
 	metadata                     map[string]string
-	compoundingFailure           *compoundingFailureState
-	failureMode                  *failureModeState
-	toolFallback                 *toolFallbackState
 	argSizeGuardFires            int
-	readHash                     *readHashTracker
-	latencyTracker               *LatencyTracker
-	toolSequence                 *toolSequenceValidator
-	obsContract                  *observationContractTracker
 	refusalLedger                *refusalLedger
 	remoteRefusalInhibit         atomic.Bool
 	lastExecutedTool             string
@@ -315,48 +288,27 @@ type Agent struct {
 	destructiveGuard             *gitDestructiveState
 	turnImpact                   *turnImpactRecorder
 	errorBudget                  *errorBudget
-	monorepoScoper               *monorepoScoperState
-	actionAnnihil                *actionAnnihilateState
-	exploreFrag                  *exploreFragState
-	batchCoupling                *batchCouplingState
 	buildIdempot                 *buildIdempotencyState
-	orphanFile                   *orphanFileState
 	cfDep                        *cfDepState
 	guidanceBudget               guidanceBudget
 	guidanceStats                guidanceRunStats
 	guidanceHints                map[string]guidanceHintRec
 	reasoningRedund              *reasoningRedundancyState
-	queryConverge                *queryConvergeState
 	serialRead                   *serialReadState
-	strategyFixation             *strategyFixationState
-	errorRush                    *errorRushState
-	attentionFragment            *attentionFragmentState
-	errorCompound                *errorCompoundState
-	fixAmnesia                   *fixAmnesiaState
-	toolResultRedundancy         *toolResultRedundancyState
 	selfMod                      *selfModState
-	bareEditStreak               *bareEditStreakState
 	editCoverage                 *editCoverageState
 	toolEff                      *toolEffTracker
 	usageHints                   *toolUsageHintStore
 	bgVerifyJobs                 *bgVerifyRegistry
-	recklessExec                 *recklessExecState
-	editPropagation              *editPropagationState
 
-	errorPropagate     *errorPropagateState
-	delegationOrch     *delegationState
 	integrationMonitor *integrationState
 	crossFileImpact    *crossFileImpactState
 	cacheEffMonitor    *cacheEffMonitor
-	searchParamGuard   *searchParamGuardState
-	toolRedundancy     *toolRedundancyState
-	toolEquivDetect    *toolEquivDetectState
 	ruleStore          *RuleStore
 	userEditObs        *UserEditObserver
 	ruleInjectCount    map[string]int
 	approvalMemory     *permission.ApprovalMemory
 	askThrottle        *permission.AskThrottle
-	editOscillation    *oscillationState
 	phantomVerify      *phantomVerifyState
 	truncClaim         *truncClaimState
 	outputOffload      *outputOffloader
@@ -379,28 +331,19 @@ type Agent struct {
 	outcomeMisattrib       *outcomeMisattribState
 	trajectoryHealth       *trajectoryHealthState
 	tokenWasteBudget       *tokenWasteBudgetState
-	reversibility          *reversibilityState
 	mindlessAction         *mindlessActionState
 	reproducerLifecycle    *reproducerLifecycleState
 	successDeclare         *successDeclareState
 	criteriaDrift          *criteriaDriftState
 	reasonAction           *reasonActionState
 	inputUnderspec         *inputUnderspecState
-	futileCycle            *futileCycleState
 	compoundedUncert       *compoundedUncertaintyState
 	spiralState            *spiralHallucinationState
 	trajIntel              *trajIntelState
-	strategyStagnation     *strategyStagnationState
 	termGuard              *prematureTerminationGuard
 	askQualityGate         *askQualityGateState
-	diminishingEdit        *diminishingEditState
-	overcorrection         *overcorrectionState
 	giveupRevert           *giveupRevertState
-	subgoalTrack           *subgoalState
-	infoScent              *infoScentState
-	foresightCalib         *foresightCalibrateState
 	causalAttribution      *causalAttributionState
-	attemptBrief           *attemptBriefState
 	crossDetectorConsensus *consensusState
 	taintInfluence         *taintInfluenceState
 	exfilChain             *exfilChainState
@@ -491,37 +434,22 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		confidence:           newConfidenceState(),
 		selfModel:            nil, // lazily bound in SetWorkingDir (#5498: cwd != workspace)
 		toolCallBudget:       newToolCallBudget(),
+		latencyTracker:       NewLatencyTracker(),
 		commandCache:         newCommandCache(),
 
 		toolSearch:             newToolSearchState(),
 		errorClassifier:        NewErrorClassifier(),
 		testFails:              newTestFailCollector(),
 		planner:                newPlanState(),
-		todoDrop:               newTodoDropState(),
-		recurringError:         newRecurringErrorState(),
-		errStrategyLoop:        newErrStrategyState(),
-		fixCascade:             newFixCascadeState(),
-		errRegression:          newErrRegressionState(),
-		stalledConvergence:     newStalledConvergenceState(),
-		unreadEdit:             newUnreadEditState(),
-		expiredRead:            newExpiredReadState(),
-		searchInvalidation:     newSearchInvalidationState(),
-		wtInvalidation:         newWTInvalidationState(),
-		strategyExhaustion:     newStrategyExhaustionState(),
 		falsePremise:           newFalsePremiseState(),
-		editFailRecovery:       newEditFailState(),
-		scopeDrift:             newScopeDriftState(),
 		driftRecurrence:        newDriftRecurrenceState(),
 		constraintAmnesia:      newConstraintAmnesiaState(),
-		constraintViolation:    newConstraintViolationState(),
 		exportGuard:            newExportGuardState(),
 		hubPackageGuard:        newHubPackageState(),
-		artifactGuard:          newGeneratedArtifactState(),
 		branchGuard:            newBranchGuardState(),
 		destructiveGuard:       newGitDestructiveState(),
 		turnImpact:             newTurnImpactRecorder(),
 		errorBudget:            newErrorBudget(),
-		monorepoScoper:         newMonorepoScoperState(),
 		approvalMemory:         permission.NewApprovalMemory(),
 		askThrottle:            permission.NewAskThrottle(),
 		crossDetectorConsensus: newConsensusState(),
@@ -540,7 +468,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		complexityGate:         newComplexityGateState(),
 		changeReconcile:        newChangeReconcileState(),
 		docDrift:               newDocDriftState(),
-		permDenyStreak:         newPermDenyStreakState(),
 		diffSummary:            newDiffSummaryState(),
 		goalFinish:             newGoalFinishState(),
 		oversightTriage:        newOversightTriageState(),
@@ -553,53 +480,26 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		verifyRegression:       newVerifyRegressionState(),
 		selfCorrectionGate:     newSelfCorrectionGateState(),
 		lastGoodCheckpoint:     newLastGoodCheckpoint(),
-		latencyTracker:         NewLatencyTracker(),
 		toolDedup:              newToolDedupLedger(),
-		toolSequence:           newToolSequenceValidator(),
-		obsContract:            newObservationContractTracker(),
 		refusalLedger:          newRefusalLedger(""),
 		effortAdapter:          newAdaptiveEffortStateDetectOverride(p),
 		sessionTimeout:         newSessionTimeoutState(0),
-		readHash:               newReadHashTracker(),
 		userSentiment:          newUserSentimentState(),
 		transientRetryBudget:   maxTransientRetryBudgetPerRun,
 		mutateLedger:           newMutatingLedger(),
-		compoundingFailure:     newCompoundingFailureState(),
-		failureMode:            newFailureModeState(),
-		toolFallback:           newToolFallbackState(),
 		cacheEffMonitor:        newCacheEffMonitor(),
-		searchParamGuard:       newSearchParamGuard(),
-		toolRedundancy:         newToolRedundancyAnalyzer(),
-		toolEquivDetect:        newToolEquivDetectState(),
-		actionAnnihil:          newActionAnnihilateState(),
-		exploreFrag:            newExploreFragState(),
-		batchCoupling:          newBatchCouplingState(),
 		buildIdempot:           newBuildIdempotencyState(),
-		orphanFile:             newOrphanFileState(),
 		cfDep:                  newCFDepState(),
 		serialRead:             newSerialReadState(),
 		outcomeMisattrib:       newOutcomeMisattribState(),
 		reasoningRedund:        newReasoningRedundancyState(),
-		queryConverge:          newQueryConvergeState(),
 		causalAttribution:      newCausalAttributionState(),
-		errorCompound:          newErrorCompoundState(),
-		fixAmnesia:             newFixAmnesiaState(),
-		toolResultRedundancy:   newToolResultRedundancyState(),
 		selfMod:                newSelfModState(),
-		bareEditStreak:         newBareEditState(),
 		editCoverage:           newEditCoverageState(),
 		toolEff:                newToolEffTracker(),
 		usageHints:             newToolUsageHintStore(),
 		bgVerifyJobs:           newBgVerifyRegistry(),
-		strategyFixation:       newStrategyFixationState(),
-		errorRush:              newErrorRushState(),
-		attentionFragment:      newAttentionFragmentState(),
-		recklessExec:           newRecklessExecState(),
-		editPropagation:        newEditPropagationState(),
-		editOscillation:        newOscillationState(),
 		phantomVerify:          newPhantomVerifyState(),
-		solutionFixation:       newSolutionFixationState(),
-		pivotDecision:          newPivotDecisionTracker(),
 		reproducerLifecycle:    newReproducerLifecycleState(),
 		truncClaim:             newTruncClaimState(),
 		outputOffload:          newOutputOffloader(),
@@ -616,30 +516,18 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		trajectoryHealth:       newTrajectoryHealthState(),
 		tokenWasteBudget:       newTokenWasteBudgetState(),
 		mindlessAction:         newMindlessActionState(),
-		strategyStagnation:     newStrategyStagnationState(),
 		termGuard:              newPrematureTerminationGuard(),
 		askQualityGate:         newAskQualityGateState(),
-		diminishingEdit:        newDiminishingEditState(),
-		overcorrection:         newOvercorrectionState(),
 		giveupRevert:           &giveupRevertState{},
-		subgoalTrack:           newSubgoalState(),
-		infoScent:              newInfoScentState(),
-		foresightCalib:         newForesightCalibrateState(),
-		reversibility:          newReversibilityState(),
 
-		errorPropagate:     newErrorPropagateState(),
 		crossFileImpact:    newCrossFileImpactState(),
 		diskSpace:          newDiskSpaceState(),
-		envDrift:           newEnvDriftState(),
 		successDeclare:     newSuccessDeclareState(),
 		criteriaDrift:      newCriteriaDriftState(),
 		reasonAction:       newReasonActionState(),
-		attemptBrief:       newAttemptBriefState(),
 		inputUnderspec:     newInputUnderspecState(),
 		qualityScorer:      NewResponseQualityScorer(100),
-		futileCycle:        newFutileCycleState(),
 		trajIntel:          newTrajIntelState(),
-		delegationOrch:     newDelegationState(),
 		integrationMonitor: newIntegrationState(),
 		toolTargetMismatch: newToolTargetState(),
 		toolTape:           newToolTapeState(),
@@ -1214,17 +1102,6 @@ func (a *Agent) SetWorkingDir(dir string) {
 	if a.selfModel == nil || a.selfModel.boundDir != dir {
 		a.selfModel = LoadSelfModel(SelfModelPath(dir))
 		a.selfModel.boundDir = dir
-	}
-
-	if a.unreadEdit != nil {
-		a.unreadEdit.baseDir = dir
-	}
-	if a.expiredRead != nil {
-		a.expiredRead.baseDir = dir
-	}
-
-	if a.searchInvalidation != nil {
-		a.searchInvalidation.setBaseDir(dir)
 	}
 
 	if dirChanged && a.ruleStore != nil {

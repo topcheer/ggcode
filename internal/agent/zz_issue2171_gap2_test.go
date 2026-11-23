@@ -52,7 +52,7 @@ func TestIssue2171Gap2AttributeFailurePrefersTrueMatch(t *testing.T) {
 	s.recordEdit("edit_file", "packages/a/api.ts", 1)
 	s.recordEdit("edit_file", "packages/b/api.ts", 2)
 	hint := s.attributeFailure("./api.ts:1:1: boom")
-	if hint != "" && contains(hint, "references this file") {
-		t.Fatalf("ambiguous bare attribution must not claim authoritative wording: %s", hint)
+	if hint != nil && hint.fileMatch {
+		t.Fatalf("ambiguous bare attribution must not count as file-tier evidence: %+v", hint)
 	}
 }

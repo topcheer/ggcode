@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -12,8 +11,8 @@ func TestIssue3794_A_PassingPytestNotAttributed(t *testing.T) {
 	out := `$ pytest tests/ --lf
 tests/test_x.py::test_failure_retry PASSED
 ================= 0 failed, 12 passed in 3.4s =================`
-	if hint := s.attributeFailure(out); hint != "" {
-		t.Fatalf("passing pytest output must not be attributed, got: %s", hint)
+	if hint := s.attributeFailure(out); hint != nil {
+		t.Fatalf("passing pytest output must not be attributed, got: %+v", hint.step)
 	}
 }
 
@@ -24,11 +23,8 @@ func TestIssue3794_A_DoubleColonNoDigitsExtractsNothing(t *testing.T) {
 	out := `$ pytest tests/ --lf
 tests/test_x.py::test_failure_retry PASSED
 check failed: see tests/test_x.py::test_failure_retry`
-	if hint := s.attributeFailure(out); hint == "" {
-
-		return
-	} else if strings.Contains(hint, "references this file") {
-		t.Fatalf("zero-digit :: extraction cited as file evidence: %s", hint)
+	if hint := s.attributeFailure(out); hint != nil && hint.fileMatch {
+		t.Fatalf("zero-digit :: extraction cited as file evidence: %+v", hint)
 	}
 }
 
@@ -41,8 +37,8 @@ func TestIssue3794_B_DisjointRecencyScoresZero(t *testing.T) {
 ./internal/aaa/broken.go:12:5: cannot use x (variable of type int) as string value
 FAIL	github.com/ggcode/internal/aaa [build failed]`
 
-	if hint := s.attributeFailure(out); hint != "" {
-		t.Fatalf("recency-only disjoint edit must not clear the suspect threshold, got: %s", hint)
+	if hint := s.attributeFailure(out); hint != nil {
+		t.Fatalf("recency-only disjoint edit must not clear the suspect threshold, got: %+v", hint.step)
 	}
 
 	if step, crs := s.takeFinalSuspect(); step != nil && crs != 0 {
@@ -59,10 +55,10 @@ func TestIssue3794_B_RealOverlapStillAttributed(t *testing.T) {
 FAIL	github.com/ggcode/internal/agent [build failed]`
 
 	hint := s.attributeFailure(out)
-	if hint == "" {
+	if hint == nil {
 		t.Fatal("real overlap must still attribute")
 	}
-	if !strings.Contains(hint, "references this file") {
-		t.Fatalf("file-tier match must keep the file-evidence wording, got: %s", hint)
+	if !hint.fileMatch {
+		t.Fatalf("file-tier match must keep the file-evidence flag, got: %+v", hint)
 	}
 }

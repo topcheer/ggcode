@@ -30,44 +30,6 @@ func TestExtractCommandFromArgsStripsComment(t *testing.T) {
 	}
 }
 
-func TestIsStrictVerifyCommand(t *testing.T) {
-	strict := []string{"go test ./...", "go build ./...", "npm test", "pytest", "cargo test"}
-	for _, c := range strict {
-		if !isStrictVerifyCommand(c) {
-			t.Errorf("expected strict verify: %q", c)
-		}
-	}
-	excluded := []string{"gofmt -w .", "make", "make clean", "make deploy", "just", "cargo fmt"}
-	for _, c := range excluded {
-		if isStrictVerifyCommand(c) {
-			t.Errorf("expected NOT strict verify: %q", c)
-		}
-	}
-}
-
-func TestReadArgsHaveWindow(t *testing.T) {
-	windowed := []json.RawMessage{
-		json.RawMessage(`{"path":"a.go","offset":4000}`),
-		json.RawMessage(`{"path":"a.go","limit":100}`),
-		json.RawMessage(`{"files":[{"path":"a.go","offset":10},{"path":"b.go"}]}`),
-	}
-	for _, a := range windowed {
-		if !readArgsHaveWindow(a) {
-			t.Errorf("expected window detection for %s", a)
-		}
-	}
-	full := []json.RawMessage{
-		json.RawMessage(`{"path":"a.go"}`),
-		json.RawMessage(`{"files":[{"path":"a.go"}]}`),
-		json.RawMessage(`{}`),
-	}
-	for _, a := range full {
-		if readArgsHaveWindow(a) {
-			t.Errorf("expected NO window for %s", a)
-		}
-	}
-}
-
 func TestSerialReadUnknownToolNeutral(t *testing.T) {
 	s := newSerialReadState()
 	s.recordToolCall("read_file")

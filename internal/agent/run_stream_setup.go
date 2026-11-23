@@ -142,16 +142,6 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 	a.maybeInjectSentimentFeedback(rsc.userPromptForStats)
 	a.maybeInjectPendingMCPAnswers()
 
-	if ambMsg := a.checkAmbiguityPoints(rsc.userPromptForStats); ambMsg != "" {
-		debug.Log("agent", "ambiguity point detector: injecting disambiguation guidance")
-		a.contextManager.Add(provider.Message{
-			Role: "user",
-			Content: []provider.ContentBlock{{
-				Type: "text",
-				Text: ambMsg,
-			}},
-		})
-	}
 	a.maybeInjectStableSystemHead()
 	a.maybeInjectRatchetRules()
 
@@ -185,26 +175,17 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 
 	a.plannerAnalyze(userText)
 
-	a.resetTodoDrop()
-	a.resetScopeDrift()
 	a.bgVerifyJobs = newBgVerifyRegistry()
 	a.resetDriftRecurrence()
-
-	a.attentionFragment.reset()
 
 	if a.spiralState != nil {
 		a.spiralState.reset()
 	}
 	a.resetLastGoodCheckpoint()
-	a.recurringError.reset()
-	a.errStrategyLoop.reset()
 
 	a.termGuard.reset()
 
 	a.askQualityGate.reset()
-	a.fixCascade.reset()
-	a.errRegression.reset()
-	a.stalledConvergence.reset()
 	a.speculator.resetSequence()
 	a.toolMemo.reset()
 	a.commandCache.reset()
@@ -221,22 +202,11 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 
 	a.resetSessionCostUsage()
 
-	a.unreadEdit.reset()
-	a.expiredRead.reset()
-	a.searchInvalidation.reset()
-	a.wtInvalidation.reset()
-	a.strategyExhaustion.reset()
 	a.falsePremise.reset()
 	a.phantomVerify.reset()
 
-	a.editFailRecovery.reset()
-
-	a.solutionFixation.reset()
-	a.pivotDecision.reset()
-
 	a.exportGuard.reset()
 	a.hubPackageGuard.reset()
-	a.artifactGuard.reset()
 	a.branchGuard.reset()
 	a.destructiveGuard.reset()
 	a.fulfillmentGate.reset()
@@ -276,15 +246,8 @@ func (a *Agent) buildRunTurnContextD2(ctx context.Context, content []provider.Co
 	a.verifyRegression.reset()
 	a.resetSelfCorrectionGate()
 	a.argSizeGuardFires = 0
-	a.searchParamGuard.reset()
-	a.toolRedundancy.reset()
-	a.toolSequence.reset()
-	a.obsContract.reset()
 	a.resetTransientRetryBudget()
 	a.mutateLedger.reset()
-	a.compoundingFailure.reset()
-
-	a.editOscillation.reset()
 
 	a.serialRead.reset()
 	a.toolEff.reset()
@@ -306,22 +269,12 @@ func (a *Agent) buildRunTurnContextD2(ctx context.Context, content []provider.Co
 	}
 	a.mindlessAction.reset()
 
-	a.strategyStagnation.reset()
-	a.infoScent.reset()
 	a.causalAttribution.reset()
-	a.reversibility.reset()
-	a.constraintViolation.reset()
 	a.inputUnderspec.reset()
-	a.queryConverge.reset()
-	a.failureMode.reset()
-	a.toolFallback.reset()
 
-	a.errorPropagate.reset()
-	a.readHash.reset()
 	a.cacheEffMonitor.reset()
 
 	a.changeReconcile.reset()
-	a.permDenyStreak.reset()
 	a.crossFileImpact.reset()
 	a.diffSummary.reset()
 	a.goalFinish.reset()
@@ -360,17 +313,8 @@ func (a *Agent) buildRunTurnContextD2(ctx context.Context, content []provider.Co
 		}
 	}
 
-	a.envDrift.reset()
 	if workingDir := a.WorkingDir(); workingDir != "" {
 
-		a.monorepoScoper.detectMonorepo(workingDir)
-		if envMsg := a.envDrift.check(workingDir); envMsg != "" {
-			debug.Log("env-drift", "env var drift detected, injecting advisory")
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: envMsg}},
-			})
-		}
 	}
 
 	if a.checkpoints != nil {
@@ -378,14 +322,6 @@ func (a *Agent) buildRunTurnContextD2(ctx context.Context, content []provider.Co
 	}
 
 	a.sessionTimeout.start(a.currentMode().IsCruiseMode())
-
-	if underspecHint := a.maybeWarnInputUnderspec(userText); underspecHint != "" {
-		debug.Log("input-underspec", "underspecified user request detected, injecting advisory")
-		a.contextManager.Add(provider.Message{
-			Role:    "user",
-			Content: []provider.ContentBlock{{Type: "text", Text: underspecHint}},
-		})
-	}
 
 	return msgs, toolDefs, userText
 }

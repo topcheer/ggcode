@@ -20,19 +20,18 @@ func TestCausalAttribution_RecordAndAttribute(t *testing.T) {
 ./confidence.go:42:10: undefined: fooBar
 FAIL	github.com/ggcode/internal/agent [build failed]`
 
-	hint := s.attributeFailure(output)
-	if hint == "" {
-		t.Fatal("expected attribution guidance, got empty")
+	sus := s.attributeFailure(output)
+	if sus == nil {
+		t.Fatal("expected attribution, got none")
 	}
-
-	if !contains(hint, "confidence.go") {
-		t.Errorf("expected hint to reference confidence.go, got: %s", hint)
+	if !contains(sus.step.filePath, "confidence.go") {
+		t.Errorf("expected suspect confidence.go, got: %+v", sus.step)
 	}
-	if !contains(hint, "CRS=") {
-		t.Errorf("expected hint to contain CRS score, got: %s", hint)
+	if s.lastSuspectCRS <= 0 {
+		t.Errorf("expected a positive CRS score, got %d", s.lastSuspectCRS)
 	}
-	if !contains(hint, "step 2") {
-		t.Errorf("expected hint to reference step 2, got: %s", hint)
+	if sus.step.iteration != 2 {
+		t.Errorf("expected suspect step 2, got: %+v", sus.step)
 	}
 }
 
@@ -47,16 +46,15 @@ FAIL	github.com/ggcode/internal/agent`
 
 	hint := s.attributeFailure(output)
 
-	if hint == "" {
-		t.Fatal("expected attribution for same-package error, got empty")
+	if hint == nil {
+		t.Fatal("expected attribution for same-package error, got none")
 	}
 }
 
 func TestCausalAttribution_NoEdits(t *testing.T) {
 	s := newCausalAttributionState()
-	hint := s.attributeFailure("build failed")
-	if hint != "" {
-		t.Errorf("expected empty hint with no edits, got: %s", hint)
+	if hint := s.attributeFailure("build failed"); hint != nil {
+		t.Errorf("expected no attribution with no edits, got: %+v", hint.step)
 	}
 }
 
@@ -64,45 +62,19 @@ func TestCausalAttribution_NoFailure(t *testing.T) {
 	s := newCausalAttributionState()
 	s.recordEdit("edit_file", "main.go", 1)
 
-	hint := s.attributeFailure("ok\tpackage main")
-	if hint != "" {
-		t.Errorf("expected empty hint for successful output, got: %s", hint)
-	}
-}
-
-func TestCausalAttribution_MaxWarnings(t *testing.T) {
-	s := newCausalAttributionState()
-	s.recordEdit("edit_file", "main.go", 1)
-	s.recordEdit("edit_file", "main.go", 2)
-	s.recordEdit("edit_file", "main.go", 3)
-
-	failureOutput := "main.go:10: undefined: foo\nFAIL"
-
-	for i := 0; i < causalMaxWarnings; i++ {
-		hint := s.attributeFailure(failureOutput)
-		if hint == "" {
-			t.Fatalf("expected hint on call %d, got empty", i)
-		}
-	}
-
-	hint := s.attributeFailure(failureOutput)
-	if hint != "" {
-		t.Errorf("expected hint suppression after max warnings, got: %s", hint)
+	if hint := s.attributeFailure("ok\tpackage main"); hint != nil {
+		t.Errorf("expected no attribution for successful output, got: %+v", hint.step)
 	}
 }
 
 func TestCausalAttribution_Reset(t *testing.T) {
 	s := newCausalAttributionState()
 	s.recordEdit("edit_file", "main.go", 1)
-	s.warnings = 2
 
 	s.reset()
 
 	if len(s.edits) != 0 {
 		t.Errorf("expected edits cleared after reset, got %d", len(s.edits))
-	}
-	if s.warnings != 0 {
-		t.Errorf("expected warnings cleared after reset, got %d", s.warnings)
 	}
 }
 
@@ -163,8 +135,8 @@ func TestCausalAttribution_LastSuspectTracksTopSuspect(t *testing.T) {
 	s.recordEdit("edit_file", "internal/tool/grep.go", 0)
 
 	out := "# /repo/internal/tool/grep.go:12:3: undefined: Foo\nFAIL\tinternal/tool [build failed]\nexit status 1"
-	if g := s.attributeFailureCmd(out, "go test ./internal/tool/", true); g == "" {
-		t.Fatal("expected attribution guidance for error-file match")
+	if g := s.attributeFailureCmd(out, "go test ./internal/tool/", true); g == nil {
+		t.Fatal("expected attribution for error-file match")
 	}
 	if s.lastSuspect != "internal/tool/grep.go" {
 		t.Fatalf("lastSuspect = %q, want the attributed file (experiment would arm on empty)", s.lastSuspect)
@@ -203,12 +175,12 @@ func TestCausalAttribution_RecencyBonus(t *testing.T) {
 	output := "./internal/agent/third.go:10: syntax error\nFAIL"
 
 	hint := s.attributeFailure(output)
-	if hint == "" {
-		t.Fatal("expected attribution hint")
+	if hint == nil {
+		t.Fatal("expected attribution")
 	}
 
-	if !contains(hint, "new.go") {
-		t.Errorf("expected most recent edit (new.go) to be identified as cause, got: %s", hint)
+	if !contains(hint.step.filePath, "new.go") {
+		t.Errorf("expected most recent edit (new.go) to be identified as cause, got: %+v", hint.step)
 	}
 }
 
@@ -222,14 +194,14 @@ func TestCausalAttribution_MultiLineGrepNotCmdOutput(t *testing.T) {
 		"internal/im/keys.go:10: key, _ := pem.Decode(block)\n" +
 		"internal/im/keys.go:11: // decode failed case\n" +
 		"internal/im/keys.go:12: return nil\n"
-	if hint := s.attributeFailure(grepish); hint != "" {
-		t.Fatalf("multi-line grep output misattributed: %s", hint)
+	if hint := s.attributeFailure(grepish); hint != nil {
+		t.Fatalf("multi-line grep output misattributed: %+v", hint.step)
 	}
 
 	compilery := "./internal/im/crypto.go:10:2: cannot use err (type error)\nFAIL\tgithub.com/x/y\t0.5s\n"
 	s2 := newCausalAttributionState()
 	s2.recordEdit("edit_file", "internal/im/crypto.go", 1)
-	if hint := s2.attributeFailure(compilery); hint == "" {
+	if hint := s2.attributeFailure(compilery); hint == nil {
 		t.Fatal("real compiler failure no longer attributes")
 	}
 }
@@ -272,10 +244,10 @@ func TestCausalAttribution_SuffixAmbiguityEndToEnd(t *testing.T) {
 FAIL	github.com/x/y [build failed]`
 
 	hint := s.attributeFailure(output)
-	if hint == "" {
-		t.Fatal("expected attribution guidance (weak tier), got empty")
+	if hint == nil {
+		t.Fatal("expected attribution (weak tier), got none")
 	}
-	if contains(hint, "references this file") {
-		t.Fatalf("ambiguous suffix match must not use authority wording: %s", hint)
+	if hint.fileMatch {
+		t.Fatalf("ambiguous suffix match must not count as file-tier evidence: %+v", hint)
 	}
 }
