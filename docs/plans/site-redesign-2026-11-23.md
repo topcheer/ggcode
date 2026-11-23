@@ -1,6 +1,6 @@
 # Plan: Website Redesign (ggcode.dev) — 2026-11-23
 
-Status: **APPROVED & IMPLEMENTED (branch `site-redesign`)** — D1–D6 as recommended, primary colour switched to **blue** per user decision (app-icon family). Phases 0–5 done; 6.1/6.5 (Lighthouse CI, axe) follow in a second PR. Detailed artifacts: `specs/site-redesign/{requirements,design,tasks}.md`. This file is self-contained: an approver can decide from it alone.
+Status: **APPROVED & IMPLEMENTED (branch `site-redesign`)** — D1–D6 as recommended, primary colour switched to **blue** per user decision (app-icon family). Phases 0–7 done (#5933, #5934, #5935, #5936): both hosts live, Lighthouse budgets enforced in CI (98/97/100/100). Open human follow-ups: Plausible 7-day baseline, release note. Detailed artifacts: `specs/site-redesign/{requirements,design,tasks}.md`. This file is self-contained: an approver can decide from it alone.
 
 ## 1. Current state (audited 2026-11-23)
 

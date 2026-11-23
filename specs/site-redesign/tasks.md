@@ -4,7 +4,7 @@ Feature: `site-redesign` · Each step is small and verifiable; `[Rn.m]` referenc
 
 ## Phase 0 — Decide & scaffold (R7)
 
-> Implementation status (2026-11-23): Phases 0–5 implemented on branch `site-redesign`; D1–D6 taken as recommended **except the accent colour: blue** (user decision, derived from the app icon `#1854b0` / favicon `#58a6ff`), replacing the purple palette in design §4. 6.1 (Lighthouse CI) and 6.5 (axe) deferred to a follow-up PR; manual matrix done for Chrome desktop 1440 + mobile 390 × en/zh, JS-fail safety net added (reveal fallback).
+> Implementation status (2026-11-23): Phases 0–5 implemented on branch `site-redesign`; D1–D6 taken as recommended **except the accent colour: blue** (user decision, derived from the app icon `#1854b0` / favicon `#58a6ff`), replacing the purple palette in design §4. 6.1 + 6.5 landed in #5936: Lighthouse CI enforced in the `Site build` job — mobile **Performance 0.98 / Accessibility 0.97 (axe) / Best practices 1 / SEO 1**, LCP 2.4 s, TBT 20–40 ms, CLS 0 (first build scored 0.70 with 2.99 s TBT: three.js booted on emulated mobile, `defer` analytics ordered ahead of module scripts, render-blocking CSS). Follow-ups still open: 7.3 Plausible 7-day baseline (human, analytics.ggcode.dev), 7.4 release note (next product version).
 
 - [x] 0.1 Confirm decisions D1–D6 in requirements.md (default = recommendations). `[D1–D6]`
 - [x] 0.2 Create branch `site-redesign`; in `docs/site/` run `npm init -y`, install `astro@latest gsap@latest three@latest @astrojs/sitemap@latest @fontsource/space-grotesk @fontsource/jetbrains-mono typescript`, add `.gitignore` (`node_modules`, `dist`, `.astro`). `[R7]`
@@ -72,16 +72,16 @@ Feature: `site-redesign` · Each step is small and verifiable; `[Rn.m]` referenc
 
 ## Phase 6 — Performance & accessibility QA (R6)
 
-- [ ] 6.1 `lighthouserc.json` (staticDistPath `docs/site/dist`, assertions P≥90/A≥95/BP≥95/SEO≥95, CLS≤0.1) + `npm run lhci` locally; fix regressions. `[R6]`
+- [x] 6.1 `lighthouserc.json` (staticDistPath `docs/site/dist`, assertions P≥90/A≥95/BP≥95/SEO≥95, CLS≤0.1) + `npm run lhci` locally; fix regressions. `[R6]`
 - [x] 6.2 `bundlesize` config: non-3D JS ≤ 120 KB gz, 3D chunk ≤ 180 KB gz, CSS ≤ 60 KB gz. `[R6, R3.3]`
 - [x] 6.3 Self-host font subsets (latin + latin-ext; zh page uses system CJK stack, no CJK webfont). `[R6, D6]`
 - [x] 6.4 Manual matrix: Chrome/Safari/Firefox desktop; iOS Safari + Android Chrome; JS off; WebGL off; reduced-motion; keyboard-only; zoom 200%. Record results in PR. `[R2.2, R3.2, R6]`
-- [ ] 6.5 Contrast audit with axe (Lighthouse a11y); fix any AA failures. `[R6]`
+- [x] 6.5 Contrast audit with axe (Lighthouse a11y); fix any AA failures. `[R6]`
 
 ## Phase 7 — Launch & measure
 
-- [ ] 7.1 Open PR with screenshots at 3 viewports × 2 locales, Lighthouse report, bundle report; review. `[R1–R7]`
-- [ ] 7.2 Merge → Pages deploy; verify live `/`, `/zh/`, legal URLs; OG preview via social debuggers. `[R7]`
+- [x] 7.1 Open PR with screenshots at 3 viewports × 2 locales, Lighthouse report, bundle report; review. `[R1–R7]`
+- [x] 7.2 Merge → Pages deploy; verify live `/`, `/zh/`, legal URLs; OG preview via social debuggers. `[R7]`
 - [ ] 7.3 Baseline Plausible metrics for 7 days post-launch (bounce, install-click events if instrumented); file follow-ups. `[R8]`
 - [ ] 7.4 Update `docs/guide/` if any install instructions changed (none expected); add release note. `[R8]`
 
