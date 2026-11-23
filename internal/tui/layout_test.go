@@ -798,17 +798,14 @@ func TestSidebarRendersMCPSectionAndActiveTools(t *testing.T) {
 	if !strings.Contains(view, "MCP") || !strings.Contains(view, "5 up • 1 pending • 0 failed") {
 		t.Fatal("expected MCP summary block in sidebar")
 	}
-	if !strings.Contains(view, "web-reader (http)") || !strings.Contains(view, "zai-mcp-server (stdio)") {
-		t.Fatal("expected MCP server rows in sidebar")
+	// Stats only: per-server rows and the active-tool list live in /mcp.
+	for _, row := range []string{"web-reader (http)", "zai-mcp-server (stdio)", "server-3 (stdio)", "Active tools", "/mcp"} {
+		if strings.Contains(view, row) {
+			t.Fatalf("sidebar must not list MCP detail %q, got %q", row, view)
+		}
 	}
-	if strings.Contains(view, "server-6 (stdio)") {
-		t.Fatal("expected sidebar MCP list to cap at five servers")
-	}
-	if !strings.Contains(view, "/mcp") {
-		t.Fatal("expected sidebar MCP overflow hint")
-	}
-	if !strings.Contains(view, "Active tools") || !strings.Contains(view, "web-reader") {
-		t.Fatal("expected active MCP tool list in sidebar")
+	if !strings.Contains(view, "1 active tools") {
+		t.Fatal("expected active MCP tool count in sidebar")
 	}
 }
 
@@ -865,8 +862,10 @@ func TestSidebarRendersIMAdapterStatuses(t *testing.T) {
 	if !strings.Contains(view, "1 adapters • 1 healthy") {
 		t.Fatalf("expected IM summary in sidebar, got %q", view)
 	}
-	if !strings.Contains(view, "✓ hermes (qq) ready") {
-		t.Fatalf("expected healthy IM adapter row, got %q", view)
+	// Stats only: per-adapter rows live in /im; the bound adapter is counted,
+	// the unbound one is neither counted nor listed.
+	if strings.Contains(view, "hermes (qq)") {
+		t.Fatalf("sidebar must not list IM adapter rows, got %q", view)
 	}
 	if strings.Contains(view, "backup (qq) connecting") {
 		t.Fatalf("expected unbound adapter to stay hidden, got %q", view)
@@ -898,8 +897,9 @@ func TestSidebarRendersConfiguredIMAdapterWithoutRuntimeState(t *testing.T) {
 	if !strings.Contains(view, "1 adapters • 0 healthy") {
 		t.Fatalf("expected IM summary for configured adapter, got %q", view)
 	}
-	if !strings.Contains(view, "… ggcodetest (qq) not started") {
-		t.Fatalf("expected configured adapter to appear before runtime starts, got %q", view)
+	// Stats only: the configured adapter is counted but not listed.
+	if strings.Contains(view, "ggcodetest (qq)") {
+		t.Fatalf("sidebar must not list configured adapter before runtime starts, got %q", view)
 	}
 }
 
