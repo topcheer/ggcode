@@ -3,6 +3,9 @@ import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const dist = new URL('../dist/', import.meta.url).pathname;
+// Root-absolute URLs in a sub-path build carry the Astro base (e.g. /ggcode/_astro/..).
+const base = (process.env.SITE_BASE || '/').replace(/\/$/, '');
+const stripBase = (u) => (base && u.startsWith(base + '/') ? u.slice(base.length) : (u === base ? '/' : u));
 const files = [];
 (function walk(d) { for (const n of readdirSync(d)) { const p = join(d, n); statSync(p).isDirectory() ? walk(p) : files.push(p); } })(dist);
 
@@ -14,7 +17,8 @@ for (const f of html) {
   for (const m of txt.matchAll(ref)) {
     const u = m[1];
     if (/^(https?:|mailto:|data:|tel:)/i.test(u) || u.startsWith('//')) continue;
-    let target = u.startsWith('/') ? join(dist, u) : join(f.replace(/\/[^/]+$/, ''), u);
+    const rel = stripBase(u);
+    let target = rel.startsWith('/') ? join(dist, rel) : join(f.replace(/\/[^/]+$/, ''), rel);
     if (existsSync(target) && statSync(target).isDirectory()) target = join(target, 'index.html');
     if (!existsSync(target)) bad.add(`${relative(dist, f)} -> ${u}`);
   }
@@ -23,7 +27,7 @@ for (const f of html) {
 for (const f of html) {
   const txt = readFileSync(f, 'utf8');
   for (const m of txt.matchAll(/srcset=["']([^"']+)["']/g)) {
-    for (const part of m[1].split(',')) { const u = part.trim().split(/\s+/)[0]; if (u && !u.startsWith('/') && !existsSync(join(f.replace(/\/[^/]+$/, ''), u))) bad.add(`${relative(dist, f)} srcset -> ${u}`); if (u.startsWith('/') && !existsSync(join(dist, u))) bad.add(`${relative(dist, f)} srcset -> ${u}`); }
+    for (const part of m[1].split(',')) { const raw = part.trim().split(/\s+/)[0]; const u = stripBase(raw); if (u && !u.startsWith('/') && !existsSync(join(f.replace(/\/[^/]+$/, ''), u))) bad.add(`${relative(dist, f)} srcset -> ${raw}`); if (u.startsWith('/') && !existsSync(join(dist, u))) bad.add(`${relative(dist, f)} srcset -> ${raw}`); }
   }
 }
 if (bad.size) { console.error(`[check-links] ${bad.size} broken reference(s):\n` + [...bad].map((b) => '  ' + b).join('\n')); process.exit(1); }

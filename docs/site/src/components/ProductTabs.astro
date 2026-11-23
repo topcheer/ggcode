@@ -1,5 +1,5 @@
 ---
-import { t, type Locale } from '../i18n/utils';
+import { t, withBase, type Locale } from '../i18n/utils';
 import Reveal from './Reveal.astro';
 import VideoLoop from './media/VideoLoop.astro';
 import { Picture } from 'astro:assets';
@@ -9,9 +9,9 @@ import mobileShot from '../assets/screenshots/mobile/mobile-main.png';
 interface Props { locale: Locale }
 const { locale } = Astro.props;
 const tabs = [
-  { id: 'tui', title: t(locale, 'product.tui.title'), points: [1, 2, 3].map((i) => t(locale, `product.tui.text.${i}`)), poster: '/video/posters/tui.jpg', mp4: '/video/tui.mp4', webm: '/video/tui.webm', shot: tuiShot, alt: 'ggcode TUI session' },
-  { id: 'desktop', title: t(locale, 'product.desktop.title'), points: [1, 2, 3].map((i) => t(locale, `product.desktop.text.${i}`)), poster: '/video/posters/desktop.jpg', mp4: '/video/desktop.mp4', webm: '/video/desktop.webm', shot: desktopShot, alt: 'ggcode Desktop app' },
-  { id: 'mobile', title: t(locale, 'product.mobile.title'), points: [1, 2, 3].map((i) => t(locale, `product.mobile.text.${i}`)), poster: '/video/posters/mobile.jpg', mp4: '/video/mobile.mp4', webm: '/video/mobile.webm', shot: mobileShot, alt: 'ggcode Mobile app' },
+  { id: 'tui', title: t(locale, 'product.tui.title'), points: [1, 2, 3].map((i) => t(locale, `product.tui.text.${i}`)), poster: withBase('/video/posters/tui.jpg'), mp4: withBase('/video/tui.mp4'), webm: withBase('/video/tui.webm'), shot: tuiShot, alt: 'ggcode TUI session' },
+  { id: 'desktop', title: t(locale, 'product.desktop.title'), points: [1, 2, 3].map((i) => t(locale, `product.desktop.text.${i}`)), poster: withBase('/video/posters/desktop.jpg'), mp4: withBase('/video/desktop.mp4'), webm: withBase('/video/desktop.webm'), shot: desktopShot, alt: 'ggcode Desktop app' },
+  { id: 'mobile', title: t(locale, 'product.mobile.title'), points: [1, 2, 3].map((i) => t(locale, `product.mobile.text.${i}`)), poster: withBase('/video/posters/mobile.jpg'), mp4: withBase('/video/mobile.mp4'), webm: withBase('/video/mobile.webm'), shot: mobileShot, alt: 'ggcode Mobile app' },
 ];
 ---
 

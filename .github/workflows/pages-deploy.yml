@@ -44,6 +44,11 @@ jobs:
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
       - name: Build site
+        # The repo Pages site is a PROJECT site served under /ggcode/, so the
+        # Astro build must prefix asset URLs with that base. Railway (ggcode.dev)
+        # builds with the default '/' base.
+        env:
+          SITE_BASE: /ggcode
         run: |
           cd docs/site
           npm ci --no-audit --no-fund
