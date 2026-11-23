@@ -54,6 +54,12 @@ Restore scans **this session's namespace** only:
 3. restarts the idle loops; board tasks that were `in_progress` roll back to
    `pending` as usual.
 
+Every board change persists to `board.json` immediately (synchronous flush
+on each mutation, including the teammate's own claim / complete / rollback
+transitions), so a task a teammate finished before the restart comes back
+as `completed` and is never re-claimed. Only `in_progress` work - by
+definition unfinished - rolls back.
+
 A member whose journal file is missing comes back with fresh memory (plus a
 WARN). A journal without a clean shutdown footer (process crash, kill -9)
 WARNs as crashed and is replayed best-effort.
