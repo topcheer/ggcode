@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -295,47 +294,5 @@ func TestTestCoverageNudge_WithTests(t *testing.T) {
 
 	if nudge := testCoverageNudge(dir); nudge != "" {
 		t.Errorf("expected empty nudge when all tested, got %s", nudge)
-	}
-}
-
-func TestPostEditVerifyHintWithImpactAndCoverage(t *testing.T) {
-
-	dir := initGitRepo(t)
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	writeGoFile(t, dir, "main.go", "package main\n")
-	if out, err := exec.Command("git", "-C", dir, "add", ".").CombinedOutput(); err != nil {
-		t.Fatalf("git add failed: %v: %s", err, out)
-	}
-	if out, err := exec.Command("git", "-C", dir, "commit", "-m", "init").CombinedOutput(); err != nil {
-		t.Fatalf("git commit failed: %v: %s", err, out)
-	}
-
-	sub := filepath.Join(dir, "internal", "agent")
-	if err := os.MkdirAll(sub, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sub, "foo.go"), []byte("package agent\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	a := &Agent{workingDir: dir}
-
-	args, _ := json.Marshal(map[string]string{"file_path": filepath.Join(sub, "foo.go")})
-	var hint string
-	for i := 0; i < 3; i++ {
-		hint = a.postEditVerifyHint("edit_file", args)
-	}
-	if hint == "" {
-		t.Fatal("expected hint after 3 edits")
-	}
-
-	if !strings.Contains(hint, "go build ./...") {
-		t.Errorf("hint should contain full-suite command, got: %s", hint)
-	}
-
-	if !strings.Contains(hint, "Test coverage gap") {
-		t.Errorf("hint should contain coverage nudge, got: %s", hint)
 	}
 }

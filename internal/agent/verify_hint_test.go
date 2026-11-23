@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -163,109 +162,28 @@ func TestExtractFilePathFromArgs(t *testing.T) {
 	}
 }
 
-func TestPostEditVerifyHintCooldown(t *testing.T) {
-	tmp := t.TempDir()
-	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
-
-	a := &Agent{
-		workingDir: tmp,
-	}
-
-	args, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
-	hint := a.postEditVerifyHint("edit_file", args)
-	if hint != "" {
-		t.Errorf("expected no hint on 1st edit, got: %s", hint)
-	}
-
-	hint = a.postEditVerifyHint("edit_file", args)
-	if hint != "" {
-		t.Errorf("expected no hint on 2nd edit, got: %s", hint)
-	}
-
-	hint = a.postEditVerifyHint("edit_file", args)
-	if hint == "" {
-		t.Error("expected hint on 3rd edit")
-	}
-	if !strings.Contains(hint, "go build") {
-		t.Errorf("hint should mention build command, got: %s", hint)
-	}
-
-	hint = a.postEditVerifyHint("edit_file", args)
-	if hint != "" {
-		t.Errorf("expected no hint after reset, got: %s", hint)
-	}
-	hint = a.postEditVerifyHint("edit_file", args)
-	if hint != "" {
-		t.Errorf("expected no hint, got: %s", hint)
-	}
-
-	hint = a.postEditVerifyHint("edit_file", args)
-	if hint == "" {
-		t.Error("expected hint on 3rd edit after reset")
-	}
-}
-
-func TestPostEditVerifyHintNonSourceSkipped(t *testing.T) {
+func TestNoteSourceEditAndReset(t *testing.T) {
 	tmp := t.TempDir()
 	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
 
 	a := &Agent{workingDir: tmp}
 
-	args, _ := json.Marshal(map[string]string{"file_path": "/README.md"})
-	hint := a.postEditVerifyHint("edit_file", args)
-	if hint != "" {
-		t.Errorf("expected no hint for markdown, got: %s", hint)
+	// source edit is recorded for the end-of-turn evidence gate ...
+	srcArgs, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
+	a.noteSourceEdit("edit_file", srcArgs)
+	if a.postEditVerify.sourceEditsThisRun != 1 || a.postEditVerify.lastSourceFileThisRun != "/foo.go" {
+		t.Fatalf("source edit must be recorded, got %+v", a.postEditVerify)
 	}
-	if a.postEditVerify.sourceEditsSinceHint != 0 {
-		t.Errorf("non-source edit should not increment counter, got %d", a.postEditVerify.sourceEditsSinceHint)
+	// ... but never produces a hint any more
+	readArgs, _ := json.Marshal(map[string]string{"file_path": "/foo.md"})
+	a.noteSourceEdit("edit_file", readArgs)
+	if a.postEditVerify.sourceEditsThisRun != 1 {
+		t.Fatalf("non-source edit must not count, got %d", a.postEditVerify.sourceEditsThisRun)
 	}
-}
-
-func TestPostEditVerifyHintNonEditToolSkipped(t *testing.T) {
-	tmp := t.TempDir()
-	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
-
-	a := &Agent{workingDir: tmp}
-
-	args, _ := json.Marshal(map[string]string{"path": "/foo.go"})
-	hint := a.postEditVerifyHint("read_file", args)
-	if hint != "" {
-		t.Errorf("expected no hint for read_file, got: %s", hint)
-	}
-}
-
-func TestPostEditVerifyHintNoBuildSystem(t *testing.T) {
-	tmp := t.TempDir()
-
-	a := &Agent{workingDir: tmp}
-
-	args, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
-
-	for i := 0; i < 5; i++ {
-		hint := a.postEditVerifyHint("edit_file", args)
-		if hint != "" {
-			t.Errorf("expected no hint without build system, got: %s", hint)
-		}
-	}
-}
-
-func TestResetPostEditVerify(t *testing.T) {
-	tmp := t.TempDir()
-	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
-
-	a := &Agent{workingDir: tmp}
-
-	args, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
-	a.postEditVerifyHint("edit_file", args)
-	a.postEditVerifyHint("edit_file", args)
 
 	a.resetPostEditVerify()
-
-	if a.postEditVerify.sourceEditsSinceHint != 0 {
-		t.Errorf("expected counter reset to 0, got %d", a.postEditVerify.sourceEditsSinceHint)
-	}
-	if a.postEditVerify.buildCmdChecked {
-		t.Error("expected buildCmdChecked=false after reset")
+	if a.postEditVerify.sourceEditsThisRun != 0 || a.postEditVerify.lastSourceFileThisRun != "" {
+		t.Errorf("expected state reset, got %+v", a.postEditVerify)
 	}
 }
 
@@ -295,30 +213,6 @@ func TestTargetedVerifyCommand(t *testing.T) {
 				t.Errorf("targetedVerifyCommand(%q, %q) = %q, want %q", tt.workDir, tt.filePath, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestPostEditVerifyHintTargeted(t *testing.T) {
-	tmp := t.TempDir()
-	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
-	sub := filepath.Join(tmp, "internal", "agent")
-	os.MkdirAll(sub, 0755)
-
-	a := &Agent{workingDir: tmp}
-
-	args, _ := json.Marshal(map[string]string{"file_path": filepath.Join(sub, "foo.go")})
-	var hint string
-	for i := 0; i < 3; i++ {
-		hint = a.postEditVerifyHint("edit_file", args)
-	}
-	if hint == "" {
-		t.Fatal("expected hint after 3 edits")
-	}
-	if !strings.Contains(hint, "go test ./internal/agent/") {
-		t.Errorf("hint should include targeted package test command, got: %s", hint)
-	}
-	if !strings.Contains(hint, "go build ./...") {
-		t.Errorf("hint should include full-suite fallback command, got: %s", hint)
 	}
 }
 
@@ -356,80 +250,24 @@ func TestIsVerifyCommand(t *testing.T) {
 }
 
 func TestMaybeResetVerifyOnCommand(t *testing.T) {
-	tmp := t.TempDir()
-	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
-
-	a := &Agent{workingDir: tmp}
-
-	editArgs, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
-	a.postEditVerifyHint("edit_file", editArgs)
-	a.postEditVerifyHint("edit_file", editArgs)
-
-	if a.postEditVerify.sourceEditsSinceHint != 2 {
-		t.Fatalf("expected counter=2 before build, got %d", a.postEditVerify.sourceEditsSinceHint)
-	}
+	a := &Agent{}
 
 	buildArgs, _ := json.Marshal(map[string]string{"command": "go build ./..."})
 	a.maybeResetVerifyOnCommand("run_command", buildArgs, false)
-
-	if a.postEditVerify.sourceEditsSinceHint != 0 {
-		t.Errorf("expected counter=0 after successful build, got %d", a.postEditVerify.sourceEditsSinceHint)
-	}
-	if a.postEditVerify.lastBuildFailed {
-		t.Error("expected lastBuildFailed=false after successful build")
+	if !a.postEditVerify.buildOrTestRunThisRun {
+		t.Fatal("verify command must set buildOrTestRunThisRun")
 	}
 
-	a.postEditVerifyHint("edit_file", editArgs)
-	a.postEditVerifyHint("edit_file", editArgs)
+	a.postEditVerify.buildOrTestRunThisRun = false
 	lsArgs, _ := json.Marshal(map[string]string{"command": "ls -la"})
 	a.maybeResetVerifyOnCommand("run_command", lsArgs, false)
-
-	if a.postEditVerify.sourceEditsSinceHint != 2 {
-		t.Errorf("expected counter unchanged after ls, got %d", a.postEditVerify.sourceEditsSinceHint)
-	}
-}
-
-func TestMaybeResetVerifyOnCommand_FailedBuild(t *testing.T) {
-	tmp := t.TempDir()
-	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
-
-	a := &Agent{workingDir: tmp}
-
-	buildArgs, _ := json.Marshal(map[string]string{"command": "go build ./..."})
-	a.maybeResetVerifyOnCommand("run_command", buildArgs, true)
-
-	if a.postEditVerify.sourceEditsSinceHint != 0 {
-		t.Errorf("expected counter=0 after failed build, got %d", a.postEditVerify.sourceEditsSinceHint)
-	}
-	if !a.postEditVerify.lastBuildFailed {
-		t.Error("expected lastBuildFailed=true after failed build")
+	if a.postEditVerify.buildOrTestRunThisRun {
+		t.Error("non-verify command must not count")
 	}
 
-	editArgs, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
-	hint1 := a.postEditVerifyHint("edit_file", editArgs)
-	hint2 := a.postEditVerifyHint("edit_file", editArgs)
-	hint3 := a.postEditVerifyHint("edit_file", editArgs)
-
-	if hint1 != "" || hint2 != "" {
-		t.Fatal("expected no hint before threshold")
-	}
-	if hint3 == "" {
-		t.Fatal("expected hint after 3 edits")
-	}
-	if !strings.Contains(hint3, "FAILED") {
-		t.Errorf("expected hint to mention FAILED, got: %s", hint3)
-	}
-}
-
-func TestMaybeResetVerifyOnCommand_NonRunCommand(t *testing.T) {
-	tmp := t.TempDir()
-	a := &Agent{workingDir: tmp}
-
-	editArgs, _ := json.Marshal(map[string]string{"file_path": "/foo.go", "command": "go build"})
-	a.maybeResetVerifyOnCommand("edit_file", editArgs, false)
-
-	if a.postEditVerify.lastBuildFailed {
-		t.Error("expected lastBuildFailed=false for non-run_command tool")
+	a.maybeResetVerifyOnCommand("edit_file", buildArgs, false)
+	if a.postEditVerify.buildOrTestRunThisRun {
+		t.Error("non-run tool must be ignored")
 	}
 }
 

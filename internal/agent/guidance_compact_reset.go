@@ -26,12 +26,6 @@ var guidanceCounterResets = []func(*Agent){
 	},
 
 	func(a *Agent) {
-		if a.convergenceLock != nil {
-			a.convergenceLock.warned = false
-		}
-	},
-
-	func(a *Agent) {
 		if a.giveupRevert != nil {
 			a.giveupRevert.mu.Lock()
 			a.giveupRevert.fired = false

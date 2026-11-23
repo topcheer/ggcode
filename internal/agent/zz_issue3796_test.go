@@ -9,15 +9,11 @@ import (
 
 func TestIssue3796_StartCommandCountsAsVerification(t *testing.T) {
 	a := &Agent{}
-	a.postEditVerify.sourceEditsSinceHint = 3
 
 	args := json.RawMessage(`{"command":"go test ./..."}`)
 	a.maybeResetVerifyOnCommand("start_command", args, false)
 	if !a.postEditVerify.realBuildOrTestRunThisRun {
 		t.Fatal("start_command running a test suite must set realBuildOrTestRunThisRun")
-	}
-	if a.postEditVerify.sourceEditsSinceHint != 0 {
-		t.Fatal("verification must reset the edit counter")
 	}
 }
 

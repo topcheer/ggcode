@@ -5,55 +5,6 @@ import (
 	"testing"
 )
 
-func TestIssue3150_UnrelatedRevert_NoFalseConfirmed(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		cmd  string
-	}{
-		{"restore other file", "git restore internal/agent/unrelated.go"},
-		{"checkout-- other file", "git checkout -- internal/agent/unrelated.go"},
-		{"stash push pathspec other file", "git stash push -- internal/agent/unrelated.go"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s := r405Arm(t)
-			if g := s.observeCommand("run_command", tc.cmd, false, ""); g != "" {
-				t.Fatalf("unrelated revert observation must be silent, got %q", g)
-			}
-			if g := s.observeCommand("run_command", r405Verify, false, "ok  all tests passed"); g != "" {
-				t.Fatalf("unrelated revert must not arm a CONFIRMED verdict, got %q", g)
-			}
-		})
-	}
-}
-
-func TestIssue3150_SuspectRevert_StillConfirms(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		cmd  string
-	}{
-		{"restore suspect", "git restore " + r405Suspect},
-		{"stash push pathspec suspect", "git stash push -- " + r405Suspect},
-		{"bare stash", "git stash"},
-		{"stash push with message, no pathspec", "git stash push -m \"wip: debugging\""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s := r405Arm(t)
-			s.observeCommand("run_command", tc.cmd, false, "")
-			if g := s.observeCommand("run_command", r405Verify, false, "ok  all tests passed"); !strings.Contains(g, "CONFIRMED") {
-				t.Fatalf("suspect-hitting revert must still arm CONFIRMED, got %q", g)
-			}
-		})
-	}
-}
-
-func TestIssue3150_StashPushTrailingSeparator_CountsAsBare(t *testing.T) {
-	s := r405Arm(t)
-	s.observeCommand("run_command", "git stash push -- ", false, "")
-	if g := s.observeCommand("run_command", r405Verify, false, "ok"); !strings.Contains(g, "CONFIRMED") {
-		t.Fatalf("empty-pathspec stash push reverts everything, must count, got %q", g)
-	}
-}
-
 func TestIssue3150_TieBreakPrefersMostRecentEdit(t *testing.T) {
 	s := newCausalAttributionState()
 	s.recordEdit("edit_file", "olddir/style.css", 1)

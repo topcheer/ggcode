@@ -187,35 +187,6 @@ func TestFuncLevelCoverageGaps(t *testing.T) {
 	}
 }
 
-func TestFuncLevelCoverageNudge(t *testing.T) {
-	dir := initGitRepo(t)
-	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n"), 0644)
-	writeGoFile(t, dir, "main.go", "package main\n")
-	exec.Command("git", "-C", dir, "add", ".").Run()
-	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
-
-	writeGoFile(t, dir, "svc.go", "package main\n\nfunc DoStuff() {}\n")
-
-	nudge := funcLevelCoverageNudge(dir)
-	if nudge == "" {
-		t.Fatal("expected non-empty nudge")
-	}
-	if !strings.Contains(nudge, "DoStuff") {
-		t.Errorf("nudge should mention DoStuff: %s", nudge)
-	}
-	if !strings.Contains(nudge, "Untested functions") {
-		t.Errorf("nudge should contain 'Untested functions': %s", nudge)
-	}
-}
-
-func TestFuncLevelCoverageNudge_NoChanges(t *testing.T) {
-	dir := initGitRepo(t)
-	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n"), 0644)
-	if nudge := funcLevelCoverageNudge(dir); nudge != "" {
-		t.Errorf("expected empty nudge, got %s", nudge)
-	}
-}
-
 func TestGoModulePath(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module github.com/example/foo\n\ngo 1.26\n"), 0644)

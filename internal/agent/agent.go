@@ -210,34 +210,34 @@ type Agent struct {
 	lastTool               string
 	// #5635 P2: live introspection truth sources (status/inflight
 	// faces) - see agent_runtime_stats.go.
-	runtimeStats                 runtimeStats
-	currentTool                  currentToolCall
-	precompact                   *precompactState
-	precompactCooldownUntil      time.Time
-	idleMaint                    *IdleMaintainer
-	shutdownCtx                  context.Context
-	shutdownCancel               context.CancelFunc
-	probeKey                     string
-	autopilotGoal                string
-	autopilotGoalAsked           bool
-	autopilotGoalSet             bool
-	autopilotStrategistCount     int
-	suppressAutopilotInjection   bool
-	strategistBudgetAnnounced    bool
-	strategistNoProgressCount    int
-	reflectionFunc               ReflectionFunc
-	loopDetector                 loopDetector
-	errorClassifier              *ErrorClassifier
-	testFails                    *testFailCollector
-	overseer                     *overseerState
-	repetition                   *repetitionTracker
-	speculator                   *speculator
-	toolMemo                     *toolMemo
-	confidence                   *confidenceState
-	selfModel                    *AgentSelfModel
-	toolCallBudget               *toolCallBudget
-	commandCache                 *commandCache
-	effectLedger                 *effectLedgerState
+	runtimeStats               runtimeStats
+	currentTool                currentToolCall
+	precompact                 *precompactState
+	precompactCooldownUntil    time.Time
+	idleMaint                  *IdleMaintainer
+	shutdownCtx                context.Context
+	shutdownCancel             context.CancelFunc
+	probeKey                   string
+	autopilotGoal              string
+	autopilotGoalAsked         bool
+	autopilotGoalSet           bool
+	autopilotStrategistCount   int
+	suppressAutopilotInjection bool
+	strategistBudgetAnnounced  bool
+	strategistNoProgressCount  int
+	reflectionFunc             ReflectionFunc
+	loopDetector               loopDetector
+	errorClassifier            *ErrorClassifier
+	testFails                  *testFailCollector
+	overseer                   *overseerState
+	repetition                 *repetitionTracker
+	speculator                 *speculator
+	toolMemo                   *toolMemo
+	confidence                 *confidenceState
+	selfModel                  *AgentSelfModel
+	toolCallBudget             *toolCallBudget
+	commandCache               *commandCache
+
 	toolSearch                   *toolSearchState
 	memoryTool                   *memoryToolState
 	serverToolSearch             bool
@@ -309,7 +309,6 @@ type Agent struct {
 	lastExecutedTool             string
 	planDrift                    *planDriftState
 	unverifiedClaim              *unverifiedClaimState
-	convergenceLock              *convergenceLockState
 	userSentiment                *userSentimentState
 	effortAdapter                *adaptiveEffortState
 	branchGuard                  *branchGuardState
@@ -343,33 +342,33 @@ type Agent struct {
 	bgVerifyJobs                 *bgVerifyRegistry
 	recklessExec                 *recklessExecState
 	editPropagation              *editPropagationState
-	errorCascade                 *errorCascadeState
-	errorPropagate               *errorPropagateState
-	delegationOrch               *delegationState
-	integrationMonitor           *integrationState
-	crossFileImpact              *crossFileImpactState
-	cacheEffMonitor              *cacheEffMonitor
-	searchParamGuard             *searchParamGuardState
-	toolRedundancy               *toolRedundancyState
-	toolEquivDetect              *toolEquivDetectState
-	ruleStore                    *RuleStore
-	userEditObs                  *UserEditObserver
-	ruleInjectCount              map[string]int
-	approvalMemory               *permission.ApprovalMemory
-	askThrottle                  *permission.AskThrottle
-	editOscillation              *oscillationState
-	phantomVerify                *phantomVerifyState
-	truncClaim                   *truncClaimState
-	outputOffload                *outputOffloader
-	circularReasoning            *circularReasoningState
-	contradiction                *contradictionState
-	reverify                     *reverifyState
-	actionHedging                *actionHedgingState
-	scopeCreep                   *scopeCreepState
-	prematureAbstr               *prematureAbstrState
-	capBoundary                  *capabilityBoundaryState
-	planAbandon                  *planAbandonState
-	toolTargetMismatch           *toolTargetState
+
+	errorPropagate     *errorPropagateState
+	delegationOrch     *delegationState
+	integrationMonitor *integrationState
+	crossFileImpact    *crossFileImpactState
+	cacheEffMonitor    *cacheEffMonitor
+	searchParamGuard   *searchParamGuardState
+	toolRedundancy     *toolRedundancyState
+	toolEquivDetect    *toolEquivDetectState
+	ruleStore          *RuleStore
+	userEditObs        *UserEditObserver
+	ruleInjectCount    map[string]int
+	approvalMemory     *permission.ApprovalMemory
+	askThrottle        *permission.AskThrottle
+	editOscillation    *oscillationState
+	phantomVerify      *phantomVerifyState
+	truncClaim         *truncClaimState
+	outputOffload      *outputOffloader
+	circularReasoning  *circularReasoningState
+	contradiction      *contradictionState
+	reverify           *reverifyState
+	actionHedging      *actionHedgingState
+	scopeCreep         *scopeCreepState
+	prematureAbstr     *prematureAbstrState
+	capBoundary        *capabilityBoundaryState
+	planAbandon        *planAbandonState
+	toolTargetMismatch *toolTargetState
 
 	toolTape *toolTapeState
 
@@ -401,7 +400,6 @@ type Agent struct {
 	infoScent              *infoScentState
 	foresightCalib         *foresightCalibrateState
 	causalAttribution      *causalAttributionState
-	attrExperiment         *attributionExperimentState
 	attemptBrief           *attemptBriefState
 	crossDetectorConsensus *consensusState
 	taintInfluence         *taintInfluenceState
@@ -477,24 +475,24 @@ func initialContextWindow(p provider.Provider) int {
 func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, maxIter int) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
-		provider:               p,
-		tools:                  tools,
-		maxIter:                maxIter,
-		contextManager:         ctxpkg.NewManager(initialContextWindow(p)),
-		projectMemory:          make(map[string]struct{}),
-		baseSystemPrompt:       systemPrompt,
-		stableSystemSections:   []string{},
-		shutdownCtx:            ctx,
-		shutdownCancel:         cancel,
-		overseer:               newOverseerState(),
-		repetition:             newRepetitionTracker(),
-		speculator:             newSpeculator(),
-		toolMemo:               newToolMemo(),
-		confidence:             newConfidenceState(),
-		selfModel:              nil, // lazily bound in SetWorkingDir (#5498: cwd != workspace)
-		toolCallBudget:         newToolCallBudget(),
-		commandCache:           newCommandCache(),
-		effectLedger:           newEffectLedger(),
+		provider:             p,
+		tools:                tools,
+		maxIter:              maxIter,
+		contextManager:       ctxpkg.NewManager(initialContextWindow(p)),
+		projectMemory:        make(map[string]struct{}),
+		baseSystemPrompt:     systemPrompt,
+		stableSystemSections: []string{},
+		shutdownCtx:          ctx,
+		shutdownCancel:       cancel,
+		overseer:             newOverseerState(),
+		repetition:           newRepetitionTracker(),
+		speculator:           newSpeculator(),
+		toolMemo:             newToolMemo(),
+		confidence:           newConfidenceState(),
+		selfModel:            nil, // lazily bound in SetWorkingDir (#5498: cwd != workspace)
+		toolCallBudget:       newToolCallBudget(),
+		commandCache:         newCommandCache(),
+
 		toolSearch:             newToolSearchState(),
 		errorClassifier:        NewErrorClassifier(),
 		testFails:              newTestFailCollector(),
@@ -584,7 +582,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		reasoningRedund:        newReasoningRedundancyState(),
 		queryConverge:          newQueryConvergeState(),
 		causalAttribution:      newCausalAttributionState(),
-		attrExperiment:         newAttributionExperimentState(),
 		errorCompound:          newErrorCompoundState(),
 		fixAmnesia:             newFixAmnesiaState(),
 		toolResultRedundancy:   newToolResultRedundancyState(),
@@ -629,25 +626,24 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		infoScent:              newInfoScentState(),
 		foresightCalib:         newForesightCalibrateState(),
 		reversibility:          newReversibilityState(),
-		errorCascade:           newErrorCascadeState(),
-		errorPropagate:         newErrorPropagateState(),
-		crossFileImpact:        newCrossFileImpactState(),
-		diskSpace:              newDiskSpaceState(),
-		envDrift:               newEnvDriftState(),
-		successDeclare:         newSuccessDeclareState(),
-		criteriaDrift:          newCriteriaDriftState(),
-		reasonAction:           newReasonActionState(),
-		attemptBrief:           newAttemptBriefState(),
-		inputUnderspec:         newInputUnderspecState(),
-		qualityScorer:          NewResponseQualityScorer(100),
-		futileCycle:            newFutileCycleState(),
-		trajIntel:              newTrajIntelState(),
-		convergenceLock:        newConvergenceLockState(),
-		delegationOrch:         newDelegationState(),
-		integrationMonitor:     newIntegrationState(),
-		toolTargetMismatch:     newToolTargetState(),
-		toolTape:               newToolTapeState(),
-		auditLedger:            newAuditLedgerState(),
+
+		errorPropagate:     newErrorPropagateState(),
+		crossFileImpact:    newCrossFileImpactState(),
+		diskSpace:          newDiskSpaceState(),
+		envDrift:           newEnvDriftState(),
+		successDeclare:     newSuccessDeclareState(),
+		criteriaDrift:      newCriteriaDriftState(),
+		reasonAction:       newReasonActionState(),
+		attemptBrief:       newAttemptBriefState(),
+		inputUnderspec:     newInputUnderspecState(),
+		qualityScorer:      NewResponseQualityScorer(100),
+		futileCycle:        newFutileCycleState(),
+		trajIntel:          newTrajIntelState(),
+		delegationOrch:     newDelegationState(),
+		integrationMonitor: newIntegrationState(),
+		toolTargetMismatch: newToolTargetState(),
+		toolTape:           newToolTapeState(),
+		auditLedger:        newAuditLedgerState(),
 	}
 
 	a.memoryTool = newMemoryToolState()

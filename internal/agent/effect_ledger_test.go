@@ -2,9 +2,7 @@ package agent
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -44,105 +42,43 @@ func TestClassifyEffectOutcome(t *testing.T) {
 	}
 }
 
-func TestEffectLedgerRetryHint(t *testing.T) {
-	e := newEffectLedger()
-
-	if h := e.priorHint("git push origin main", "/repo"); h != "" {
-		t.Fatalf("no prior attempt: got hint %q", h)
-	}
-
-	e.record("make test", "/repo", effectFailed)
-	if h := e.priorHint("git push origin main", "/repo"); h != "" {
-		t.Fatalf("different command: got hint %q", h)
-	}
-
-	e.record("git push origin main", "/repo", effectUncertain)
-	h := e.priorHint("git push origin main", "/repo")
-	if h == "" {
-		t.Fatal("retry after uncertain attempt: want hint, got none")
-	}
-	if !strings.Contains(h, "Effect Ledger") || !strings.Contains(h, "timed out") {
-		t.Errorf("hint text incomplete: %q", h)
-	}
-
-	if h := e.priorHint("git push origin main", "/other"); h != "" {
-		t.Fatalf("different workDir: got hint %q", h)
-	}
-
-	e.record("make lint", "/repo", effectFailed)
-	_ = e.priorHint("make lint", "/repo")
-}
-
-func TestEffectLedgerWindow(t *testing.T) {
-	e := newEffectLedger()
-	base := time.Now()
-	e.now = func() time.Time { return base }
-	e.record("npm publish", "/pkg", effectFailed)
-
-	e.now = func() time.Time { return base.Add(effectRetryWindow - time.Minute) }
-	if h := e.priorHint("npm publish", "/pkg"); h == "" {
-		t.Error("inside window: want hint")
-	}
-
-	e.now = func() time.Time { return base.Add(effectRetryWindow + time.Minute) }
-	if h := e.priorHint("npm publish", "/pkg"); h != "" {
-		t.Errorf("outside window: want no hint, got %q", h)
-	}
-}
-
-func TestEffectLedgerWarningCap(t *testing.T) {
-	orig := maxEffectWarnings
-	maxEffectWarnings = 2
-	defer func() { maxEffectWarnings = orig }()
-
-	e := newEffectLedger()
-	e.record("terraform apply", "/infra", effectUncertain)
-	for i := 0; i < 3; i++ {
-		h := e.priorHint("terraform apply", "/infra")
-		if i < 2 && h == "" {
-			t.Fatalf("warning %d: want hint", i)
-		}
-		if i == 2 && h != "" {
-			t.Fatalf("warning %d: want capped empty, got %q", i, h)
-		}
-	}
-}
-
-func TestRecordEffectAttemptSelfNotHinted(t *testing.T) {
-	a := &Agent{effectLedger: newEffectLedger()}
-	args := mkCmdArgs("git push origin main", "/repo")
-
-	hint := a.recordEffectAttempt("run_command", args,
+// The retry hint ("[Effect Ledger] this exact command already ran...") was
+// removed: a repeated failing command must not produce any guidance text.
+func TestRecordEffectAttemptNeverHints(t *testing.T) {
+	a := &Agent{}
+	a.recordEffectAttempt("run_command", mkCmdArgs("git push origin main", "/repo"),
 		tool.Result{IsError: true, Content: "command timed out after 30m0s"})
-	if hint != "" {
-		t.Fatalf("first attempt must not hint itself, got %q", hint)
-	}
-
-	hint = a.recordEffectAttempt("run_command", args,
+	// Second, identical attempt: previously this returned the Effect Ledger
+	// hint. Nothing to assert on a void method beyond "does not panic and
+	// no result is appended"; the compile-time signature is the contract.
+	a.recordEffectAttempt("run_command", mkCmdArgs("git push origin main", "/repo"),
 		tool.Result{IsError: true, Content: "Command failed: exit status 1"})
-	if hint == "" || !strings.Contains(hint, "Effect Ledger") {
-		t.Fatalf("retry: want Effect Ledger hint, got %q", hint)
-	}
 }
 
 func TestRecordEffectAttemptIgnoresOtherTools(t *testing.T) {
-	a := &Agent{effectLedger: newEffectLedger()}
-	if h := a.recordEffectAttempt("edit_file", []byte(`{}`), tool.Result{IsError: true, Content: "timed out after 1s"}); h != "" {
-		t.Fatalf("non-run_command must be ignored, got %q", h)
-	}
-	if h := a.recordEffectAttempt("run_command", []byte(`not json`), tool.Result{IsError: true, Content: "x"}); h != "" {
-		t.Fatalf("unparseable args must be ignored, got %q", h)
-	}
+	a := &Agent{}
+	a.recordEffectAttempt("edit_file", []byte(`{}`), tool.Result{IsError: true, Content: "timed out after 1s"})
+	a.recordEffectAttempt("run_command", []byte(`not json`), tool.Result{IsError: true, Content: "x"})
 }
 
-func TestEffectKeyStripsLeadingComment(t *testing.T) {
-	a := &Agent{effectLedger: newEffectLedger()}
-
-	a.recordEffectAttempt("run_command", mkCmdArgs("# pushing changes\ngit push origin main", "/repo"),
-		tool.Result{IsError: true, Content: "Command failed: context deadline exceeded"})
-	hint := a.recordEffectAttempt("run_command", mkCmdArgs("git push origin main", "/repo"),
+func TestRecordEffectAttemptClearsBuildIdempotencyOnFailure(t *testing.T) {
+	a := &Agent{}
+	a.buildIdempot = newBuildIdempotencyState()
+	const cmd = "go test ./..."
+	isBuild, _, key := detectBuildTestCommand(cmd)
+	if !isBuild {
+		t.Fatalf("%q must be detected as a build/test command", cmd)
+	}
+	a.buildIdempot.lastBuildCmd = key
+	a.recordEffectAttempt("run_command", mkCmdArgs(cmd, "/repo"),
 		tool.Result{IsError: true, Content: "Command failed: exit status 1"})
-	if hint == "" {
-		t.Fatal("comment-stripped retry: want hint")
+	if a.buildIdempot.lastBuildCmd != "" {
+		t.Fatalf("failed build must clear the idempotency cache, got %q", a.buildIdempot.lastBuildCmd)
+	}
+	a.buildIdempot.lastBuildCmd = key
+	a.recordEffectAttempt("run_command", mkCmdArgs(cmd, "/repo"),
+		tool.Result{Content: "ok"})
+	if a.buildIdempot.lastBuildCmd != key {
+		t.Fatalf("successful build must keep the idempotency cache, got %q", a.buildIdempot.lastBuildCmd)
 	}
 }

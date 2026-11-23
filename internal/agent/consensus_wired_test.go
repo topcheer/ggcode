@@ -8,7 +8,6 @@ import (
 func TestConsensusState_WiredDetectorsParticipate(t *testing.T) {
 	wired := []string{
 		"Failure Mode",
-		"Error Cascade",
 		"Fix Cascade",
 		"Convergence Lock",
 		"Ungrounded Reflection",

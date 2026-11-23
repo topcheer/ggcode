@@ -249,6 +249,7 @@ func NewSwarmManager(
 		_ = registry.Register(tool.TeamCreateTool{Manager: mgr})
 		_ = registry.Register(tool.TeamDeleteTool{Manager: mgr})
 		_ = registry.Register(tool.TeamRestoreTool{Manager: mgr})
+		_ = registry.Register(tool.TeamListTool{Manager: mgr})
 		_ = registry.Register(tool.TeammateSpawnTool{Manager: mgr})
 		_ = registry.Register(tool.TeammateListTool{Manager: mgr})
 		_ = registry.Register(tool.TeammateShutdownTool{Manager: mgr})

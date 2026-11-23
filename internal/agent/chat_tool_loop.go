@@ -200,9 +200,7 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			if adv := a.checkoutAdvisory(tc.Name, tc.Arguments); adv != "" {
 				result.Content += adv
 			}
-			if hint := a.recordEffectAttempt(tc.Name, tc.Arguments, result); hint != "" {
-				result.Content += hint
-			}
+			a.recordEffectAttempt(tc.Name, tc.Arguments, result)
 		}
 
 		a.exfilChain.recordSensitiveSource(tc.Name, string(tc.Arguments), result.Content)
@@ -300,8 +298,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 				if a.tokenWasteBudget != nil {
 					a.tokenWasteBudget.markFileEdited(p)
 				}
-				a.convergenceRecordEdit(tc.Name)
-
 				a.diminishingRecordEdit(tc.Name, tc.Arguments)
 
 				if a.claimsSupervision {
@@ -350,7 +346,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		}
 
 		if result.IsError && mutatingSourceEdit(tc.Name) { // #5249: error path too - apply_patch failures must reach editFailRecovery
-			a.convergenceRecordEditError()
 			for _, p := range extractTrackedEditPaths(tc.Name, tc.Arguments) {
 				if hint := a.editFailRecovery.recordEditFailure(p); hint != "" {
 					a.appendGuidance(&result, hint)
@@ -637,14 +632,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			a.appendGuidance(&result, modeGuidance)
 		}
 
-		if result.IsError {
-			if cascadeGuidance := a.errorCascade.recordError(tc.Name, result.Content); cascadeGuidance != "" {
-
-				a.crossDetectorConsensus.recordFiring("Error Cascade", iter+1)
-				a.appendGuidance(&result, cascadeGuidance)
-			}
-		}
-
 		if propGuidance := a.errorPropagate.recordResult(tc.Name, result.Content, result.IsError); propGuidance != "" {
 
 			a.crossDetectorConsensus.recordFiring("Error Propagation", iter+1)
@@ -721,19 +708,11 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		a.confidence.recordResult(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments))
 
 		if tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell" || tc.Name == "start_command" || tc.Name == "wait_command" || tc.Name == "read_command_output" {
-
-			if expGuidance := a.attrExperiment.observeCommand(tc.Name, causalCmdForGate(tc, result.Content), result.IsError, result.Content); expGuidance != "" {
-				a.appendGuidance(&result, expGuidance)
-			}
 			if result.IsError || looksLikeFailure(result.Content) {
-
-				if causalHint := a.causalAttribution.attributeFailureCmd(result.Content, causalCmdForGate(tc, result.Content), result.IsError); causalHint != "" {
-					a.appendGuidance(&result, causalHint)
-
-					if armGuidance := a.attrExperiment.arm(a.causalAttribution.lastSuspect, causalCmdForGate(tc, result.Content)); armGuidance != "" {
-						a.appendGuidance(&result, armGuidance)
-					}
-				}
+				// Track the suspect edit for the end-of-run failure attribution
+				// (playbook_failures.go); the in-loop "[causal-attribution]"
+				// guidance injection was removed as noise.
+				a.causalAttribution.attributeFailureCmd(result.Content, causalCmdForGate(tc, result.Content), result.IsError)
 			}
 		}
 		if confidenceGuidance := a.confidence.maybeIntervene(); confidenceGuidance != "" {
@@ -788,8 +767,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 				a.editPropagation.recordGreenBuild()
 			}
 		}
-
-		a.convergenceRecordVerify(tc.Name, tc.Arguments, result.IsError)
 
 		if recurringGuidance := a.recurringErrorCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); recurringGuidance != "" {
 			a.appendGuidance(&result, recurringGuidance)
@@ -934,15 +911,11 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			a.appendGuidance(&result, cascadeGuidance)
 		}
 
+		// State-only: feeds the end-of-turn evidence gate. The post-edit
+		// "[Verification reminder]" and "[Test coverage gap]" hints (and the
+		// "[Convergence alert]" detector) were removed as noise.
 		if !result.IsError {
-			if verifyHint := a.postEditVerifyHint(tc.Name, tc.Arguments); verifyHint != "" {
-				a.appendGuidance(&result, verifyHint)
-			}
-		}
-
-		if convergenceGuidance := a.convergenceCheck(); convergenceGuidance != "" {
-			a.crossDetectorConsensus.recordFiring("Convergence Lock", iter+1)
-			a.appendGuidance(&result, convergenceGuidance)
+			a.noteSourceEdit(tc.Name, tc.Arguments)
 		}
 
 		if diminishingGuidance := a.diminishingCheck(); diminishingGuidance != "" {
