@@ -8,14 +8,11 @@ import (
 func newCascadeTestAgent() *Agent {
 	a := &Agent{}
 	a.fixCascade = newFixCascadeState()
-	a.prematureSuccess = newPrematureSuccessState()
 	return a
 }
 
 func registerVerifyJob(a *Agent, jobID, cmd string) {
-	a.prematureSuccess.mu.Lock()
-	defer a.prematureSuccess.mu.Unlock()
-	a.prematureSuccess.psRegisterJobLocked(jobID, cmd)
+	a.fixCascade.registerJob(jobID, cmd)
 }
 
 func TestFixCascadeAsyncVerifyFailuresCount(t *testing.T) {

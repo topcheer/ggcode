@@ -42,8 +42,6 @@ type overseerState struct {
 
 	lastAnalysisIter int
 
-	researchFindings []ResearchFinding
-
 	researchMode bool
 
 	searchCalls     int

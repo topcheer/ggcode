@@ -42,7 +42,7 @@ var sourceMutatingTools = map[string]bool{
 var fileEditingTools = sourceMutatingTools
 
 func assertEditToolMapsInSync() bool {
-	if !(len(sourceMutatingTools) == 9 && fileEditingTools["batch_replace"] && reverifyEditTools["lsp_rename"] &&
+	if !(len(sourceMutatingTools) == 9 && fileEditingTools["batch_replace"] &&
 		strategyFixationIsMutation("file_ops") && strategyFixationIsMutation("multi_file_write")) {
 		return false
 	}
@@ -50,7 +50,6 @@ func assertEditToolMapsInSync() bool {
 	for _, m := range []map[string]bool{
 		editTools,
 		causalEditTools,
-		psEditTools,
 		outcomeCorrectiveTools,
 		productiveEditTools,
 		editToolSet,

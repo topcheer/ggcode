@@ -445,9 +445,6 @@ func TestSourceMutatingToolsSuperset(t *testing.T) {
 		if !fileEditingTools[tool] {
 			t.Errorf("fileEditingTools missing %q", tool)
 		}
-		if !reverifyEditTools[tool] {
-			t.Errorf("reverifyEditTools missing %q", tool)
-		}
 	}
 }
 

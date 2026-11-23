@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -598,56 +597,6 @@ func (a *Agent) AutoVerifyEnabled() bool {
 const maxRuleInjectPerSession = 2
 
 const maxRulesPerInjection = 3
-
-func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, resultContent string) string {
-	workingDir := a.WorkingDir()
-	if workingDir == "" {
-		return resultContent
-	}
-	rs := a.getRuleStore()
-	if rs == nil {
-		return resultContent
-	}
-
-	preventive := rs.MatchingRulesForTool(toolName, string(args))
-	reactive := rs.MatchingRulesForResult(resultContent, string(args))
-	matching := mergeRuleSets(preventive, reactive)
-	if len(matching) == 0 {
-		return resultContent
-	}
-
-	a.mu.Lock()
-	if a.ruleInjectCount == nil {
-		a.ruleInjectCount = make(map[string]int)
-	}
-	var filtered []Rule
-	for _, r := range matching {
-		if len(filtered) >= maxRulesPerInjection {
-			break
-		}
-		if a.ruleInjectCount[r.ID] < maxRuleInjectPerSession {
-			filtered = append(filtered, r)
-			a.ruleInjectCount[r.ID]++
-		}
-	}
-	a.mu.Unlock()
-
-	if len(filtered) == 0 {
-		return resultContent
-	}
-
-	var b strings.Builder
-	b.WriteString("[Rules — learned from past mistakes]\n")
-	for _, r := range filtered {
-		b.WriteString(fmt.Sprintf("\u26a0 %s\n", r.Rule))
-		if r.FixHint != "" {
-			b.WriteString(fmt.Sprintf("  \u2192 %s\n", r.FixHint))
-		}
-	}
-	b.WriteString("\n")
-	b.WriteString(resultContent)
-	return b.String()
-}
 
 func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retryCount int) (shouldContinue, passed bool) {
 	if !a.autoVerify {

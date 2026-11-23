@@ -306,7 +306,6 @@ type Agent struct {
 	failureMode                  *failureModeState
 	toolFallback                 *toolFallbackState
 	argSizeGuardFires            int
-	fileFreshness                *fileFreshnessSentinel
 	readHash                     *readHashTracker
 	toolThermal                  *thermalState
 	latencyTracker               *LatencyTracker
@@ -325,7 +324,6 @@ type Agent struct {
 	destructiveGuard             *gitDestructiveState
 	turnImpact                   *turnImpactRecorder
 	errorBudget                  *errorBudget
-	shellNativeHint              *shellNativeHintState
 	monorepoScoper               *monorepoScoperState
 	bgOrphan                     *bgOrphanState
 	actionAnnihil                *actionAnnihilateState
@@ -348,18 +346,13 @@ type Agent struct {
 	correctionSpiral             *correctionSpiralState
 	toolResultRedundancy         *toolResultRedundancyState
 	tunnelVision                 *tunnelVisionState
-	prematureCommit              *prematureCommitState
 	selfMod                      *selfModState
 	bareEditStreak               *bareEditStreakState
 	editCoverage                 *editCoverageState
 	toolEff                      *toolEffTracker
 	usageHints                   *toolUsageHintStore
-	prematureSuccess             *prematureSuccessState
 	bgVerifyJobs                 *bgVerifyRegistry
 	recklessExec                 *recklessExecState
-	irrevGate                    *irrevGateState
-	mergeGate                    *mergeGateState
-	argComplexityGate            *argComplexityGateState
 	verifyDebt                   *verifyDebtState
 	editPropagation              *editPropagationState
 	errorCascade                 *errorCascadeState
@@ -368,7 +361,6 @@ type Agent struct {
 	integrationMonitor           *integrationState
 	crossFileImpact              *crossFileImpactState
 	cacheEffMonitor              *cacheEffMonitor
-	redundantRead                *redundantReadState
 	patchExhaust                 *patchExhaustState
 	searchParamGuard             *searchParamGuardState
 	toolRedundancy               *toolRedundancyState
@@ -378,11 +370,8 @@ type Agent struct {
 	ruleInjectCount              map[string]int
 	approvalMemory               *permission.ApprovalMemory
 	askThrottle                  *permission.AskThrottle
-	fileChurn                    *churnState
 	editOscillation              *oscillationState
-	silentError                  *silentErrorState
 	phantomVerify                *phantomVerifyState
-	redundantReverify            *redundantReverifyState
 	truncClaim                   *truncClaimState
 	outputOffload                *outputOffloader
 	circularReasoning            *circularReasoningState
@@ -397,6 +386,7 @@ type Agent struct {
 
 	toolTape *toolTapeState
 
+	mergeGate              *mergeGateState
 	auditLedger            *auditLedgerState
 	invEngine              *invariantEngine
 	wfEngine               *workflowEngine
@@ -408,7 +398,6 @@ type Agent struct {
 	reproducerLifecycle    *reproducerLifecycleState
 	successDeclare         *successDeclareState
 	criteriaDrift          *criteriaDriftState
-	goalDriftCtx           *goalDriftCtxState
 	reasonAction           *reasonActionState
 	inputUnderspec         *inputUnderspecState
 	futileCycle            *futileCycleState
@@ -422,7 +411,6 @@ type Agent struct {
 	diminishingEdit        *diminishingEditState
 	overcorrection         *overcorrectionState
 	giveupRevert           *giveupRevertState
-	prematureRefactor      *prematureRefactorState
 	subgoalTrack           *subgoalState
 	infoScent              *infoScentState
 	foresightCalib         *foresightCalibrateState
@@ -433,10 +421,7 @@ type Agent struct {
 	taintInfluence         *taintInfluenceState
 	exfilChain             *exfilChainState
 
-	researchPlan             researchPlanState
-	researchPlanSubs         []ResearchSubQuery
 	falsePremise             *falsePremiseState
-	perfBaseline             *perfBaselineState
 	lastRunStats             *RunStats
 	qualityScorer            *ResponseQualityScorer
 	systemPromptInjector     func() string
@@ -556,14 +541,12 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		destructiveGuard:       newGitDestructiveState(),
 		turnImpact:             newTurnImpactRecorder(),
 		errorBudget:            newErrorBudget(),
-		shellNativeHint:        newShellNativeHintState(),
 		monorepoScoper:         newMonorepoScoperState(),
 		approvalMemory:         permission.NewApprovalMemory(),
 		askThrottle:            permission.NewAskThrottle(),
 		crossDetectorConsensus: newConsensusState(),
 		taintInfluence:         newTaintInfluenceState(),
 		exfilChain:             newExfilChainState(),
-		perfBaseline:           newPerfBaselineState(),
 		fulfillmentGate:        newFulfillmentGateState(),
 		constraintAudit:        newConstraintAuditState(),
 		constraintFollowup:     newConstraintFollowupState(),
@@ -571,6 +554,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		planDrift:              newPlanDriftState(),
 		unverifiedClaim:        newUnverifiedClaimState(),
 		companionGuard:         newCompanionGuardState(),
+		mergeGate:              newMergeGateState(),
 		specGaming:             newSpecGamingState(),
 		scopeNarrow:            newScopeNarrowState(),
 		complexityGate:         newComplexityGateState(),
@@ -597,7 +581,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		refusalLedger:          newRefusalLedger(""),
 		effortAdapter:          newAdaptiveEffortStateDetectOverride(p),
 		sessionTimeout:         newSessionTimeoutState(0),
-		fileFreshness:          newFileFreshnessSentinel(),
 		readHash:               newReadHashTracker(),
 		toolThermal:            newThermalState(),
 		userSentiment:          newUserSentimentState(),
@@ -607,7 +590,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		failureMode:            newFailureModeState(),
 		toolFallback:           newToolFallbackState(),
 		cacheEffMonitor:        newCacheEffMonitor(),
-		redundantRead:          newRedundantReadState(),
 		patchExhaust:           newPatchExhaustState(),
 		searchParamGuard:       newSearchParamGuard(),
 		toolRedundancy:         newToolRedundancyAnalyzer(),
@@ -631,27 +613,19 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolResultRedundancy:   newToolResultRedundancyState(),
 		selfMod:                newSelfModState(),
 		tunnelVision:           newTunnelVisionState(),
-		prematureCommit:        newPrematureCommitState(),
 		bareEditStreak:         newBareEditState(),
 		editCoverage:           newEditCoverageState(),
 		toolEff:                newToolEffTracker(),
 		usageHints:             newToolUsageHintStore(),
-		prematureSuccess:       newPrematureSuccessState(),
 		bgVerifyJobs:           newBgVerifyRegistry(),
 		strategyFixation:       newStrategyFixationState(),
 		errorRush:              newErrorRushState(),
 		attentionFragment:      newAttentionFragmentState(),
 		recklessExec:           newRecklessExecState(),
-		irrevGate:              newIrrevGateState(),
-		mergeGate:              newMergeGateState(),
-		argComplexityGate:      newArgComplexityGateState(),
 		verifyDebt:             newVerifyDebtState(),
 		editPropagation:        newEditPropagationState(),
-		fileChurn:              newChurnState(),
 		editOscillation:        newOscillationState(),
-		silentError:            newSilentErrorState(),
 		phantomVerify:          newPhantomVerifyState(),
-		redundantReverify:      newRedundantReverifyState(),
 		solutionFixation:       newSolutionFixationState(),
 		pivotDecision:          newPivotDecisionTracker(),
 		reproducerLifecycle:    newReproducerLifecycleState(),
@@ -677,7 +651,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		diminishingEdit:        newDiminishingEditState(),
 		overcorrection:         newOvercorrectionState(),
 		giveupRevert:           &giveupRevertState{},
-		prematureRefactor:      newPrematureRefactorState(),
 		subgoalTrack:           newSubgoalState(),
 		infoScent:              newInfoScentState(),
 		foresightCalib:         newForesightCalibrateState(),
@@ -689,7 +662,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		envDrift:               newEnvDriftState(),
 		successDeclare:         newSuccessDeclareState(),
 		criteriaDrift:          newCriteriaDriftState(),
-		goalDriftCtx:           newGoalDriftCtxState(),
 		reasonAction:           newReasonActionState(),
 		attemptBrief:           newAttemptBriefState(),
 		inputUnderspec:         newInputUnderspecState(),
@@ -1551,7 +1523,6 @@ func (a *Agent) runStreamEpilogue(ctx context.Context, content []provider.Conten
 		a.maybeExportTrainingSample(a.WorkingDir(), runStats)
 	}
 
-	recordPerfBaseline(a.WorkingDir(), runStats)
 	a.mu.RLock()
 	fn := a.onRunResult
 	a.mu.RUnlock()
