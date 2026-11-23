@@ -53,30 +53,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		}
 	}
 
-	if a.irrevGate != nil {
-		for _, tc := range toolCalls {
-			if warn := a.irrevGate.recordAction(tc.Name, string(tc.Arguments)); warn != "" {
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: warn}},
-				})
-			}
-		}
-	}
-
-	if a.mergeGate != nil {
-		mode := a.currentMode()
-		for _, tc := range toolCalls {
-			if req := a.mergeGate.checkCommand(mode, tc.Name, string(tc.Arguments)); req != "" {
-				debug.Log("agent", "Iteration %d: merge gate requirement injected", iter+1)
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: req}},
-				})
-			}
-		}
-	}
-
 	if hint := a.maybeToolflowSuggestion(a.runToolNames); hint != "" {
 		debug.Log("agent", "injected toolflow next-step hint (%d chars)", len(hint))
 		a.contextManager.Add(provider.Message{
@@ -251,8 +227,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		a.exfilChain.recordSensitiveSource(tc.Name, string(tc.Arguments), result.Content)
 		result.Content = redactSecrets(tc.Name, result.Content)
 
-		a.overseer.recordFinding(tc.Name, string(tc.Arguments), result.Content)
-
 		a.speculator.recordObservation(tc.Name)
 
 		if tc.Name == "todo_write" && !result.IsError {
@@ -288,7 +262,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			for _, p := range extractCreateFilePaths(tc.Name, tc.Arguments) {
 				a.unreadEdit.recordCreated(p)
 				a.tunnelVision.recordFile(p)
-				a.fileFreshness.recordWrite(p)
 				a.readHash.recordWriteHash(p)
 				if a.turnImpact != nil {
 					a.turnImpact.recordFileEdit(tc.Name, resolveImpactPath(a.WorkingDir(), p))
@@ -307,8 +280,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 				a.speculator.invalidateCache()
 				a.toolMemo.invalidateTTLBased()
 				a.commandCache.invalidate()
-
-				a.redundantReverify.recordShellSourceMutation()
 
 				a.getUserEditObserver().RestampBaseline()
 				if a.turnImpact != nil {
@@ -333,11 +304,7 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 				a.unreadEdit.recordReadWindow(p, hasWindow)
 				a.tunnelVision.recordFile(p)
 				a.editFailRecovery.recordRead(p)
-				a.fileFreshness.recordRead(p)
 				a.readHash.recordReadHash(p)
-				if hint := a.redundantRead.checkRedundantRead(p, hasWindow); hint != "" {
-					a.appendGuidance(&result, hint)
-				}
 				if pi == readPathsLen-1 {
 					if hint := a.patchExhaust.recordRead(p); hint != "" {
 						a.appendGuidance(&result, hint)
@@ -358,16 +325,13 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		// map (#5249: helper shared with the other tracker gates).
 		if !result.IsError && mutatingSourceEdit(tc.Name) {
 
-			a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
 			for _, p := range extractTrackedEditPaths(tc.Name, tc.Arguments) {
 				a.editFailRecovery.recordEditSuccess(p)
 
 				if hint := a.readHash.validateContentAtEdit(p, extractOldTextLen(tc.Name, tc.Arguments)); hint != "" {
 					a.appendGuidance(&result, hint)
 				}
-				a.fileFreshness.recordWrite(p)
 				a.readHash.recordWriteHash(p)
-				a.redundantRead.recordWrite(p)
 
 				a.unreadEdit.recordWrite(p)
 				if a.tokenWasteBudget != nil {
@@ -441,7 +405,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 
 		a.falsePremise.recordToolResult(tc.Name, result.Content, result.IsError)
 		a.integrationRecordToolResult(tc.Name, result.Content)
-		result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
 
 		if warn, ok := batchConflictWarnings[idx]; ok {
 			a.appendGuidance(&result, warn)
@@ -531,18 +494,11 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			a.usageHints.recordSuccess(tc.Name)
 		}
 
-		if rvHint := a.redundantReverify.recordToolCall(tc.Name, string(tc.Arguments), iter+1, result.IsError); rvHint != "" {
-			debug.Log("agent", "Iteration %d: redundant re-verification detector triggered", iter+1)
-			a.injectGuidance(rvHint)
-		}
-
 		a.outcomeMisattrib.recordToolCallForOM(tc.Name)
 
 		a.outcomeMisattrib.recordResult(tc.Name, result.Content, result.IsError, iter+1)
 
 		a.reverify.recordToolResult(tc.Name, string(tc.Arguments), result.Content, result.IsError, iter+1)
-
-		a.goalDriftCtx.recordToolCall(tc.Name, string(tc.Arguments))
 
 		if fcHint := a.foresightCalib.checkCalibration(tc.Name, result.Content, result.IsError, iter+1); fcHint != "" {
 			debug.Log("agent", "Iteration %d: foresight calibration detector triggered", iter+1)
@@ -584,7 +540,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 		a.pivotDecision.recordToolCall(tc.Name, string(tc.Arguments), result.IsError, result.Content)
 
 		if !result.IsError {
-			a.redundantReverify.recordEdit(tc.Name)
 		}
 		if fixationHint := a.solutionFixation.checkAndWarn(); fixationHint != "" {
 			debug.Log("agent", "Iteration %d: solution fixation detector triggered", iter+1)
@@ -650,16 +605,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			}
 		}
 
-		if result.IsError {
-			rKey := extractErrorResourceKey(tc.Name, tc.Arguments)
-			a.silentError.recordToolError(tc.Name, rKey, result.Content, iter+1)
-		} else {
-			rKey := extractErrorResourceKey(tc.Name, tc.Arguments)
-			if silentMsg := a.silentError.recordToolAction(tc.Name, rKey); silentMsg != "" {
-				a.appendGuidance(&result, silentMsg)
-			}
-		}
-
 		a.planDrift.adherence.noteToolCall(a.planDrift.items, runStats)
 		if tc.Name == "run_command" || tc.Name == "start_command" {
 			cmd := extractCommandFromToolCall(tc.Arguments)
@@ -715,10 +660,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			if fallbackHint := a.toolFallbackCheck(tc.Name, result.Content); fallbackHint != "" {
 				a.appendGuidance(&result, fallbackHint)
 			}
-		}
-
-		if nativeHint := a.shellNativeHint.maybeShellNativeHint(tc.Name, tc.Arguments); nativeHint != "" {
-			a.appendGuidance(&result, nativeHint)
 		}
 
 		if errorGuidance := a.errorStreakCheck(result.IsError, tc.Name); errorGuidance != "" {
@@ -845,7 +786,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 
 		a.verifDebt.recordToolCall(tc.Name, string(tc.Arguments))
 
-		a.prematureCommit.recordExploration(tc.Name, extractFileHints(tc.Name, tc.Arguments))
 		if debtGuidance := a.verifDebt.maybeWarn(); debtGuidance != "" {
 			a.appendGuidance(&result, debtGuidance)
 		}
@@ -864,24 +804,10 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			}
 		}
 		if isEditTool(tc.Name) && len(editPaths) > 0 {
-			a.fileChurn.recordEdit(editPaths)
 
 			a.constraintAmnesia.noteEdit(iter + 1)
 			for _, p := range editPaths {
 				a.tunnelVision.recordFile(p)
-			}
-
-			pcMsg := a.prematureCommit.checkFirstEdit(editPaths)
-			if pcMsg != "" {
-				a.appendGuidance(&result, pcMsg)
-			}
-			if cg := func() string {
-				if !shouldRunDetector(detectorTierRoutine, iter+1) {
-					return ""
-				}
-				return a.fileChurn.check()
-			}(); cg != "" {
-				a.appendGuidance(&result, cg)
 			}
 
 			a.editOscillation.recordEdit(tc.Name, tc.Arguments, iter+1)
@@ -926,21 +852,17 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 						a.editPropagation.recordGreenBuild()
 
 						if isStrictVerifyCommand(cmd) {
-							a.fileChurn.recordVerifySuccess(cmd)
 						}
 					}
 				}
 			}
 		}
 
-		a.prematureRefactorRecordVerifyForTool(tc.Arguments)
-
 		if verifyDebtSpawnClearingTool(tc.Name) && !result.IsError {
 			if cmd := extractCommandFromArgs(tc.Arguments); cmd != "" && isVerifyCommand(cmd) {
 				a.editPropagation.recordGreenBuild()
 
 				if isStrictVerifyCommand(cmd) {
-					a.fileChurn.recordVerifySuccess(cmd)
 				}
 			}
 		}
@@ -1003,24 +925,12 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 			if jobID == "" {
 				jobID, _ = psArgs["task_id"].(string)
 			}
-			if jobID != "" && a.prematureSuccess.psJobIsVerify(jobID) {
-				if terminal, _ := psTerminalVerifyOutcome(psParseJobStatus(result.Content)); terminal {
-					a.correctionSpiral.recordVerifyResult(tc.Name, result.Content, result.IsError, iter+1)
-				}
-			}
 
 			if jobID != "" {
-				if cmd, ok := a.prematureSuccess.psJobCommand(jobID); ok && cmd != "" {
-					if terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(result.Content)); terminal && !passed {
-						a.buildIdempot.markBuildFailed(cmd)
-					}
-				}
 			}
 		}
 
 		a.bareEditStreak.recordToolCall(tc.Name, string(tc.Arguments))
-
-		a.prematureSuccess.recordToolCall(tc.Name, psArgs, result.IsError, result.Content)
 
 		a.phantomVerify.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
 
@@ -1059,13 +969,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 					})
 				}
 			}
-		}
-
-		if a.irrevGate != nil {
-			a.irrevGate.recordOutcome(tc.Name, result.IsError)
-		}
-		if a.mergeGate != nil {
-			a.mergeGate.RecordPreflightResult(tc.Name, result.Content)
 		}
 
 		if mutatingSourceEdit(tc.Name) && !result.IsError { // #5249: apply_patch must count as a write
@@ -1139,10 +1042,6 @@ func (a *Agent) runToolBatch(ctx context.Context, onEvent func(provider.StreamEv
 
 		if diminishingGuidance := a.diminishingCheck(); diminishingGuidance != "" {
 			a.appendGuidance(&result, diminishingGuidance)
-		}
-
-		if refactorGuidance := a.prematureRefactorCheck(); refactorGuidance != "" {
-			a.appendGuidance(&result, refactorGuidance)
 		}
 
 		if consensusGuidance := a.crossDetectorConsensus.checkOnly(); consensusGuidance != "" {

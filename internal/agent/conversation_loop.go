@@ -115,14 +115,6 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 			msgs = a.contextManager.Messages()
 		}
 
-		if staleMsg := a.fileFreshness.maybeCheckStaleFiles(i + 1); staleMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: staleMsg}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-
 		if thermalMsg := a.toolThermal.maybeWarn(i); thermalMsg != "" {
 			debug.Log("thermal-profile", "imbalanced tool usage detected at iteration %d: %s", i+1, a.toolThermal.categoryBreakdown())
 			msgs = a.guidanceEmit(thermalMsg, msgs)

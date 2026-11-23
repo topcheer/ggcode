@@ -195,11 +195,6 @@ func (c *InteractiveRuntimeCore) SetConfigAgent(ag *agent.Agent) {
 	if c.configAccess != nil {
 		c.configAccess.SetAgent(ag)
 	}
-	if ag != nil && c.configAccess != nil {
-		// Completion gates: feed the agent's merge gate live gates.merge
-		// config (hot on every read, so either CRUD channel applies at once).
-		ag.SetMergeGateConfigProvider(c.configAccess.MergeGateConfig)
-	}
 	if ag != nil {
 
 		c.samplingProvider = ag.Provider()

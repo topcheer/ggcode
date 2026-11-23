@@ -204,8 +204,6 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	}
 	preWarning := preWarn
 
-	costStart := time.Now()
-
 	t.RiskLedger.Accumulate(args.Command)
 	if esc := t.RiskLedger.Escalation(); esc != "" {
 		preWarning += esc + "\n\n"
@@ -357,12 +355,6 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		if advisory := verifyWorktreeAddResult(ctx, args.Command, t.WorkingDir); advisory != "" {
 			result.Content += "\n\n" + advisory
 		}
-	}
-
-	elapsed := time.Since(costStart)
-	recordCommandCost(args.Command, elapsed)
-	if costLine := formatCommandCost(args.Command, elapsed); costLine != "" {
-		result.Content += "\n\n" + costLine
 	}
 
 	if sandboxed && err != nil && sandboxDeniedOutput(output+errOutput) {

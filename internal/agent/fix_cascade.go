@@ -70,7 +70,7 @@ func (a *Agent) fixCascadeCheckAsync(toolName string, args []byte, content strin
 	if jobID == "" {
 		jobID, _ = m["task_id"].(string)
 	}
-	if jobID == "" || !a.prematureSuccess.psJobIsVerify(jobID) {
+	if jobID == "" || !a.fixCascade.isVerifyJob(jobID) {
 		return ""
 	}
 	terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(content))
@@ -91,10 +91,31 @@ type fixCascadeState struct {
 	failedVerifyCount int
 
 	guidanceFired bool
+
+	// jobs tracks background job ids seen via registerJob and whether
+	// their command is verify-shaped (psIsVerifyCommand). Replaces the
+	// prematureSuccess job registry removed with the advisory gates.
+	jobs map[string]bool
 }
 
 func newFixCascadeState() *fixCascadeState {
-	return &fixCascadeState{}
+	return &fixCascadeState{jobs: make(map[string]bool)}
+}
+
+// registerJob records whether a background job's command is verify-shaped.
+func (f *fixCascadeState) registerJob(jobID, cmd string) {
+	if jobID == "" {
+		return
+	}
+	f.jobs[jobID] = psIsVerifyCommand(cmd)
+}
+
+// isVerifyJob reports whether the job was registered as verify-shaped; an
+// unknown job is conservatively treated as verify (pre-removal behavior
+// relied on the registry being authoritative for started jobs).
+func (f *fixCascadeState) isVerifyJob(jobID string) bool {
+	v, ok := f.jobs[jobID]
+	return !ok || v
 }
 
 func (f *fixCascadeState) reset() {

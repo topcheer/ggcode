@@ -5,9 +5,6 @@ import "github.com/topcheer/ggcode/internal/debug"
 var guidanceCounterResets = []func(*Agent){
 
 	func(a *Agent) {
-		if a.silentError != nil {
-			a.silentError.fired = false
-		}
 	},
 
 	func(a *Agent) {
@@ -61,9 +58,6 @@ var guidanceCounterResets = []func(*Agent){
 	},
 
 	func(a *Agent) {
-		if a.prematureCommit != nil {
-			a.prematureCommit.warned = false
-		}
 	},
 
 	func(a *Agent) {
@@ -286,9 +280,6 @@ var guidanceCounterResets = []func(*Agent){
 		}
 	},
 	func(a *Agent) {
-		if a.redundantReverify != nil {
-			a.redundantReverify.warnings = 0
-		}
 	},
 	func(a *Agent) {
 		if a.constraintViolation != nil {
@@ -443,10 +434,6 @@ var guidanceCounterResets = []func(*Agent){
 		}
 	},
 	func(a *Agent) {
-		if a.irrevGate != nil {
-
-			a.irrevGate.warnings = 0
-		}
 	},
 	func(a *Agent) {
 		if a.exploreFrag != nil {
@@ -457,11 +444,6 @@ var guidanceCounterResets = []func(*Agent){
 	},
 
 	func(a *Agent) {
-		if a.goalDriftCtx != nil {
-			a.goalDriftCtx.mu.Lock()
-			a.goalDriftCtx.warned = false
-			a.goalDriftCtx.mu.Unlock()
-		}
 	},
 	func(a *Agent) {
 		if a.planDrift != nil {
@@ -502,9 +484,6 @@ var guidanceCounterResets = []func(*Agent){
 		}
 	},
 	func(a *Agent) {
-		if a.fileChurn != nil {
-			a.fileChurn.fired = false
-		}
 	},
 
 	func(a *Agent) {
@@ -611,9 +590,6 @@ var guidanceCounterResets = []func(*Agent){
 	},
 
 	func(a *Agent) {
-		if a.prematureSuccess != nil {
-			a.prematureSuccess.guidanceFired = 0
-		}
 	},
 
 	func(a *Agent) {

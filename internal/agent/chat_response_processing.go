@@ -155,12 +155,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 		a.integrationCheckAndWarn(assistantText)
 
 		if a.claimsSupervision {
-			if psHint := a.prematureSuccess.checkSuccessClaim(assistantText); psHint != "" {
-				debug.Log("agent", "Iteration %d: premature success claim detected (edits without verification)", iter+1)
-				a.injectGuidance(psHint)
-
-				a.recordUncertainty("unverified_success", weightUnverifiedSucc)
-			}
 		}
 
 		if a.claimsSupervision {
@@ -323,11 +317,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 
 		if epHint := a.foresightCalib.expectProtocolHint(toolCalls); epHint != "" {
 			a.injectGuidance(epHint)
-		}
-
-		if gdHint := a.goalDriftCtx.checkDrift(iter + 1); gdHint != "" {
-			debug.Log("agent", "Iteration %d: context-length goal drift detected", iter+1)
-			a.injectGuidance(gdHint)
 		}
 
 		if len(a.contextManager.Messages()) > detectorMsgsBefore && st.detectorContinueBudget > 0 {
@@ -562,9 +551,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 		a.mu.Unlock()
 		if researchMsg != "" {
 
-			if draft := SynthesizeResearchReport("", a.overseer.findingsSnapshot(), a.researchPlanSubs); draft != "" {
-				researchMsg = draft + "\n\n" + researchMsg
-			}
 			debug.Log("agent", "Iteration %d: research-report gate fired, demanding structured synthesis before stop", iter+1)
 			a.contextManager.Add(provider.Message{
 				Role: "user",

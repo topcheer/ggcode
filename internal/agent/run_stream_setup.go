@@ -41,10 +41,6 @@ func (a *Agent) runStreamSetup(ctx context.Context, content []provider.ContentBl
 		}
 	}
 
-	if a.goalDriftCtx != nil {
-		a.goalDriftCtx.reset()
-	}
-	a.goalDriftCtx.initFromUserMessage(userPromptForStats)
 	runStats := newRunStats(userPromptForStats)
 
 	if a.contextManager != nil {
@@ -166,7 +162,6 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 			}},
 		})
 	}
-	a.maybeInjectPerfRegression()
 	a.maybeInjectStableSystemHead()
 	a.maybeInjectRatchetRules()
 
@@ -198,12 +193,8 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 	a.resetOverseer(userText)
 	a.resetPlanner()
 
-	a.researchPlan.reset()
-	a.researchPlanSubs = nil
-
 	a.plannerAnalyze(userText)
 
-	a.maybeInjectResearchPlan(userText)
 	a.resetTodoStaleness()
 	a.resetTodoDrop()
 	a.resetScopeDrift()
@@ -256,7 +247,6 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 
 	a.solutionFixation.reset()
 	a.pivotDecision.reset()
-	a.redundantReverify.reset()
 
 	a.exportGuard.reset()
 	a.hubPackageGuard.reset()
@@ -300,7 +290,6 @@ func (a *Agent) buildRunTurnContextD2(ctx context.Context, content []provider.Co
 	a.verifyRegression.reset()
 	a.resetSelfCorrectionGate()
 	a.argSizeGuardFires = 0
-	a.redundantRead.reset()
 	a.patchExhaust.reset()
 	a.searchParamGuard.reset()
 	a.toolRedundancy.reset()
@@ -310,9 +299,7 @@ func (a *Agent) buildRunTurnContextD2(ctx context.Context, content []provider.Co
 	a.mutateLedger.reset()
 	a.compoundingFailure.reset()
 
-	a.fileChurn.reset()
 	a.editOscillation.reset()
-	a.silentError.reset()
 
 	a.serialRead.reset()
 	a.toolEff.reset()
@@ -343,12 +330,10 @@ func (a *Agent) buildRunTurnContextD2(ctx context.Context, content []provider.Co
 	a.inputUnderspec.reset()
 	a.tunnelVision.reset()
 	a.queryConverge.reset()
-	a.prematureCommit.reset()
 	a.failureMode.reset()
 	a.toolFallback.reset()
 	a.errorCascade.reset()
 	a.errorPropagate.reset()
-	a.fileFreshness.reset()
 	a.readHash.reset()
 	a.toolThermal.reset()
 	a.cacheEffMonitor.reset()
