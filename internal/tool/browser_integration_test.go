@@ -5,6 +5,8 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -360,10 +362,19 @@ func TestBrowserEvaluateFramePureExpression(t *testing.T) {
 	b := NewBrowser()
 	defer b.doCloseSession("default", "itest")
 
-	page := "data:text/html,<html><body><h1 id='main'>main</h1>" +
-		"<iframe id='f' srcdoc=\"<div id='inside'>frame-content</div>\"></iframe>" +
-		"</body></html>"
-	runBrowserAction(t, b, "navigate", map[string]interface{}{"url": page})
+	// data: URLs are refused by the navigation scheme allowlist (#741), so the
+	// frame fixture is served over http from a local server.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><body><h1 id='main'>main</h1>" +
+			"<iframe id='f' srcdoc=\"<div id='inside'>frame-content</div>\"></iframe>" +
+			"</body></html>"))
+	}))
+	defer srv.Close()
+	navRes := runBrowserAction(t, b, "navigate", map[string]interface{}{"url": srv.URL})
+	if navRes.IsError {
+		t.Fatalf("navigate to frame fixture failed: %s", navRes.Content)
+	}
 
 	// (a) pure-expression value survives the frame wrapper.
 	result := runBrowserAction(t, b, "evaluate", map[string]interface{}{
