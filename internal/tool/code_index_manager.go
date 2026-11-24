@@ -28,6 +28,7 @@ type CodeIndexManager struct {
 	started        bool
 	degraded       bool
 	disabled       bool
+	empty          bool
 	lastActivity   time.Time
 	dirtyFiles     map[string]int64
 	budgetExcluded map[string]int64
@@ -268,6 +269,7 @@ func (m *CodeIndexManager) loadDiskCache() {
 	m.mu.Lock()
 	m.index = idx
 	m.ready = true
+	m.empty = false
 	if excluded != nil {
 		m.budgetExcluded = excluded
 	}
@@ -309,6 +311,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 	files := m.collectFiles(ctx)
 	if len(files) == 0 {
 		debug.Log("codeindex", "no indexable files found in %s", m.workingDir)
+		m.setEmpty()
 		return
 	}
 
@@ -423,6 +426,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 
 	if len(docs) == 0 {
 		debug.Log("codeindex", "no documents indexed after walk")
+		m.setEmpty()
 		return
 	}
 
@@ -443,6 +447,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 	m.index = idx
 	m.budgetExcluded = overflow
 	m.ready = true
+	m.empty = false
 	m.stats = CodeIndexStats{
 		TotalFiles:   len(files),
 		IndexedFiles: len(docs),
@@ -458,6 +463,21 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 	if onReady != nil {
 		onReady(stats)
 	}
+}
+
+// setEmpty is the terminal state for a tree with nothing to index. The
+// manager reports ready so Search can answer "empty" instead of "being
+// built" forever, and stops re-walking on every call. A later file addition
+// is picked up by the periodic scan (every found path is then un-indexed) and
+// the incremental rebuild leaves the empty state.
+func (m *CodeIndexManager) setEmpty() {
+	m.mu.Lock()
+	m.index = &bm25Index{df: make(map[string]int)}
+	m.budgetExcluded = nil
+	m.ready = true
+	m.empty = true
+	m.stats = CodeIndexStats{UpdatedAt: time.Now()}
+	m.mu.Unlock()
 }
 
 func (m *CodeIndexManager) SetOnReady(fn func(stats CodeIndexStats)) {
@@ -697,6 +717,7 @@ func (m *CodeIndexManager) periodicCheck() {
 			debug.Log("codeindex", "idle for %v, releasing in-memory index (%d docs)", idle.Round(time.Minute), len(m.index.docs))
 			m.index = nil
 			m.ready = false
+			m.empty = false
 			m.stats = CodeIndexStats{}
 		}
 		m.mu.Unlock()
@@ -717,29 +738,14 @@ func (m *CodeIndexManager) scanForExternalChanges() {
 	}
 
 	indexedPaths := make(map[string]bool, len(idx.docs))
+	cachedMap := make(map[string]int64, len(idx.docs))
 	for _, doc := range idx.docs {
 		indexedPaths[doc.path] = true
+		cachedMap[doc.path] = doc.mtime
 	}
-
-	var cachedMap map[string]int64
-	excludedMap := make(map[string]int64)
-	if data, err := os.ReadFile(m.indexPath); err == nil {
-		var pi persistedIndex
-		if json.Unmarshal(data, &pi) == nil && pi.Version == codeIndexVersion {
-			cachedMap = make(map[string]int64, len(pi.Docs))
-			for _, d := range pi.Docs {
-				cachedMap[d.Path] = d.Mtime
-			}
-			for _, e := range pi.Excluded {
-				excludedMap[e.Path] = e.Mtime
-			}
-		}
-	}
-	if cachedMap == nil {
-
-		cachedMap = make(map[string]int64)
-		debug.Log("codeindex", "disk cache unavailable, external scan marks all for one full rebuild (%d indexed paths)", len(indexedPaths))
-	}
+	m.mu.RLock()
+	excludedMap := m.budgetExcluded
+	m.mu.RUnlock()
 
 	found := make(map[string]bool)
 	newDirty := 0
@@ -774,13 +780,24 @@ func (m *CodeIndexManager) scanForExternalChanges() {
 		found[relPath] = true
 
 		info, err := os.Stat(path)
-		if err != nil || info.Size() > codeIndexMaxFileSize {
+		if err != nil {
 			return nil
 		}
-		mtime := info.ModTime().Unix()
-		cachedMtime, wasIndexed := cachedMap[relPath]
 		_, isExcluded := excludedMap[relPath]
+		cachedMtime, wasIndexed := cachedMap[relPath]
+		if info.Size() > codeIndexMaxFileSize {
+			// Grew past the cap since it was indexed: doBuild would skip it,
+			// so drop the stale doc instead of serving its old terms forever.
+			if wasIndexed && !isExcluded {
+				m.mu.Lock()
+				m.dirtyFiles[relPath] = -1
+				m.mu.Unlock()
+				newDirty++
+			}
+			return nil
+		}
 
+		mtime := info.ModTime().Unix()
 		if !isExcluded && (!wasIndexed || cachedMtime != mtime) {
 
 			m.mu.Lock()
@@ -911,7 +928,19 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 			}
 			continue
 		}
-		if info.IsDir() || info.Size() > codeIndexMaxFileSize {
+		if info.IsDir() {
+			continue
+		}
+		if info.Size() > codeIndexMaxFileSize {
+			// Past the cap: remove the stale doc (mirror of doBuild's skip).
+			if di, ok := docIdx[relPath]; ok {
+				m.removeDocFromIndex(idx, di)
+				delete(docIdx, relPath)
+				if di < len(idx.docs) {
+					docIdx[idx.docs[di].path] = di
+				}
+				removed++
+			}
 			continue
 		}
 
@@ -994,9 +1023,17 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 	m.persistIndex(context.Background(), idx.docs, snapshotExcluded)
 
 	m.mu.Lock()
+	prevTotal := m.stats.TotalFiles
 	m.index = idx
+	m.empty = len(idx.docs) == 0
+	total := len(idx.docs)
+	// "of N searched" in the tool result counts walked files; keep the
+	// last full-walk figure so an incremental rebuild does not shrink it.
+	if prevTotal > total {
+		total = prevTotal
+	}
 	m.stats = CodeIndexStats{
-		TotalFiles:   len(idx.docs),
+		TotalFiles:   total,
 		IndexedFiles: len(idx.docs),
 		UpdatedAt:    time.Now(),
 	}
@@ -1176,29 +1213,21 @@ func fuzzySubsequenceMatch(s, query string) bool {
 func (m *CodeIndexManager) Search(query string, maxResults int) ([]bm25Result, error) {
 	m.mu.Lock()
 	m.lastActivity = time.Now()
-	ready := m.ready
-	building := m.building
+	ready, building, disabled, empty := m.ready, m.building, m.disabled, m.empty
+	idx := m.index
 	m.mu.Unlock()
 
-	if !ready {
-
+	if !ready || idx == nil {
 		if !building {
 			m.lazyLoad()
 		}
-		m.mu.RLock()
-		disabled := m.disabled
-		m.mu.RUnlock()
 		if disabled {
 			return nil, errIndexDisabled
 		}
 		return nil, errIndexNotReady
 	}
-
-	m.mu.RLock()
-	idx := m.index
-	m.mu.RUnlock()
-	if idx == nil {
-		return nil, errIndexNotReady
+	if empty {
+		return nil, errIndexEmpty
 	}
 
 	terms := tokenizeForSearch(query)
@@ -1215,6 +1244,24 @@ func (m *CodeIndexManager) IsReady() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.ready
+}
+
+// WaitReady blocks up to maxWait for an in-flight build to publish. It lets a
+// warm-cache cold start (hundreds of ms) answer the first code_search instead
+// of spending a model round-trip on "try again in a few seconds". Returns
+// true when Search will now give a definitive answer (ready, empty or
+// disabled).
+func (m *CodeIndexManager) WaitReady(maxWait time.Duration) bool {
+	deadline := time.Now().Add(maxWait)
+	for {
+		m.mu.RLock()
+		done := m.ready || m.disabled || !m.building
+		m.mu.RUnlock()
+		if done || time.Now().After(deadline) {
+			return done
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func (m *CodeIndexManager) Stats() CodeIndexStats {
@@ -1267,3 +1314,13 @@ func (e *indexNotReadyError) Error() string {
 }
 
 var errIndexDisabled = errors.New("code index is disabled for this working directory (user home - not a project tree); use grep or search_files with an explicit path under a real project instead")
+
+func (e *indexEmptyError) Error() string {
+	return "code index is empty: no indexable files found under the working directory " +
+		"(code_search only indexes source, config and doc files outside vendored/build dirs). " +
+		"Use grep or search_files with an explicit path"
+}
+
+type indexEmptyError struct{}
+
+var errIndexEmpty = &indexEmptyError{}
