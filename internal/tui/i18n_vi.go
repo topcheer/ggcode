@@ -418,6 +418,12 @@ func viCatalog(key string) string {
 		return "không tiêu đề"
 	case "session.store_missing":
 		return "Kho phiên chưa được cấu hình.\n\n"
+	case "turn.finished_at":
+		return "Hoàn tất lúc %s\n\n"
+	case "turn.canceled_at":
+		return "Đã hủy lúc %s\n\n"
+	case "turn.failed_at":
+		return "Thất bại lúc %s\n\n"
 	case "session.new":
 		return "Phiên mới: %s\n\n"
 	case "session.resume":

@@ -146,6 +146,8 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 		m.appendTurnMetricsDigest(m.usageTurnIndex)
 		m.appendRunChangeSummary()
 	}
+	// Last line of every turn: when the loop ended (all outcomes).
+	m.appendRunFinishedStamp(wasCanceled, wasFailed)
 	m.chatListFollowOutput()
 
 	notifCfg := config.NotificationConfig{}

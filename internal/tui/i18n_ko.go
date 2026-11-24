@@ -418,6 +418,12 @@ func koCatalog(key string) string {
 		return "제목 없음"
 	case "session.store_missing":
 		return "세션 저장소가 구성되지 않았습니다.\n\n"
+	case "turn.finished_at":
+		return "%s에 완료\n\n"
+	case "turn.canceled_at":
+		return "%s에 취소됨\n\n"
+	case "turn.failed_at":
+		return "%s에 실패\n\n"
 	case "session.new":
 		return "새 세션: %s\n\n"
 	case "session.resume":

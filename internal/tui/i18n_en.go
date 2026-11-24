@@ -489,6 +489,12 @@ func enCatalog(key string) string {
 		return "untitled"
 	case "session.store_missing":
 		return "Session store not configured.\n\n"
+	case "turn.finished_at":
+		return "Finished at %s\n\n"
+	case "turn.canceled_at":
+		return "Canceled at %s\n\n"
+	case "turn.failed_at":
+		return "Failed at %s\n\n"
 	case "session.new":
 		return "New session: %s\n\n"
 	case "session.resume":

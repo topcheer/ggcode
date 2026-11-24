@@ -456,6 +456,12 @@ func jaCatalog(key string) string {
 		return "無題"
 	case "session.store_missing":
 		return "セッションストアが設定されていません。\n\n"
+	case "turn.finished_at":
+		return "%s に完了\n\n"
+	case "turn.canceled_at":
+		return "%s にキャンセル\n\n"
+	case "turn.failed_at":
+		return "%s に失敗\n\n"
 	case "session.new":
 		return "新しいセッション: %s\n\n"
 	case "session.resume":
