@@ -2,12 +2,15 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/cost"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -52,74 +55,77 @@ func (m Model) renderHeader() string {
 	return lipgloss.JoinVertical(lipgloss.Left, logoCard, metaCard)
 }
 
+// renderStatusBar builds the loading status box. Every piece is timed so a
+// slow bar names its culprit in the debug ring ("slow status bar: 146ms
+// parts[...]") - the View() probe only reports the bar as a whole.
 func (m Model) renderStatusBar() string {
 	if !m.loading {
 		return ""
 	}
+	sbStart := time.Now()
+	parts := segmentTimers{}
+	part := func(name string, f func()) {
+		t0 := time.Now()
+		f()
+		parts[name] += time.Since(t0)
+	}
+	defer func() {
+		if d := time.Since(sbStart); d > slowUpdateLogThreshold {
+			debug.Log("tui", fmt.Sprintf("slow status bar: %s %s", d.Round(time.Millisecond), partsSummary(parts, 5*time.Millisecond)))
+		}
+	}()
 
 	var sb strings.Builder
+	var line1 string
+	var tmuxLabel string
+	var pc agent.PreCompactStatus
 
-	activity := m.statusActivity
-	if activity == "" {
-		if m.activeTodo != nil {
-			activity = localizeTodoFocus(m.currentLanguage(), m.activeTodo.Content)
-		} else {
-			activity = m.t("status.thinking")
-		}
-	}
-
-	if lipgloss.Width(activity) > 30 {
-		runes := []rune(activity)
-		for i := len(runes); i > 0; i-- {
-			if lipgloss.Width(string(runes[:i])) <= 29 {
-				activity = string(runes[:i]) + "…"
-				break
+	part("activity", func() {
+		activity := m.statusActivity
+		if activity == "" {
+			if m.activeTodo != nil {
+				activity = localizeTodoFocus(m.currentLanguage(), m.activeTodo.Content)
+			} else {
+				activity = m.t("status.thinking")
 			}
 		}
-	}
+		activity = fitDisplayWidth(activity, 29) + "…"
 
-	spinnerChar := spinnerFrameGlyph(m.spinner.CurrentFrame())
-
-	line1 := fmt.Sprintf(" %s %s", spinnerChar, activity)
-	if count := m.pendingSubmissionCount(); count > 0 {
-		line1 += fmt.Sprintf(" │ 📨 %s", m.t("queued.count", count))
-	}
+		spinnerChar := spinnerFrameGlyph(m.spinner.CurrentFrame())
+		line1 = fmt.Sprintf(" %s %s", spinnerChar, activity)
+		if count := m.pendingSubmissionCount(); count > 0 {
+			line1 += fmt.Sprintf(" │ 📨 %s", m.t("queued.count", count))
+		}
+	})
 	sb.WriteString(m.styles.statusBar.Render(line1))
 
 	if m.activeTodo != nil || m.statusToolCount > 0 || m.statusToolName != "" {
 		sb.WriteString("\n ")
-		if m.activeTodo != nil {
-			sb.WriteString("🎯 ")
-			sb.WriteString(util.Truncate(compactSingleLine(m.activeTodo.Content), 56))
-			if m.statusToolCount > 0 || m.statusToolName != "" {
-				sb.WriteString(" │ ")
-			}
-		}
-		if m.statusToolCount > 0 {
-			sb.WriteString(fmt.Sprintf("🔧 %s", m.t("status.tools_used", m.statusToolCount)))
-			if m.statusToolName != "" {
-				sb.WriteString(" │ ")
-			}
-		}
-		if m.statusToolName != "" {
-			toolLabel := m.statusToolName
-			if m.statusToolArg != "" {
-				toolLabel = fmt.Sprintf("%s: %s", toolLabel, m.statusToolArg)
-			}
-
-			if lipgloss.Width(toolLabel) > 30 {
-				runes := []rune(toolLabel)
-				for i := len(runes); i > 0; i-- {
-					if lipgloss.Width(string(runes[:i])) <= 29 {
-						toolLabel = string(runes[:i]) + "…"
-						break
-					}
+		part("todoTool", func() {
+			if m.activeTodo != nil {
+				sb.WriteString("🎯 ")
+				sb.WriteString(util.Truncate(compactSingleLine(m.activeTodo.Content), 56))
+				if m.statusToolCount > 0 || m.statusToolName != "" {
+					sb.WriteString(" │ ")
 				}
 			}
-			sb.WriteString(toolLabel)
-		}
+			if m.statusToolCount > 0 {
+				sb.WriteString(fmt.Sprintf("🔧 %s", m.t("status.tools_used", m.statusToolCount)))
+				if m.statusToolName != "" {
+					sb.WriteString(" │ ")
+				}
+			}
+			if m.statusToolName != "" {
+				toolLabel := m.statusToolName
+				if m.statusToolArg != "" {
+					toolLabel = fmt.Sprintf("%s: %s", toolLabel, m.statusToolArg)
+				}
+				sb.WriteString(fitDisplayWidth(toolLabel, 29) + "…")
+			}
+		})
 	}
-	if tmuxLabel := m.tmuxLabel(); tmuxLabel != "" {
+	part("tmux", func() { tmuxLabel = m.tmuxLabel() })
+	if tmuxLabel != "" {
 		if sb.Len() > 0 {
 			sb.WriteString(" │ ")
 		}
@@ -127,7 +133,8 @@ func (m Model) renderStatusBar() string {
 	}
 
 	if m.agent != nil {
-		if pc := m.agent.PreCompactStatus(); pc.Running {
+		part("precompact", func() { pc = m.agent.PreCompactStatus() })
+		if pc.Running {
 			if sb.Len() > 0 {
 				sb.WriteString(" │ ")
 			}
@@ -135,7 +142,32 @@ func (m Model) renderStatusBar() string {
 		}
 	}
 
-	return m.renderContextBoxAuto("", sb.String(), lipgloss.Color("6"))
+	var box string
+	part("box", func() { box = m.renderContextBoxAuto("", sb.String(), lipgloss.Color("6")) })
+	return box
+}
+
+// partsSummary lists the slowest timed parts above min, e.g. "parts[precompact=142ms box=3ms]".
+func partsSummary(parts segmentTimers, min time.Duration) string {
+	type kv struct {
+		name string
+		d    time.Duration
+	}
+	var list []kv
+	for name, d := range parts {
+		if d >= min {
+			list = append(list, kv{name, d})
+		}
+	}
+	if len(list) == 0 {
+		return ""
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].d > list[j].d })
+	out := make([]string, 0, len(list))
+	for _, e := range list {
+		out = append(out, fmt.Sprintf("%s=%s", e.name, e.d.Round(time.Millisecond)))
+	}
+	return "parts[" + strings.Join(out, " ") + "]"
 }
 
 func (m Model) staticHintsSuppressed() bool {

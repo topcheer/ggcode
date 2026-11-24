@@ -3178,3 +3178,46 @@ func TestAskUserMixedQuestionSpaceFlowsToInputAfterTyping1712(t *testing.T) {
 		t.Fatalf("space must reach input once typing started, got %q (before=%q)", got, before)
 	}
 }
+
+// A very long activity / tool-arg string must not make the status bar slow:
+// it is re-rendered on every spinner tick (150ms) while loading, and the old
+// truncation loop re-measured the string width once per removed rune (O(n²)).
+func TestStatusBarLongActivityRendersFast(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.statusActivity = strings.Repeat("长命令输出片段 ", 4000) // ~56K runes
+	m.statusToolName = "run_command"
+	m.statusToolArg = strings.Repeat("echo x; ", 4000)
+	m.spinner.Start("Run")
+
+	const budget = 50 * time.Millisecond
+	start := time.Now()
+	rendered := m.renderStatusBar()
+	if d := time.Since(start); d > budget {
+		t.Fatalf("status bar with 50K-char activity took %s (budget %s)", d, budget)
+	}
+	if !strings.Contains(rendered, "…") {
+		t.Fatalf("expected width-bounded activity with ellipsis, got %q", truncateForTest(rendered, 200))
+	}
+	if w := lipgloss.Width(strings.SplitN(rendered, "\n", 2)[0]); w > 200 {
+		t.Fatalf("first status line should stay bounded, got width %d", w)
+	}
+}
+
+func TestPartsSummaryListsSlowestAboveMin(t *testing.T) {
+	got := partsSummary(segmentTimers{"precompact": 142 * time.Millisecond, "box": 3 * time.Millisecond, "tmux": time.Millisecond}, 5*time.Millisecond)
+	if got != "parts[precompact=142ms]" {
+		t.Fatalf("unexpected summary %q", got)
+	}
+	if partsSummary(segmentTimers{"box": time.Millisecond}, 5*time.Millisecond) != "" {
+		t.Fatal("nothing above min must yield an empty summary")
+	}
+}
+
+func truncateForTest(s string, n int) string {
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n]) + "..."
+	}
+	return s
+}
