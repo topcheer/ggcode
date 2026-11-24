@@ -660,8 +660,19 @@ func TestCronPromptBusyStaysHiddenWhenQueuedRunStarts(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected queued cron prompt to start a follow-up run")
 	}
-	if m3.chatList == nil || m3.chatList.Len() != 1 {
-		t.Fatalf("expected only cron system message in chatList, got %d items", m3.chatList.Len())
+	if m3.chatList == nil || m3.chatList.Len() == 0 {
+		t.Fatalf("expected chat output after agentDone, got %d items", m3.chatList.Len())
+	}
+	// The turn now also closes with a finished-at stamp; the queued cron
+	// system message must still be there next to it.
+	foundCron := false
+	for i := 0; i < m3.chatList.Len(); i++ {
+		if sys, ok := m3.chatList.ItemAt(i).(*chat.SystemItem); ok && !strings.HasPrefix(sys.Text(), "Finished at ") {
+			foundCron = true
+		}
+	}
+	if !foundCron {
+		t.Fatal("expected the queued cron system message in chatList")
 	}
 	if rendered := renderedOutput(&m3); strings.Contains(rendered, "check progress") {
 		t.Fatalf("expected cron prompt to stay hidden, got output %q", rendered)

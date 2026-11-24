@@ -418,6 +418,12 @@ func esCatalog(key string) string {
 		return "sin titulo"
 	case "session.store_missing":
 		return "Almacen de sesiónes no configurado.\n\n"
+	case "turn.finished_at":
+		return "Terminado a las %s\n\n"
+	case "turn.canceled_at":
+		return "Cancelado a las %s\n\n"
+	case "turn.failed_at":
+		return "Fallido a las %s\n\n"
 	case "session.new":
 		return "Nueva sesión: %s\n\n"
 	case "session.resume":

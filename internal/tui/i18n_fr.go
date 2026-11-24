@@ -418,6 +418,12 @@ func frCatalog(key string) string {
 		return "sans titre"
 	case "session.store_missing":
 		return "Stockâge de sessions non configuré.\n\n"
+	case "turn.finished_at":
+		return "Terminé à %s\n\n"
+	case "turn.canceled_at":
+		return "Annulé à %s\n\n"
+	case "turn.failed_at":
+		return "Échec à %s\n\n"
 	case "session.new":
 		return "Nouvelle session: %s\n\n"
 	case "session.resume":

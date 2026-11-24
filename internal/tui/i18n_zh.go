@@ -496,6 +496,12 @@ func zhCatalog(key string) string {
 		return "未命名"
 	case "session.store_missing":
 		return "未配置会话存储。\n\n"
+	case "turn.finished_at":
+		return "完成于 %s\n\n"
+	case "turn.canceled_at":
+		return "已取消于 %s\n\n"
+	case "turn.failed_at":
+		return "失败于 %s\n\n"
 	case "session.new":
 		return "新会话：%s\n\n"
 	case "session.resume":

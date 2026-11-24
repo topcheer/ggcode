@@ -100,6 +100,12 @@ func ptCatalog(key string) string {
 
 	case "session.untitled":
 		return "sem título"
+	case "turn.finished_at":
+		return "Concluído às %s\n\n"
+	case "turn.canceled_at":
+		return "Cancelado às %s\n\n"
+	case "turn.failed_at":
+		return "Falhou às %s\n\n"
 	case "session.new":
 		return "Nova sessão: %s"
 	case "session.resume":

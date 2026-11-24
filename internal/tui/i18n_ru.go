@@ -431,6 +431,12 @@ func ruCatalog(key string) string {
 		return "без названия"
 	case "session.store_missing":
 		return "Хранилище сессий не настроено.\n\n"
+	case "turn.finished_at":
+		return "Завершено в %s\n\n"
+	case "turn.canceled_at":
+		return "Отменено в %s\n\n"
+	case "turn.failed_at":
+		return "Ошибка в %s\n\n"
 	case "session.new":
 		return "Новая сессия: %s\n\n"
 	case "session.resume":

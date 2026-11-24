@@ -439,6 +439,12 @@ func deCatalog(key string) string {
 		return "unbenannt"
 	case "session.store_missing":
 		return "Sitzungsspeicher nicht konfiguriert.\n\n"
+	case "turn.finished_at":
+		return "Abgeschlossen um %s\n\n"
+	case "turn.canceled_at":
+		return "Abgebrochen um %s\n\n"
+	case "turn.failed_at":
+		return "Fehlgeschlagen um %s\n\n"
 	case "session.new":
 		return "Neue Sitzung: %s\n\n"
 	case "session.resume":
