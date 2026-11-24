@@ -85,7 +85,7 @@ individual A2A auth configuration.
 - **Semantic code search** — BM25-based `code_search` finds conceptually related code, not just keyword matches, kept fresh by a [background code index](docs/guide/code-index.md)
 - **Code health analysis** — cyclomatic complexity, function length, nesting depth metrics via `code_health`
 - **Tech-debt scanner** — `scan_todos` surfaces TODO/FIXME/HACK markers with severity ranking and git-blame staleness
-- **Browser automation** — Go-native CDP for SPA/JS testing without Node.js or Playwright
+- **Browser automation** — Go-native CDP for SPA/JS testing without Node.js or Playwright; instances shut down automatically after 3 minutes idle (`GGCODE_BROWSER_IDLE_SECS`)
 - **Screenshot capture** — full screen, window, or region screenshots for visual debugging
 - **Clipboard integration** — read from and write to the system clipboard
 - **Editor launcher** — `open_editor` opens files in the user's IDE (VS Code, Cursor, JetBrains, Vim, etc.) at a specific line/column, auto-detected from env vars
