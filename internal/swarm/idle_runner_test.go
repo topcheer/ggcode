@@ -2,6 +2,8 @@ package swarm
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -744,4 +746,80 @@ func TestRollbackClaimedTask(t *testing.T) {
 	}
 
 	rollbackClaimedTask(mgr, team, &Teammate{ID: "x"})
+}
+
+// A teammate's reasoning stream arrives per token. Text was already
+// coalesced per segment; reasoning was appended one event per delta, so one
+// ordinary answer flooded the 200-entry ring (live probe: 1581 dropped) and
+// evicted the tool call/result lines the leader needs to judge "is it stuck?".
+type reasoningAgent struct{}
+
+func (a *reasoningAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent), origin ...string) error {
+	for _, t := range []string{"is", " ", "implicitly", " ", "in"} {
+		onEvent(provider.StreamEvent{Type: provider.StreamEventReasoning, Text: t})
+	}
+	onEvent(provider.StreamEvent{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{Name: "run_command", ID: "c1", Arguments: json.RawMessage(`{"command":"echo x"}`)}})
+	onEvent(provider.StreamEvent{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{Name: "run_command", ID: "c1"}, Result: "x"})
+	for _, t := range []string{"Final", " ", "answer", ":"} {
+		onEvent(provider.StreamEvent{Type: provider.StreamEventReasoning, Text: t})
+	}
+	onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "DONE"})
+	return nil
+}
+
+func TestIdleRunner_CoalescesReasoningDeltas(t *testing.T) {
+	tm := &Teammate{ID: "tm-1", Name: "docs-web", Status: TeammateIdle, Inbox: make(chan MailMessage, 16)}
+	team := &Team{ID: "team-1", Name: "test", LeaderID: "leader", Teammates: map[string]*Teammate{"tm-1": tm}, Tasks: task.NewManager()}
+
+	var streamReasoning int
+	var mu sync.Mutex
+	onEvent := func(ev Event) {
+		if ev.Type != "teammate_reasoning" {
+			return
+		}
+		mu.Lock()
+		streamReasoning++
+		mu.Unlock()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tm.ctx = ctx
+	go runTeammateLoop(ctx, tm, team, &reasoningAgent{}, newTestManager(), onEvent, 30*time.Minute)
+	tm.Inbox <- MailMessage{From: "leader", Content: "probe", Type: "task"}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, total := tm.EventsSince(0); total >= 5 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	events, _ := tm.EventsSince(0)
+	var kinds []string
+	var reasoning []string
+	for _, ev := range events {
+		switch ev.Type {
+		case TeammateEventReasoning:
+			kinds = append(kinds, "reasoning")
+			reasoning = append(reasoning, ev.Text)
+		case TeammateEventToolCall:
+			kinds = append(kinds, "tool")
+		case TeammateEventToolResult:
+			kinds = append(kinds, "result")
+		case TeammateEventText:
+			kinds = append(kinds, "text")
+		}
+	}
+	if got := strings.Join(kinds, ","); got != "reasoning,tool,result,reasoning,text" {
+		t.Fatalf("unexpected ring order: %s (%+v)", got, events)
+	}
+	if reasoning[0] != "is implicitly in" || reasoning[1] != "Final answer:" {
+		t.Fatalf("reasoning segments not coalesced per segment: %q", reasoning)
+	}
+	// the live TUI stream still gets every delta (passthrough unchanged)
+	mu.Lock()
+	defer mu.Unlock()
+	if streamReasoning != 6 {
+		t.Fatalf("expected 6 non-blank per-delta teammate_reasoning stream events, got %d", streamReasoning)
+	}
 }
