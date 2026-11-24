@@ -1,5 +1,12 @@
 # Context Engineering Intelligence Gates
 
+> **Status: guidance injection removed in the #5942-#5944 trim (2026-11-24).**
+> The iteration-pressure gate (`internal/agent/iter_pressure.go`) was deleted and
+> the cache-efficiency monitor no longer speaks: `cacheEffMonitor` keeps recording
+> usage samples for the end-of-run report only. Kept as a historical design record
+> - the "Guidance injection" integration point below no longer exists. See
+> [`guidance-injection-trim.md`](guidance-injection-trim.md).
+
 ## Overview
 
 This document describes two context engineering intelligence gates implemented in

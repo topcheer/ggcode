@@ -82,7 +82,7 @@ individual A2A auth configuration.
 
 - **Codebase-aware** — reads, understands, and edits your entire project
 - **Full dev toolkit** — file edits, shell commands, Git, LSP, search, batch operations
-- **Semantic code search** — BM25-based `code_search` finds conceptually related code, not just keyword matches
+- **Semantic code search** — BM25-based `code_search` finds conceptually related code, not just keyword matches, kept fresh by a [background code index](docs/guide/code-index.md)
 - **Code health analysis** — cyclomatic complexity, function length, nesting depth metrics via `code_health`
 - **Tech-debt scanner** — `scan_todos` surfaces TODO/FIXME/HACK markers with severity ranking and git-blame staleness
 - **Browser automation** — Go-native CDP for SPA/JS testing without Node.js or Playwright
@@ -134,6 +134,7 @@ individual A2A auth configuration.
 | [ACP / Editor](docs/guide/acp.md) | JetBrains, Zed, and ACP-compatible editors |
 | [Delegation](docs/guide/delegation.md) | Delegate tasks to Copilot, Claude, Cursor, and other agents |
 | [Multi-Agent](docs/guide/multi-agent-modes.md) | Sub-agents, teammates, and team coordination |
+| [Code Search & Index](docs/guide/code-index.md) | `code_search`, `@file` fuzzy mention, what the background index covers, budgets and freshness |
 | [LAN Chat](docs/guide/lan-chat.md) | Real-time messaging between instances on your LAN |
 | [Configuration](docs/guide/configuration.md) | Full config file reference |
 | [Adaptive Timeout](docs/design/adaptive-timeout.md) | Per-tool category-based timeout design |

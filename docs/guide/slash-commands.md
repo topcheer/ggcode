@@ -184,7 +184,7 @@ Quick-send messages to other ggcode instances on your LAN directly from the main
 | `Ctrl+O` | Cycle output style (default → concise → detailed → socratic) |
 | `Ctrl+\` | Toggle compact mode (hide/show sidebar) |
 | `Ctrl+T` | Toggle config save scope (global ↔ instance) |
-| `Ctrl+X` | Open terminal pane menu (tmux/Ghostty/Warp/Kitty/iTerm2) |
+| `Ctrl+X` | Open the tmux action menu (inside tmux only; see `/tmux`) |
 | `Ctrl+Shift+C` | Copy last assistant response to clipboard |
 | `Shift+Tab` | Cycle permission mode (supervised → bypass) |
 | `Alt+Up` / `Alt+K` | Cycle to previous session |

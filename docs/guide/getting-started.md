@@ -52,6 +52,9 @@ Type a message and press Enter. ggcode will:
 1. Send your message to the configured LLM
 2. Stream the response in real-time
 3. Execute any tool calls (file reads, searches, etc.) with your approval
+4. Close the turn with a system line showing when the agent finished - `Finished at 2026-11-24 09:08:07`
+   (`Canceled at` / `Failed at` for the other outcomes) - so if you step away for hours you can see at a glance
+   when the work stopped. Resumed sessions print a recap with the last-active time for the same reason.
 
 ### Input Modes
 

@@ -1,5 +1,12 @@
 # Orphaned Background Command Detection
 
+> **Status: removed in the #5942 guidance-injection trim (2026-11-24).** The
+> detector (`internal/agent/bgorphan_detect.go`) and its reminder were deleted as
+> coaching noise; the agent is still told about unfinished background jobs by
+> the stop-before gates, not by an in-loop hint. Kept as a historical design
+> record - the code paths below no longer exist. See
+> [`guidance-injection-trim.md`](guidance-injection-trim.md).
+
 ## Problem
 
 AI coding agents frequently start background commands (dev servers, test watchers, file watchers, long-running builds) via `start_command` and then forget to check their output in subsequent iterations. This leads to:

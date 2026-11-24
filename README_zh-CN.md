@@ -111,6 +111,7 @@ ggcode
 | [ACP / 编辑器](docs/guide/acp.md) | JetBrains、Zed 等 ACP 兼容编辑器 |
 | [任务委托](docs/guide/delegation.md) | 委托任务给 Copilot、Claude、Cursor 等外部 Agent |
 | [多 Agent 模式](docs/guide/multi-agent-modes.md) | 子 Agent、团队协作 |
+| [代码搜索与索引](docs/guide/code-index.md) | `code_search`、`@` 模糊文件引用、后台索引的范围 / 预算 / 刷新机制 |
 | [局域网聊天](docs/guide/lan-chat.md) | 实例之间的局域网实时消息 |
 | [配置参考](docs/guide/configuration.md) | 完整配置文件说明 |
 | [项目记忆](docs/guide/project-memory.md) | GGCODE.md / AGENTS.md / CLAUDE.md |
