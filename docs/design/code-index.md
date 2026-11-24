@@ -1,6 +1,7 @@
 # Code Index (BM25 background index for `code_search`)
 
-> Status: implemented; loop-closure fixes in #5945 (2026-11-24). Code:
+> Status: implemented; loop-closure fixes in #5945 (2026-11-24). User-facing guide:
+> [`docs/guide/code-index.md`](../guide/code-index.md). Code:
 > `internal/tool/code_index_manager.go`, consumer `internal/tool/code_search.go`.
 
 ## The loop

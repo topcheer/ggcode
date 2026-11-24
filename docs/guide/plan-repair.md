@@ -1,5 +1,11 @@
 # 计划监控与修复（plan monitoring → repair verdict）
 
+> **状态：文中的 in-loop 提示已在 #5942–#5944 的 guidance-injection 精简中移除（2026-11-24）。**
+> `checkPlanDrift` 的 nudge、三值裁决状态机与 `subgoal_track` 已一并删除；agent 不再在运行中收到计划漂移提醒，
+> 停止前的 evidence gate 仍会在工作未完成时拦截。`plan_drift.go` 仅保留计划采集 / 遵循度状态（供 Turn Impact
+> 读取），不再输出提示。本文保留为历史实现记录，文中的提示路径已不存在。
+> 保留/移除清单见 [`docs/design/guidance-injection-trim.md`](../design/guidance-injection-trim.md)。
+
 ## 问题（#plan-repair-verdict P1）
 
 计划监控此前是 **fire-once 散文**：`plan_drift.checkPlanDrift` 首查即置 `fired=true`（且置位在判空返回**之前**——首查无漂移也会烧掉全 run 唯一告警），此后漂移持续/加深均静默；`subgoal_track` 同为 `sgMaxWarns=1`。对标前沿：ContextFlow（arXiv:2605.19314）scoped updates、PhyAgentOS（arXiv:2607.16636）success/failure/**replan** 三值裁决、RoboBRIDGE（2607.27881）deviation-triggered replanning。

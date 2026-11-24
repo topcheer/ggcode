@@ -216,16 +216,6 @@ internal/
     wechat_panel.go        # WeChat adapter panel
     wecom_panel.go         # WeCom adapter panel
     whatsapp_panel.go      # WhatsApp adapter panel
-    extpane/               # External terminal pane management
-      manager.go           # PaneManager: lifecycle, maxPanes=10, failed-agent blocklist
-      tmux.go              # Tmux backend (priority 1 if $TMUX set)
-      kitty.go             # Kitty backend (priority 2, KITTY_WINDOW_ID)
-      iterm2.go            # iTerm2 backend (priority 3, TERM_PROGRAM=="iTerm2")
-      iterm2_other.go      # iTerm2 no-op stub (non-darwin)
-      format.go            # Logfile path formatting
-      sizing.go            # Pane sizing helpers (pixel estimation)
-      pixel_unix.go        # TIOCGWINSZ pixel size detection (unix)
-      pixel_other.go       # Pixel size stub (non-unix)
     cmdpane/               # Command pane management
       manager.go           # CmdPaneManager: terminal pane for running commands
 
@@ -542,8 +532,6 @@ CI alignment: `scripts/dev/verify-ci.sh` mirrors the CI pipeline and clears prov
 - **Relay backpressure**: Peer writes in `ggcode-relay` use blocking sends with a 30s write deadline instead of buffered channel drops, preventing silent data loss during slow connections.
 - **Relay event dedup**: `room.upsertHistoryEvent()` deduplicates by sessionID+eventID so replayed events don't accumulate. `snapshot_reset` (empty eventID) is not persisted to SQLite.
 - **Swarm task board**: Tasks are assigned to specific teammates via `swarm_task_create` with `assignee`, which pushes directly to the assignee's inbox. Unassigned tasks can be claimed by any idle teammate. Task completion is tracked on a shared board visible to all teammates. `swarm_task_create` also accepts `depends_on` (a list of prerequisite task IDs): a task with incomplete dependencies stays blocked on the board — it is not delivered to any inbox and `swarm_task_claim` rejects claims — and unblocks automatically once every dependency completes. `swarm_task_list` annotates blocked tasks with `(blocked by: ...)`.
-- **Extpane backend detection**: When terminal environments nest (e.g. iTerm2 inside tmux), tmux wins because `$TMUX` is checked first. Each backend captures its own window ID at init to avoid self-closure. `maxPanes=10` hard cap; `failed[agentID]` permanent blocklist after first failure.
-- **Extpane tmux hook suppression**: User tmux configs with `set-hook -g after-new-window 'command-prompt ...'` would block tab creation. The tmux backend temporarily suppresses this hook before `new-window`, then restores it.
 - **TunnelHost unified management**: `agentruntime.TunnelHost` manages tunnel event streaming for all three surfaces (TUI, Daemon, Wails). Stream callbacks route through `PushStreamEvent` → broker → event recorder (persist) → session store → online broker (forward to mobile).
 - **Interrupt/exit cascading**: ctrl+c/esc calls `cancelActiveRun()` which also calls `subAgentMgr.CancelAll()` and `swarmMgr.CancelAll()`, cancelling all running sub-agents and swarm teammates on interrupt.
 - **Config validation**: Legacy `provider`/`providers` keys are explicitly rejected at load time; only `vendor`/`endpoint`/`vendors` schema is supported.
@@ -731,17 +719,13 @@ The agent loop (`internal/agent/`) includes multiple research-inspired optimizat
 | Tool-use input clearing | `agent_precompact.go` | Anthropic context engineering | Truncate old edit/write Input args after result cleared |
 | Superseded reads | `manager.go` (context) | Headroom | Compact stale re-reads of same file |
 | Tool output guard | `tool_output_guard.go` | Chroma context fill study | Progressive truncation by context fill % |
-| Budget guard | `budget_guard.go` | BAGEN (arXiv:2606.00198) | Per-step token cost trend monitoring |
-| Error classifier | `error_classifier.go` | AgentDebug (arXiv:2509.25370) | 10-category error-specific guidance on first error |
+| Error classifier | `error_classifier.go` | AgentDebug (arXiv:2509.25370) | 10-category tool-error classification; state only - feeds the weakness signal / Turn Impact (the per-error guidance hint was removed with the advisory sweep) |
 | Confidence scorer | `confidence.go` | HTC (arXiv:2601.15778) | Holistic 6-signal trajectory quality metric |
-| Error streak | `loop_detect.go` | SICA (arXiv:2504.15228) | Progressive guidance at 4/7/10 consecutive errors |
 | Drift detection | `overseer.go` | SICA | Progressive drift at 20/40/60 iterations |
 | Repetition tracker | `repetition_tracker.go` | SICA | Detect failed-edit clusters on same file |
 | Ratchet rules | `ratchet.go` | SICA | Learn error patterns from failures, match proactively (reactive result-injection channel removed with the advisory-gate sweep; RuleStore data layer remains) |
-| Strategy playbook | `playbook.go` | ACE (ICLR 2026) | Learn successful tool patterns, inject as hints |
-| Smart verify hint | `verify_hint.go` | Generate-Verify-Fix loop | Post-edit build reminders with smart reset |
+| Smart verify hint | `verify_hint.go` | Generate-Verify-Fix loop | Tracks source edits and verify commands for the end-of-turn evidence gate (the post-edit build reminder hint was removed with the advisory sweep) |
 | Fallback checkpoint | `agent_compact.go` | — | Force checkpoint when messages > 500 even if compaction fails |
-| Prompt cache keepalive | `cache_keepalive.go` | Aider pattern | Ping provider every 270s during idle to keep cache warm (Anthropic only) |
 | Token calibration | `token_calibrator.go` (context) | — | Self-calibrating char/token ratio using API feedback |
 | MCP read-only mode | `readonly.go` (mcp) | Devin enterprise | Per-server read_only flag blocks write-type tool calls |
 

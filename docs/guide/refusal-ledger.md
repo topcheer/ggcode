@@ -62,4 +62,4 @@ you:  /refusals clear                                  → wipe all
 
 - **constraint_amnesia.go** — advisory reminder layer (1 warning/run, run-scoped). The refusal ledger is the enforcement layer the paper demands; both extract from the same message stream.
 - **approval-memory / cmd deny patterns** — cover the approval UI and command approvals respectively; neither covers conversational refusals.
-- **intervention_ledger.go** — the file-discipline template (atomic write, rolling window, `/x clear` UX) this ledger follows.
+- **intervention_ledger.go** — the file-discipline template (atomic write, rolling window, `/x clear` UX) this ledger follows (that file was removed in the #5942 guidance-injection trim; the ledger described here is unchanged).

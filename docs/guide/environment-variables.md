@@ -35,7 +35,7 @@ ggcode reads configuration from `GGCODE_*` environment variables. Unless noted o
 | `GGCODE_TOOL_DEDUP` | Kill switch for the tool-result dedup ledger. | `0` disables the ledger entirely. |
 | `GGCODE_TOOL_SEARCH` | Opt in/out of dynamic tool search (schema pruning for very large tool registries). | `on` / `off`; default off. |
 | `GGCODE_JOB_MEM_LIMIT` | Per-background-job memory limit. | Bytes (uint). |
-| `GGCODE_CODE_INDEX_MAX_TERMS` | Cap on code index terms. | Integer. |
+| `GGCODE_CODE_INDEX_MAX_TERMS` | Cap on code index terms (see [Code Search & Index](code-index.md)). | Integer; default 1500000, negative = unlimited. |
 | `GGCODE_BROWSER_PROFILE_GC` | Toggle GC of leaked browser profiles. | `0` disables. |
 | `GGCODE_BROWSER_PROFILE_TTL_DAYS` | Age threshold before a stale browser profile is collected. | Days (integer). |
 
