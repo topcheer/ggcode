@@ -211,12 +211,16 @@ func (m Model) statuslineBar() string {
 	return lipgloss.NewStyle().Foreground(mutedTextColor).Render(" " + text)
 }
 
+// statuslineTruncate bounds a statusline segment to max display cells. It
+// runs on every render, so it must be linear: the previous version re-measured
+// lipgloss.Width on runes[:i] for every removed rune (O(n^2) through the uax29
+// grapheme iterator - #5920, same family as the status bar fix in #5950).
 func statuslineTruncate(s string, max int) string {
-	runes := []rune(s)
-	for i := len(runes); i > 0; i-- {
-		if lipgloss.Width(string(runes[:i])) <= max-1 {
-			return string(runes[:i]) + "…"
-		}
+	if max <= 1 {
+		return ""
 	}
-	return ""
+	if lipgloss.Width(s) <= max {
+		return s
+	}
+	return fitDisplayWidth(s, max-1) + "…"
 }
