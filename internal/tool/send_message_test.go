@@ -22,8 +22,8 @@ func TestSendMessageToolDescriptionsClarifyWorkerSemantics(t *testing.T) {
 		"finished runs never see them",
 		"spawn a new agent",
 		"Delivery confirms mailbox enqueue only",
-		"subagent_context",
-		"teammate_results for tm-*",
+		"subagent_context (live events, works for agent-* and tm-*)",
+		"teammate_results for a tm-* teammate",
 		"best-effort broadcast",
 	} {
 		if !strings.Contains(desc, want) {

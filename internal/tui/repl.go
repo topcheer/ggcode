@@ -1129,6 +1129,10 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 
 	tools.Unregister("send_message")
 	tools.Register(tool.SendMessageTool{Manager: r.model.subAgentMgr, SwarmMgr: mgr})
+	// tm-* teammates have their own event ring in the swarm manager; re-register
+	// the live-context tool so the leader can watch a teammate in-flight too.
+	tools.Unregister("subagent_context")
+	tools.Register(tool.SubagentContextTool{Manager: r.model.subAgentMgr, Swarm: mgr})
 
 	swarmTextThrottle := newTextThrottleMap(500 * time.Millisecond)
 
