@@ -1138,6 +1138,26 @@ func (m *Manager) TeammateSnapshot(tmID string) (TeammateSnapshot, bool) {
 	return TeammateSnapshot{}, false
 }
 
+// AppendTeammateEventForTest feeds a teammate's event ring directly so
+// tools that render teammate context can be tested without a provider.
+// Mirrors subagent.Manager.EmitForTest.
+func (m *Manager) AppendTeammateEventForTest(tmID string, events ...TeammateEvent) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, team := range m.teams {
+		team.mu.RLock()
+		tm, ok := team.Teammates[tmID]
+		team.mu.RUnlock()
+		if ok {
+			for _, ev := range events {
+				tm.appendEvent(ev)
+			}
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) TeammateEventsSince(tmID string, fromIdx int) ([]TeammateEvent, int, bool) {
 	m.mu.Lock()
 	for _, team := range m.teams {
