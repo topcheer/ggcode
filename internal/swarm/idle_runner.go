@@ -663,9 +663,23 @@ func executeTask(
 		textBuf.Reset()
 		tm.appendEvent(TeammateEvent{Type: TeammateEventText, Text: text})
 	}
+	// Reasoning deltas arrive per token; coalesce them into one ring event
+	// per segment. Otherwise a single answer floods the 200-entry ring (a
+	// live probe dropped 1581 events and evicted every tool call/result),
+	// which defeats subagent_context's "is it stuck?" view of a teammate.
+	var reasoningBuf strings.Builder
+	flushReasoning := func() {
+		if reasoningBuf.Len() == 0 {
+			return
+		}
+		text := reasoningBuf.String()
+		reasoningBuf.Reset()
+		tm.appendEvent(TeammateEvent{Type: TeammateEventReasoning, Text: text})
+	}
 	err := agent.RunStream(subCtx, prompt, func(event provider.StreamEvent) {
 		switch event.Type {
 		case provider.StreamEventText:
+			flushReasoning()
 			output.WriteString(event.Text)
 			textBuf.WriteString(event.Text)
 			if onEvent != nil {
@@ -679,11 +693,14 @@ func executeTask(
 				})
 			}
 		case provider.StreamEventReasoning:
-			if strings.TrimSpace(event.Text) == "" {
+			if event.Text == "" {
 				return
 			}
-			tm.appendEvent(TeammateEvent{Type: TeammateEventReasoning, Text: event.Text})
-			if onEvent != nil {
+			flushText()
+			// keep whitespace-only deltas in the ring buffer (they separate
+			// words once coalesced); the live TUI stream keeps skipping them.
+			reasoningBuf.WriteString(event.Text)
+			if onEvent != nil && strings.TrimSpace(event.Text) != "" {
 				onEvent(Event{
 					Type:         "teammate_reasoning",
 					TeamID:       team.ID,
@@ -695,6 +712,8 @@ func executeTask(
 			}
 		case provider.StreamEventToolCallDone:
 			flushText()
+
+			flushReasoning()
 			debug.Log("swarm", "teammate %s tool call done", tm.ID)
 			lastToolName = event.Tool.Name
 			tm.appendEvent(TeammateEvent{
@@ -717,6 +736,8 @@ func executeTask(
 			}
 		case provider.StreamEventToolResult:
 			flushText()
+
+			flushReasoning()
 			tm.appendEvent(TeammateEvent{
 				Type:     TeammateEventToolResult,
 				ToolName: lastToolName,
@@ -740,6 +761,8 @@ func executeTask(
 			}
 		case provider.StreamEventError:
 			flushText()
+
+			flushReasoning()
 			output.WriteString(fmt.Sprintf("\n[error: %v]", event.Error))
 			if streamErr == nil {
 				streamErr = event.Error
@@ -752,6 +775,8 @@ func executeTask(
 		}
 	})
 	flushText()
+
+	flushReasoning()
 
 	if err == nil && streamErr != nil {
 		err = streamErr
