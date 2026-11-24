@@ -16,36 +16,6 @@ func TestToolEffTracker_BasicTracking(t *testing.T) {
 	}
 }
 
-func TestToolEffTracker_AllErrorsFiresGuidance(t *testing.T) {
-	tr := newToolEffTracker()
-
-	var guidance string
-	for i := 0; i < 3; i++ {
-		guidance = tr.recordCall("grep", "error: pattern invalid", true)
-	}
-	if guidance == "" {
-		t.Fatal("expected guidance after 3 consecutive failures")
-	}
-	if !strings.Contains(guidance, "grep") {
-		t.Errorf("guidance should mention tool name, got: %s", guidance)
-	}
-	if !strings.Contains(guidance, "Tool Effectiveness") {
-		t.Errorf("guidance should have header, got: %s", guidance)
-	}
-}
-
-func TestToolEffTracker_EmptyResultsFireGuidance(t *testing.T) {
-	tr := newToolEffTracker()
-
-	var guidance string
-	for i := 0; i < 3; i++ {
-		guidance = tr.recordCall("grep", "No matches found", false)
-	}
-	if guidance == "" {
-		t.Fatal("expected guidance after 3 empty search results")
-	}
-}
-
 func TestToolEffTracker_MixedResultsNoGuidance(t *testing.T) {
 	tr := newToolEffTracker()
 
@@ -99,36 +69,6 @@ func TestToolEffTracker_Reset(t *testing.T) {
 	}
 	if len(tr.calls) != 0 {
 		t.Fatal("reset should clear calls")
-	}
-}
-
-func TestToolEffTracker_SpecificToolAlternatives(t *testing.T) {
-	tr := newToolEffTracker()
-
-	var guidance string
-	for i := 0; i < 3; i++ {
-		guidance = tr.recordCall("edit_file", "old_text not found in file", false)
-	}
-	if guidance == "" {
-		t.Fatal("expected guidance for edit_file failures")
-	}
-	if !strings.Contains(guidance, "Re-read") && !strings.Contains(guidance, "read") {
-		t.Errorf("guidance should suggest re-reading file, got: %s", guidance)
-	}
-}
-
-func TestToolEffTracker_GenericFallback(t *testing.T) {
-	tr := newToolEffTracker()
-
-	var guidance string
-	for i := 0; i < 3; i++ {
-		guidance = tr.recordCall("custom_tool_xyz", "error: something failed", true)
-	}
-	if guidance == "" {
-		t.Fatal("expected generic guidance for unknown tool")
-	}
-	if !strings.Contains(guidance, "different tool") {
-		t.Errorf("generic guidance should suggest different tool, got: %s", guidance)
 	}
 }
 
@@ -253,18 +193,6 @@ func TestIssue1211_EditRejectionPhrasesScopedToEditTools(t *testing.T) {
 	}
 }
 
-func TestToolEffTracker_TruncationAdvisory(t *testing.T) {
-	tr := newToolEffTracker()
-
-	var guidance string
-	for i := 0; i < 3; i++ {
-		guidance = tr.recordCall("run_command", "Output truncated: too many lines to display", false)
-	}
-	if guidance == "" {
-		t.Fatal("expected guidance for truncated output pattern")
-	}
-}
-
 func TestIssue1208_TruncationMarkerAnchoring(t *testing.T) {
 
 	benign := []string{
@@ -333,30 +261,5 @@ func TestToolEffTracker_PerToolIsolation(t *testing.T) {
 	}
 	if tr.totals["read_file"] != 1 {
 		t.Errorf("read_file total should be 1, got %d", tr.totals["read_file"])
-	}
-}
-
-func TestAgentHasToolEffTracker(t *testing.T) {
-	a := &Agent{toolEff: newToolEffTracker()}
-	if a.toolEff == nil {
-		t.Fatal("Agent.toolEff should be non-nil when initialized")
-	}
-
-	fired := false
-	for i := 0; i < 4; i++ {
-		if g := a.toolEff.recordCall("grep", "No matches found", false); g != "" {
-			fired = true
-		}
-	}
-	if g := a.toolEff.recordCall("grep", "error: invalid pattern", true); g != "" {
-		fired = true
-	}
-	if !fired {
-		t.Fatal("expected tool effectiveness guidance after 4 empty + 1 error grep calls via Agent.toolEff")
-	}
-
-	a.toolEff.reset()
-	if len(a.toolEff.totals) != 0 || len(a.toolEff.calls) != 0 {
-		t.Fatal("toolEff.reset() should clear per-tool data")
 	}
 }

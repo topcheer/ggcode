@@ -29,10 +29,11 @@ func (f funcWatcher) ObservePostTool(tc provider.ToolCallDelta, result tool.Resu
 	return f(tc, result, iter)
 }
 
-// guardZoneWatchers returns the guard-zone family in original inline order:
-// build idempotency, tainted-data influence (2), SLO error budget,
-// exfiltration chain, serial-read/reasoning observation, edit coverage,
-// self-model, tool effectiveness.
+// guardZoneWatchers returns the guard-zone family: build-idempotency ledger,
+// tainted-data influence (2), SLO error budget, exfiltration chain,
+// serial-read/reasoning observation, edit-coverage ledger, self-model,
+// tool-effectiveness ledger. Only the security and budget watchers still
+// return an advisory; the rest record state only.
 func (a *Agent) guardZoneWatchers() []postToolWatcher {
 	return []postToolWatcher{
 		funcWatcher(a.watchBuildIdempotency),
@@ -65,11 +66,10 @@ func (a *Agent) runGuardZoneWatchers(tc provider.ToolCallDelta, result tool.Resu
 
 // ---- watcher bodies (verbatim former inline blocks) -----------------------
 
+// watchBuildIdempotency: state recording only (the "[Build Idempotency]"
+// advisory was removed as noise; the effect-ledger side effect stays).
 func (a *Agent) watchBuildIdempotency(tc provider.ToolCallDelta, result tool.Result, iter int) string {
-	if idempWarn := a.buildIdempot.recordToolCall(tc.Name, tc.Arguments, iter); idempWarn != "" {
-		debug.Log("agent", "Iteration %d: build idempotency violation detected", iter)
-		return idempWarn
-	}
+	_ = a.buildIdempot.recordToolCall(tc.Name, tc.Arguments, iter)
 	return ""
 }
 
@@ -115,14 +115,10 @@ func (a *Agent) observeSerialRead(tc provider.ToolCallDelta, result tool.Result,
 	return ""
 }
 
+// watchEditCoverage: state recording only (the coverage-gap advisory was
+// removed as noise).
 func (a *Agent) watchEditCoverage(tc provider.ToolCallDelta, result tool.Result, iter int) string {
-	if covWarn := a.editCoverage.recordToolCall(tc.Name, string(tc.Arguments)); covWarn != "" {
-		debug.Log("agent", "Iteration %d: verification coverage gap detected", iter)
-		if cmd := extractCommandFromToolCall(tc.Arguments); cmd != "" {
-			a.scopeNarrow.lastCoverageWarnedCmd = cmd
-		}
-		return covWarn
-	}
+	_ = a.editCoverage.recordToolCall(tc.Name, string(tc.Arguments))
 	return ""
 }
 
@@ -138,11 +134,10 @@ func (a *Agent) observeSelfModel(tc provider.ToolCallDelta, result tool.Result, 
 	return ""
 }
 
+// watchToolEffectiveness: state recording only (the "[Tool Effectiveness]"
+// advisory was removed as noise).
 func (a *Agent) watchToolEffectiveness(tc provider.ToolCallDelta, result tool.Result, iter int) string {
-	if effGuidance := a.toolEff.recordCall(tc.Name, result.Content, result.IsError); effGuidance != "" {
-		debug.Log("agent", "Iteration %d: tool effectiveness guidance for %s", iter, tc.Name)
-		return effGuidance
-	}
+	_ = a.toolEff.recordCall(tc.Name, result.Content, result.IsError)
 	return ""
 }
 

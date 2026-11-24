@@ -265,23 +265,3 @@ func TestSelfModGuardFileOpsShapes1492(t *testing.T) {
 		}
 	}
 }
-
-func TestSerialReadLSPChainExempt1492(t *testing.T) {
-	s := newSerialReadState()
-	for i, tool := range []string{"lsp_symbols", "lsp_definition", "lsp_references"} {
-		s.recordToolCall(tool)
-		if msg := s.endTurn(i + 1); msg != "" {
-			t.Fatalf("LSP serial chain must be exempt, got: %s", msg)
-		}
-	}
-
-	s2 := newSerialReadState()
-	s2.recordToolCall("lsp_symbols")
-	s2.endTurn(1)
-	s2.recordToolCall("lsp_definition")
-	s2.endTurn(2)
-	s2.recordToolCall("read_file")
-	if msg := s2.endTurn(3); msg == "" {
-		t.Fatal("mixed streak (non-LSP read present) must still fire")
-	}
-}

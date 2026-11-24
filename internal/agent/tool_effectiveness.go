@@ -241,30 +241,7 @@ func (t *toolEffTracker) recordCall(toolName, content string, isError bool) stri
 	}
 
 	t.firedCount[toolName]++
-	return t.buildGuidance(toolName, rate, successes, len(recent))
-}
-
-func (t *toolEffTracker) buildGuidance(toolName string, rate float64, successes, total int) string {
-	alts, ok := toolAltSuggestions[toolName]
-	if !ok {
-
-		alts = []string{
-			"Try a different tool or approach",
-			"Verify your inputs (parameters, paths, patterns) are correct",
-			"Break the task into smaller, more verifiable steps",
-		}
-	}
-
-	pct := int(rate * 100)
-	header := fmt.Sprintf("Tool effectiveness warning: %s has only %d%% success rate (%d/%d recent calls succeeded).",
-		toolName, pct, successes, total)
-
-	lines := append([]string{header, "Consider:"}, alts...)
-
-	debug.Log("tool-effectiveness", "injecting guidance for %s (rate=%.2f, fire #%d)",
-		toolName, rate, t.firedCount[toolName])
-
-	return "[Tool Effectiveness] " + strings.Join(lines, "\n  - ")
+	return "" // the "[Tool Effectiveness]" advisory was removed as noise
 }
 
 func (t *toolEffTracker) summary() string {
