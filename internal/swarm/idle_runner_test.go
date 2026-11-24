@@ -823,3 +823,95 @@ func TestIdleRunner_CoalescesReasoningDeltas(t *testing.T) {
 		t.Fatalf("expected 6 non-blank per-delta teammate_reasoning stream events, got %d", streamReasoning)
 	}
 }
+
+// A long thinking phase must still surface as progress: with the segment
+// flush window shortened, deltas arriving after the window are cut into a
+// new ring event instead of sitting in the buffer (live: working 70s, empty ring).
+type slowReasoningAgent struct{}
+
+func (a *slowReasoningAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent), origin ...string) error {
+	onEvent(provider.StreamEvent{Type: provider.StreamEventReasoning, Text: "thinking"})
+	time.Sleep(3 * teammateSegmentFlush)
+	onEvent(provider.StreamEvent{Type: provider.StreamEventReasoning, Text: " still thinking"})
+	onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "DONE"})
+	return nil
+}
+
+func TestIdleRunner_FlushesStaleSegmentByTime(t *testing.T) {
+	old := teammateSegmentFlush
+	teammateSegmentFlush = 40 * time.Millisecond
+	defer func() { teammateSegmentFlush = old }()
+
+	tm := &Teammate{ID: "tm-1", Name: "docs-web", Status: TeammateIdle, Inbox: make(chan MailMessage, 16)}
+	team := &Team{ID: "team-1", Name: "test", LeaderID: "leader", Teammates: map[string]*Teammate{"tm-1": tm}, Tasks: task.NewManager()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tm.ctx = ctx
+	go runTeammateLoop(ctx, tm, team, &slowReasoningAgent{}, newTestManager(), nil, 30*time.Minute)
+	tm.Inbox <- MailMessage{From: "leader", Content: "probe", Type: "task"}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, total := tm.EventsSince(0); total >= 3 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	events, _ := tm.EventsSince(0)
+	var kinds []string
+	for _, ev := range events {
+		switch ev.Type {
+		case TeammateEventReasoning:
+			kinds = append(kinds, "reasoning")
+		case TeammateEventText:
+			kinds = append(kinds, "text")
+		}
+	}
+	if got := strings.Join(kinds, ","); got != "reasoning,reasoning,text" {
+		t.Fatalf("expected the stale segment to be cut by time, got: %s (%+v)", got, events)
+	}
+	if events[0].Text != "thinking" || events[1].Text != " still thinking" {
+		t.Fatalf("unexpected segment texts: %q", []string{events[0].Text, events[1].Text})
+	}
+}
+
+// Parallel tool calls: both calls are announced before any result arrives, so
+// results must be attributed by call ID, not by the most recent call.
+type parallelToolsAgent struct{}
+
+func (a *parallelToolsAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent), origin ...string) error {
+	onEvent(provider.StreamEvent{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{Name: "run_command", ID: "c1", Arguments: json.RawMessage(`{}`)}})
+	onEvent(provider.StreamEvent{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{Name: "read_file", ID: "c2", Arguments: json.RawMessage(`{}`)}})
+	onEvent(provider.StreamEvent{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{Name: "read_file", ID: "c2"}, Result: "readme"})
+	onEvent(provider.StreamEvent{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{Name: "run_command", ID: "c1"}, Result: "docs-web-probe-2"})
+	onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "DONE"})
+	return nil
+}
+
+func TestIdleRunner_AttributesResultsByToolCallID(t *testing.T) {
+	tm := &Teammate{ID: "tm-1", Name: "docs-web", Status: TeammateIdle, Inbox: make(chan MailMessage, 16)}
+	team := &Team{ID: "team-1", Name: "test", LeaderID: "leader", Teammates: map[string]*Teammate{"tm-1": tm}, Tasks: task.NewManager()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tm.ctx = ctx
+	go runTeammateLoop(ctx, tm, team, &parallelToolsAgent{}, newTestManager(), nil, 30*time.Minute)
+	tm.Inbox <- MailMessage{From: "leader", Content: "probe", Type: "task"}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, total := tm.EventsSince(0); total >= 5 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	events, _ := tm.EventsSince(0)
+	var got []string
+	for _, ev := range events {
+		if ev.Type == TeammateEventToolResult {
+			got = append(got, ev.ToolName+": "+ev.Result)
+		}
+	}
+	if strings.Join(got, " | ") != "read_file: readme | run_command: docs-web-probe-2" {
+		t.Fatalf("results misattributed: %q", got)
+	}
+}

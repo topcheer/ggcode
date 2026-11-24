@@ -15,6 +15,10 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
+// teammateSegmentFlush is the max wall-clock window an open text/reasoning
+// segment may buffer before it is cut into a ring event. Var so tests can shorten it.
+var teammateSegmentFlush = 2 * time.Second
+
 func runTeammateLoop(
 	ctx context.Context,
 	tm *Teammate,
@@ -653,14 +657,26 @@ func executeTask(
 	var output strings.Builder
 	var textBuf strings.Builder
 	lastToolName := ""
+	// toolNames maps call ID -> tool name so a result is attributed to the
+	// call it belongs to. With parallel tool calls every call is announced
+	// before any result arrives, so "most recent call" mislabels results
+	// (live: the echo output was tagged [result] read_file).
+	toolNames := map[string]string{}
 
 	var streamErr error
+	// teammateSegmentFlush bounds how long an open text/reasoning segment may
+	// buffer before it is cut into a ring event, so a long thinking or
+	// writing phase still shows up as progress in subagent_context instead
+	// of "no events recorded yet" for a minute (observed live: working 70s,
+	// empty ring).
+	var textSegStart time.Time
 	flushText := func() {
 		if textBuf.Len() == 0 {
 			return
 		}
 		text := textBuf.String()
 		textBuf.Reset()
+		textSegStart = time.Time{}
 		tm.appendEvent(TeammateEvent{Type: TeammateEventText, Text: text})
 	}
 	// Reasoning deltas arrive per token; coalesce them into one ring event
@@ -668,18 +684,30 @@ func executeTask(
 	// live probe dropped 1581 events and evicted every tool call/result),
 	// which defeats subagent_context's "is it stuck?" view of a teammate.
 	var reasoningBuf strings.Builder
+	var reasoningSegStart time.Time
 	flushReasoning := func() {
 		if reasoningBuf.Len() == 0 {
 			return
 		}
 		text := reasoningBuf.String()
 		reasoningBuf.Reset()
+		reasoningSegStart = time.Time{}
 		tm.appendEvent(TeammateEvent{Type: TeammateEventReasoning, Text: text})
+	}
+	// segmentOverdue reports whether the open segment exceeded the flush window.
+	segmentOverdue := func(started time.Time) bool {
+		return !started.IsZero() && time.Since(started) >= teammateSegmentFlush
 	}
 	err := agent.RunStream(subCtx, prompt, func(event provider.StreamEvent) {
 		switch event.Type {
 		case provider.StreamEventText:
 			flushReasoning()
+			if segmentOverdue(textSegStart) {
+				flushText()
+			}
+			if textSegStart.IsZero() {
+				textSegStart = time.Now()
+			}
 			output.WriteString(event.Text)
 			textBuf.WriteString(event.Text)
 			if onEvent != nil {
@@ -697,6 +725,12 @@ func executeTask(
 				return
 			}
 			flushText()
+			if segmentOverdue(reasoningSegStart) {
+				flushReasoning()
+			}
+			if reasoningSegStart.IsZero() {
+				reasoningSegStart = time.Now()
+			}
 			// keep whitespace-only deltas in the ring buffer (they separate
 			// words once coalesced); the live TUI stream keeps skipping them.
 			reasoningBuf.WriteString(event.Text)
@@ -712,10 +746,12 @@ func executeTask(
 			}
 		case provider.StreamEventToolCallDone:
 			flushText()
-
 			flushReasoning()
 			debug.Log("swarm", "teammate %s tool call done", tm.ID)
 			lastToolName = event.Tool.Name
+			if event.Tool.ID != "" {
+				toolNames[event.Tool.ID] = event.Tool.Name
+			}
 			tm.appendEvent(TeammateEvent{
 				Type:     TeammateEventToolCall,
 				ToolName: event.Tool.Name,
@@ -736,11 +772,14 @@ func executeTask(
 			}
 		case provider.StreamEventToolResult:
 			flushText()
-
 			flushReasoning()
+			resultTool := toolNames[event.Tool.ID]
+			if resultTool == "" {
+				resultTool = lastToolName
+			}
 			tm.appendEvent(TeammateEvent{
 				Type:     TeammateEventToolResult,
-				ToolName: lastToolName,
+				ToolName: resultTool,
 				ToolID:   event.Tool.ID,
 				Result:   event.Result,
 				IsError:  event.IsError,
@@ -752,7 +791,7 @@ func executeTask(
 					TeamID:       team.ID,
 					TeammateID:   tm.ID,
 					TeammateName: tm.Name,
-					CurrentTool:  lastToolName,
+					CurrentTool:  resultTool,
 					ToolID:       event.Tool.ID,
 					Result:       event.Result,
 					IsError:      event.IsError,
@@ -761,7 +800,6 @@ func executeTask(
 			}
 		case provider.StreamEventError:
 			flushText()
-
 			flushReasoning()
 			output.WriteString(fmt.Sprintf("\n[error: %v]", event.Error))
 			if streamErr == nil {
@@ -775,7 +813,6 @@ func executeTask(
 		}
 	})
 	flushText()
-
 	flushReasoning()
 
 	if err == nil && streamErr != nil {
