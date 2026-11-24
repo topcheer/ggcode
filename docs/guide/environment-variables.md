@@ -38,6 +38,7 @@ ggcode reads configuration from `GGCODE_*` environment variables. Unless noted o
 | `GGCODE_CODE_INDEX_MAX_TERMS` | Cap on code index terms (see [Code Search & Index](code-index.md)). | Integer; default 1500000, negative = unlimited. |
 | `GGCODE_BROWSER_PROFILE_GC` | Toggle GC of leaked browser profiles. | `0` disables. |
 | `GGCODE_BROWSER_PROFILE_TTL_DAYS` | Age threshold before a stale browser profile is collected. | Days (integer). |
+| `GGCODE_BROWSER_IDLE_SECS` | How long an unused browser instance (profile + Chrome process) survives after its last `browser` call before it is shut down; `0` disables idle shutdown. | Seconds (integer); default 180. |
 
 ## Debugging & observability
 

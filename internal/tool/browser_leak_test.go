@@ -177,3 +177,111 @@ func TestGCStaleBrowserProfilesDisabled(t *testing.T) {
 		t.Error("GC=0 must not remove anything")
 	}
 }
+
+// helper: a profile whose teardown is observable.
+func newObservedProfile(lastUsed time.Time) (*browserProfile, *bool, *bool) {
+	allocCancelled, tabCancelled := false, false
+	p := &browserProfile{
+		lastUsed:    lastUsed,
+		allocCancel: func() { allocCancelled = true },
+		tabs:        map[string]*browserTab{"default": {cancel: func() { tabCancelled = true }}},
+	}
+	return p, &allocCancelled, &tabCancelled
+}
+
+// Agents almost never call action=close, so an idle browser (and, on an
+// animated / 3D page, its 100%-CPU SwiftShader GPU helper) used to outlive
+// its last call until the LRU cap or process exit. The reaper ends it after
+// the idle timeout.
+func TestReapIdleBrowserProfiles(t *testing.T) {
+	t.Setenv("GGCODE_BROWSER_IDLE_SECS", "")
+	b := &Browser{profiles: make(map[string]*browserProfile)}
+	now := time.Now()
+
+	idleP, allocCancelled, tabCancelled := newObservedProfile(now.Add(-defaultBrowserIdleTimeout - time.Minute))
+	freshP, freshAlloc, _ := newObservedProfile(now.Add(-10 * time.Second))
+	b.profiles["idle"] = idleP
+	b.profiles["fresh"] = freshP
+
+	b.reapIdleBrowserProfiles(now)
+
+	if _, ok := b.profiles["idle"]; ok {
+		t.Fatal("idle profile must be removed")
+	}
+	if !*allocCancelled || !*tabCancelled {
+		t.Fatalf("idle profile must be torn down (tab cancel=%v, allocator cancel=%v)", *tabCancelled, *allocCancelled)
+	}
+	if _, ok := b.profiles["fresh"]; !ok {
+		t.Fatal("recently used profile must survive")
+	}
+	if *freshAlloc {
+		t.Fatal("recently used profile must not be cancelled")
+	}
+	if idleP.tabs != nil {
+		t.Fatal("torn-down profile must have no tabs left")
+	}
+}
+
+func TestReapIdleBrowserProfilesDisabledByEnv(t *testing.T) {
+	t.Setenv("GGCODE_BROWSER_IDLE_SECS", "0")
+	b := &Browser{profiles: make(map[string]*browserProfile)}
+	now := time.Now()
+	_, allocCancelled, _ := newObservedProfile(now.Add(-time.Hour))
+	p := &browserProfile{lastUsed: now.Add(-time.Hour), allocCancel: func() { *allocCancelled = true }}
+	b.profiles["idle"] = p
+
+	b.reapIdleBrowserProfiles(now)
+
+	if _, ok := b.profiles["idle"]; !ok || *allocCancelled {
+		t.Fatal("GGCODE_BROWSER_IDLE_SECS=0 must disable idle reaping")
+	}
+}
+
+func TestReapIdleBrowserProfilesEnvOverride(t *testing.T) {
+	t.Setenv("GGCODE_BROWSER_IDLE_SECS", "3600") // one hour: a 10-min idle profile stays
+	b := &Browser{profiles: make(map[string]*browserProfile)}
+	now := time.Now()
+	p, allocCancelled, _ := newObservedProfile(now.Add(-10 * time.Minute))
+	b.profiles["idle"] = p
+	b.reapIdleBrowserProfiles(now)
+	if _, ok := b.profiles["idle"]; !ok || *allocCancelled {
+		t.Fatal("10-minute idle profile must survive a 1-hour threshold")
+	}
+
+	t.Setenv("GGCODE_BROWSER_IDLE_SECS", "60") // one minute: a 10-min idle profile goes
+	b.reapIdleBrowserProfiles(now)
+	if _, ok := b.profiles["idle"]; ok || !*allocCancelled {
+		t.Fatal("10-minute idle profile must be reaped under a 1-minute threshold")
+	}
+}
+
+func TestBrowserIdleTimeoutEnvParsing(t *testing.T) {
+	t.Setenv("GGCODE_BROWSER_IDLE_SECS", "")
+	if got := browserIdleTimeout(); got != defaultBrowserIdleTimeout {
+		t.Fatalf("default = %s, want %s", got, defaultBrowserIdleTimeout)
+	}
+	for in, want := range map[string]time.Duration{"0": 0, "90": 90 * time.Second, "-5": defaultBrowserIdleTimeout, "abc": defaultBrowserIdleTimeout, " 120 ": 120 * time.Second} {
+		t.Setenv("GGCODE_BROWSER_IDLE_SECS", in)
+		if got := browserIdleTimeout(); got != want {
+			t.Errorf("env %q -> %s, want %s", in, got, want)
+		}
+	}
+}
+
+// Idle accounting runs from the end of an action, so a long action is not
+// reaped mid-flight by the idle reaper.
+func TestTouchProfileAfterAction(t *testing.T) {
+	b := &Browser{profiles: make(map[string]*browserProfile)}
+	old := time.Now().Add(-time.Hour)
+	p, _, _ := newObservedProfile(old)
+	b.profiles["default"] = p
+
+	b.touchProfile("default")
+	if !p.lastUsed.After(old.Add(30 * time.Minute)) {
+		t.Fatal("touchProfile must refresh lastUsed")
+	}
+	b.touchProfile("does-not-exist") // must not panic / create anything
+	if len(b.profiles) != 1 {
+		t.Fatal("touchProfile must not create profiles")
+	}
+}

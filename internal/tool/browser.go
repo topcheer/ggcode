@@ -24,6 +24,7 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
@@ -32,6 +33,7 @@ type browserProfile struct {
 	allocCancel context.CancelFunc
 	tabs        map[string]*browserTab
 	lastUsed    time.Time
+	headless    bool
 }
 
 type browserTab struct {
@@ -80,14 +82,7 @@ func (b *Browser) Close() error {
 	defer b.mu.Unlock()
 
 	for name, p := range b.profiles {
-
-		for _, tab := range p.tabs {
-			tab.cancel()
-		}
-		p.tabs = nil
-
-		p.allocCancel()
-		delete(b.profiles, name)
+		b.closeProfileLocked(name, p)
 	}
 	return nil
 }
@@ -111,7 +106,7 @@ func (b *Browser) Parameters() json.RawMessage {
 		},
 		"profile": {
 			"type": "string",
-			"description": "Chrome profile name. Each profile runs a separate Chrome instance with its own cookies, extensions, and settings. Use 'default' for a clean ephemeral profile, or specify a name like 'work', 'personal' to persist data between sessions. Defaults to 'default' (temporary, cleared on exit). 'system' is a persistent dedicated profile under ~/.ggcode/browser-profiles/system - it does NOT reuse your logged-in Chrome session (Chrome locks the default user data dir while running, and Chrome 136+ disables CDP debugging on it), so reuse of an already-open browser is not supported; log in once inside the 'system' profile and it persists across sessions."
+			"description": "Chrome profile name. Each profile runs a separate Chrome instance with its own cookies, extensions, and settings. Use 'default' for a clean ephemeral profile, or specify a name like 'work', 'personal' to persist data between sessions. Defaults to 'default' (temporary, cleared on exit). 'system' is a persistent dedicated profile under ~/.ggcode/browser-profiles/system - it does NOT reuse your logged-in Chrome session (Chrome locks the default user data dir while running, and Chrome 136+ disables CDP debugging on it), so reuse of an already-open browser is not supported; log in once inside the 'system' profile and it persists across sessions. Any browser instance is shut down automatically after 3 minutes without use (GGCODE_BROWSER_IDLE_SECS), so there is no need to call action 'close' unless you want to end one sooner; if its Chrome process died meanwhile, the next call starts a fresh one."
 		},
 		"session": {
 			"type": "string",
@@ -406,7 +401,15 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	// #5209 D4: Execute-level errcode choke point - every IsError Result
 	// from any action leaves with exactly one [error_code=X] prefix
 	// (idempotent: browserActionFailure output passes through untouched).
+	b.setProfileLifecycle(args.Profile, page.SetWebLifecycleStateStateActive)
 	res, herr := handler(b, ctx, &args)
+	// Freeze every tab of the profile the moment the action is done: a headless
+	// page with animation / WebGL otherwise keeps the SwiftShader GPU process at
+	// 100% CPU per core for as long as the (never closed) browser lives.
+	b.setProfileLifecycle(args.Profile, page.SetWebLifecycleStateStateFrozen)
+	// Idle accounting runs from the END of the last action, so a long wait /
+	// navigate is never reaped mid-flight by the idle reaper.
+	b.touchProfile(args.Profile)
 	if herr != nil {
 		return res, herr
 	}
@@ -555,6 +558,14 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 	if headlessMode {
 		opts = append(opts, chromedp.Headless)
 	}
+	if runtime.GOOS == "darwin" {
+		// Never touch the macOS keychain: a Chrome started by an agent (SSH /
+		// remote-desktop / locked-keychain session) otherwise raises a modal
+		// "A keychain cannot be found to store Chrome" dialog that blocks the
+		// process until someone clicks it - every browser call then times out.
+		// Puppeteer / Playwright pass the same flag for the same reason.
+		opts = append(opts, chromedp.Flag("use-mock-keychain", true))
+	}
 
 	if name != "default" {
 		dataDir := filepath.Join(homeDir(), ".ggcode", "browser-profiles", name)
@@ -570,6 +581,7 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 		allocCtx:    allocCtx,
 		allocCancel: allocCancel,
 		tabs:        make(map[string]*browserTab),
+		headless:    headlessMode,
 	}
 	p.touch()
 	b.profiles[name] = p
@@ -578,10 +590,32 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 	return p, nil
 }
 
+// getSession returns the tab for (profile, session), starting the browser
+// if needed. When the profile's browser process is gone (crash, OOM kill,
+// an operator killing a leaked Chrome), the profile is dropped and the
+// start is retried once on a fresh Chrome instead of failing until restart.
 func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*browserTab, error) {
+	tab, startFailed, err := b.getSessionAttempt(profileName, sessionID, headless)
+	if err == nil || !startFailed {
+		return tab, err
+	}
+	b.mu.Lock()
+	if p, ok := b.profiles[profileName]; ok {
+		b.closeProfileLocked(profileName, p)
+	}
+	b.mu.Unlock()
+	debug.Log("browser", "profile %q lost its browser process (tab start: %v) - starting a fresh one", profileName, err)
+	tab, _, err = b.getSessionAttempt(profileName, sessionID, headless)
+	return tab, err
+}
+
+// getSessionAttempt is one getSession attempt; startFailed reports that the
+// Chrome startup handshake itself failed (browser process dead), as opposed
+// to a timeout or a profile error.
+func (b *Browser) getSessionAttempt(profileName, sessionID string, headless *bool) (*browserTab, bool, error) {
 	p, err := b.getProfile(profileName, headless)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	b.mu.Lock()
@@ -590,19 +624,19 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 		b.mu.Unlock()
 		p, err = b.getProfile(profileName, headless)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		b.mu.Lock()
 		if cur2, ok2 := b.profiles[profileName]; !ok2 || cur2 != p {
 			b.mu.Unlock()
-			return nil, fmt.Errorf("browser profile %q was evicted while creating the session; retry the operation", profileName)
+			return nil, false, fmt.Errorf("browser profile %q was evicted while creating the session; retry the operation", profileName)
 		}
 	}
 	defer b.mu.Unlock()
 
 	if tab, ok := p.tabs[sessionID]; ok {
 		if tab.ctx.Err() == nil {
-			return tab, nil
+			return tab, false, nil
 		}
 		delete(p.tabs, sessionID)
 	}
@@ -615,11 +649,11 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	case runErr := <-startDone:
 		if runErr != nil {
 			cancel()
-			return nil, fmt.Errorf("failed to create browser tab (startup handshake failed): %w", runErr)
+			return nil, true, fmt.Errorf("failed to create browser tab (startup handshake failed): %w", runErr)
 		}
 	case <-time.After(60 * time.Second):
 		cancel()
-		return nil, fmt.Errorf("failed to create browser tab: startup handshake timed out after 60s (Chrome/Edge boot is too slow or blocked by AV/EDR on this machine)")
+		return nil, false, fmt.Errorf("failed to create browser tab: startup handshake timed out after 60s (Chrome/Edge boot is too slow or blocked by AV/EDR on this machine)")
 	}
 
 	safego.Go("browser.dialogHandler", func() {
@@ -634,7 +668,7 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 
 	tab := &browserTab{ctx: taskCtx, cancel: cancel}
 	p.tabs[sessionID] = tab
-	return tab, nil
+	return tab, false, nil
 }
 
 func isAllowedNavScheme(rawURL string) bool {
