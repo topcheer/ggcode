@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,10 @@ type CodeSearch struct {
 	SandboxCheck AllowedPathChecker
 	Index        *CodeIndexManager
 }
+
+// codeIndexSearchWait bounds how long a cold-start code_search blocks for an
+// in-flight index build before answering "being built, try again".
+const codeIndexSearchWait = 2 * time.Second
 
 func (t CodeSearch) Name() string { return "code_search" }
 
@@ -93,6 +98,11 @@ func (t CodeSearch) Execute(ctx context.Context, input json.RawMessage) (Result,
 	t.Index.StartBackgroundIndex()
 
 	results, err := t.Index.Search(args.Query, args.MaxResults)
+	if errors.Is(err, errIndexNotReady) && t.Index.WaitReady(codeIndexSearchWait) {
+		// A warm-cache cold start publishes within a few hundred ms; one short
+		// wait here beats a model round-trip on "try again in a few seconds".
+		results, err = t.Index.Search(args.Query, args.MaxResults)
+	}
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}

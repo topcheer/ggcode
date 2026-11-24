@@ -537,6 +537,11 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 	a.memoryTool = newMemoryToolState()
 
 	if tools != nil {
+		// Share the registry's code index so edits made through this agent
+		// MarkDirty it. Before this only the TUI called SetCodeIndexManager, so
+		// headless / daemon / ACP / A2A agents never invalidated the index and
+		// code_search went stale until the 5-minute periodic scan.
+		a.codeIndex = tools.CodeIndex()
 		if rcTool, ok := tools.Get("run_command"); ok {
 			if rc, ok := rcTool.(*tool.RunCommand); ok {
 				rc.OmittedOutputSpiller = func(source, omitted string) string {
