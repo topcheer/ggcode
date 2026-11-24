@@ -78,6 +78,10 @@ Representative families:
    per-tool timeouts are a feature, not a hint.
 4. **Self-review** (`diff_summary_gate.go`) stays but filters `.ggcode/` and
    every `.gitignore`-matched path, and stays silent when only noise changed.
+5. **Guard-zone watchers** (`watcher_registry.go`) keep only the security and
+   budget advisories (tainted-data influence, pseudo-directive args,
+   exfiltration chain, SLO error budget). Build-idempotency, edit-coverage and
+   tool-effectiveness watchers still record state but no longer speak.
 
 ## What deliberately stays
 

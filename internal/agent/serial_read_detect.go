@@ -1,10 +1,7 @@
 package agent
 
 import (
-	"strings"
 	"sync"
-
-	"github.com/topcheer/ggcode/internal/debug"
 )
 
 var serialReadOnlyTools = map[string]bool{
@@ -96,38 +93,4 @@ func (s *serialReadState) recordToolCall(toolName string) {
 	} else if serialMutatingTools[toolName] {
 		s.currentTurnHasMutation = true
 	}
-}
-
-func (s *serialReadState) endTurn(iteration int) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.currentTurnReadOnly == 1 && !s.currentTurnHasMutation {
-		s.consecutiveSingleReads++
-		if strings.HasPrefix(s.currentTurnTool, "lsp_") {
-			s.lspStreak++
-		} else {
-			s.lspStreak = 0
-		}
-	} else {
-		s.consecutiveSingleReads = 0
-		s.lspStreak = 0
-	}
-
-	s.currentTurnReadOnly = 0
-	s.currentTurnHasMutation = false
-	s.currentTurnTool = ""
-
-	if s.consecutiveSingleReads >= 3 && !s.fired {
-		if s.lspStreak >= s.consecutiveSingleReads {
-			debug.Log("agent", "Serial read: skipping fire - streak is the mandated LSP serial chain (iteration %d)", iteration)
-			return ""
-		}
-		s.fired = true
-		debug.Log("agent", "Serial read serialization detected: %d consecutive single-read turns at iteration %d", s.consecutiveSingleReads, iteration)
-		return strings.TrimSpace(`
-[Batch Opportunity] You have issued exactly one read-only tool call per turn for the last 3+ turns. These independent reads could have been batched into a single turn with parallel tool calls, saving 2+ LLM round-trips and reducing context fragmentation. When you need to explore multiple independent targets (files, searches, symbols), issue them together in one turn. Reserve single-call turns for dependent operations where each result informs the next call.`)
-	}
-
-	return ""
 }
