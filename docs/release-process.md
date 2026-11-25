@@ -154,9 +154,9 @@ Important details:
 - The verify-ci script unsets `ZAI_API_KEY`, `GGCODE_ZAI_API_KEY`, and `ZAI_MODEL`.
 - The script also clears inherited `GIT_*` environment variables so nested test repos behave like CI.
 
-### 3.5 Bump mobile build number (when releasing mobile changes)
+### 3.5 Bump mobile build number (every release)
 
-If the release includes mobile (`mobile/flutter/`) changes, bump the build number **before** the release commit. Build numbers use the format `YYYYMMDDNN` (date + 2-digit daily sequence):
+Every `v*` tag triggers the mobile release pipeline (`.github/workflows/mobile-release.yml` builds and ships Android and iOS regardless of whether `mobile/flutter/` changed), so bump the build number **before** the release commit on every release. Build numbers use the format `YYYYMMDDNN` (date + 2-digit daily sequence):
 
 ```bash
 # Auto-increment from current value (same day → +1, new day → reset to 01)
@@ -408,7 +408,7 @@ Use this checklist for every real release:
 2. Create `docs/releases/vX.Y.Z.md`.
 3. Update `GGCODE.md` release pointer.
 4. Update `docs/releases/README.md` current pointer.
-5. **If mobile changes are included**: `cd mobile/flutter && bash scripts/version_sync.sh X.Y.Z` then stage the four updated files.
+5. **Every release** (every tag builds and ships mobile): `cd mobile/flutter && bash scripts/version_sync.sh X.Y.Z` then stage the four updated files.
 6. Run `make sync-model-caps` and stage any diff in `internal/config/` (see §3.3).
 7. Run `make verify-ci`.
 8. Review `git status`.
@@ -419,6 +419,7 @@ Use this checklist for every real release:
     - `Release` (verify → release → smoke tests → macos-pkg → windows-msi → publish-site-release-branch)
     - `CI` (build → vet → test)
     - `CodeQL` (security scan)
+    - `Mobile Release` (verify → build & deploy Android / iOS; runs on every `v*` tag)
 13. If any workflow fails:
     - `gh run view <run-id> --log-failed` to identify root cause
     - Fix the issue locally, commit, push to `main`
