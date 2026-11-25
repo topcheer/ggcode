@@ -21,7 +21,8 @@ export type StreamMsg =
   | { type: "subagent_delta"; id: string; kind: "text" | "reasoning"; text: string }
   | { type: "subagent_done"; id: string; result: string; is_error: boolean }
   // 插入消息队列三事件(append/dequeue/clear)+连接时 list 快照——镜像 TUI 排队区
-  | { type: "queue"; event: "append" | "dequeue" | "clear" | "list"; text?: string; items?: string[]; count?: number }
+  // 每个事件都附带全量 items 快照与递增 seq(以快照为准;乱序到达的旧快照按 seq 丢弃)
+  | { type: "queue"; event: "append" | "dequeue" | "clear" | "list"; text?: string; items?: string[]; count?: number; seq?: number }
   // ask-type gates (#5865): approval | ask_user, replayed on connect
   | { type: "interaction"; kind: "approval" | "ask_user"; id: string; tool_name?: string; input?: string; request?: AskUserRequest }
   | { type: "interaction_resolved"; kind: "approval" | "ask_user"; id: string; decision?: string }

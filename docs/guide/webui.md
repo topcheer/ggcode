@@ -17,9 +17,10 @@ go build -tags goolm ./cmd/ggcode   # 重新编译使新 dist 生效
 
 ## 功能与交互
 
-- **聊天为核心**：首屏 WelcomeScreen + 大输入框；流式 markdown 渲染、思考过程折叠块、乐观 UI（离线消息队列补发）；截图/图片直接粘贴进输入框（缩略图预览，随消息发送）
+- **聊天为核心**：首屏 WelcomeScreen + 大输入框；流式 markdown 渲染、思考过程折叠块（旁注形态：无外框、一条细竖线引导、中性弱色文字，比正文与工具卡更轻；流式期间展开贴底，完成后收起为一行并显示行数）、乐观 UI（离线消息队列补发）；截图/图片直接粘贴进输入框（缩略图预览，随消息发送）
 - **工具卡片（tool call / tool result）**：头部始终给结论——状态灯 → 类别图标 → **展示名**（服务端 `tool.DescribeTool`，与 TUI/IM/desktop/移动端同源，永不显示 `read_file` 这类裸名；MCP 工具显示 `Server › Tool`）→ 一行目标 → 结果徽章（`tool.DescribeToolResult` 摘要或按类别推导：行数 / 匹配数 / 失败原因 / 退出码）→ 耗时。正文按**类别**渲染而非 JSON 原文：命令 → shell 块（description 标题 + 完整命令）+ 终端输出（stdout / `STDERR:` / `Command failed:` 分段）；读文件 → `cat -n` 行号代码视图 + 语言标签 + 范围；编辑 → `old_text → new_text` 内联 diff（红/绿、`−n +m` 计数），结果里的 diff 同样着色；写文件 → 内容预览；grep/glob → `path:line: text` 按文件分组、计数；网页 → markdown 渲染；todo → 清单；task/cron/lanchat → 键值表 + 摘要载荷；其他/MCP → 参数键值表 + 文本/JSON 结果。大输出默认截断（200 行 / 20k 字符，可"显示全部"），每卡可切到"原始 JSON"。默认展开规则：错误、编辑、todo、小结果直接展开，大输出折叠由徽章给结论。结果按 `id` 精确关联（并行同名调用不串），历史回填时 tool_result 跨消息按 `tool_id` 关联，并剥离面向模型的 `<untrusted_tool_output>` 围栏。前端渲染冒烟测试：`cd web && npm run test:render`
 - **左侧栏可折叠（沉浸模式）**：桌面宽度下 `⌘/Ctrl+B`、聊天页左上角的侧栏开关、或命令面板「收起/展开左侧栏」三处均可切换，收起后对话区占满整宽；偏好写入 `localStorage`（`ggcode-sidebar-collapsed`），刷新后保持。窄屏仍是抽屉（`☰`），不存在折叠态。导航项（会话 / 设置 / 共享 / 隧道）使用随主题取色的线性 SVG 图标（`web/src/components/NavIcon.tsx`），底栏显示 `WebUI · 已连接/连接中/未连接` 状态点与当前工作区名；右侧活动栏仅在有内容（Spawn 详情 / 任务清单 / 子代理流 / Cron 事件）时才在桌面占位，空栏不再吃掉对话宽度；欢迎页快捷入口的说明文案面向用户，不显示研发阶段编号
+- **插入消息队列镜像**：agent 忙碌时从页面发送的消息进入 TUI 队列，输入框上方显示居中的窄条「排队中 N 条 · 最近一条（单行截断）· 本轮结束后依次发送」。服务端每个队列事件都附带全量快照与递增 `seq`（`internal/webui/server_queue.go`），前端以快照为准、丢弃乱序旧快照——带图片的消息出队后横幅必定消失，事件丢失也会被下一个事件/重连的快照自愈
 - **Composer**：`⌘/Ctrl+Enter` 发送、`Shift+Enter` 换行、输入 `@` 唤起文件（实时搜索 workspace 真实路径）/技能/Agent 彩色引用弹层、活跃发光态
 - **子代理委派**：spawn_agent 等委派在聊天流中以单行 `Spawn <目标>` 条目呈现；右栏自动显示**子代理实时流监视器**（推理/文本增量，完结转状态色，空闲自动隐藏）——TUI/WebUI/桌面共用同一 `StreamEventSubagent*` 事件契约；swarm 队友（tm-*）生命周期事件同样经此面板流式呈现（`internal/tui/repl.go` 将 `teammate_text`→SubagentDelta、`teammate_idle`→SubagentDone 复用既有通道，#5881）
 - **命令面板**：`⌘/Ctrl+K`（切视图/切主题/新建会话/切换最近会话）；`⌘/Ctrl+N` 新会话；TUI 内 `/webui` 打印地址并唤起浏览器（含 `#token=`，服务器未运行时友好提示）

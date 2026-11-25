@@ -82,9 +82,15 @@ export default function Chat() {
             <MessageList />
           </div>
           {queueItems.length > 0 && (
-            <div className="border-t border-border px-4 py-1.5 text-ui-xs text-foreground-subtle">
-              排队中 {queueItems.length} 条(本轮结束后依次发送)
-              <div className="mt-0.5 truncate text-foreground-subtlest">{queueItems[queueItems.length - 1]}</div>
+            // 排队条:居中的窄条(与阅读列同宽),不横跨整个窗口;长文本单行截断
+            <div className="border-t border-border px-4 py-1.5">
+              <div className="mx-auto flex max-w-[48rem] items-center gap-2 text-ui-xs text-foreground-subtle">
+                <span className="shrink-0">排队中 {queueItems.length} 条</span>
+                <span className="min-w-0 flex-1 truncate text-foreground-subtlest" title={queueItems[queueItems.length - 1]}>
+                  {queueItems[queueItems.length - 1]}
+                </span>
+                <span className="shrink-0 text-foreground-subtlest">本轮结束后依次发送</span>
+              </div>
             </div>
           )}
           <Composer onSend={send} />
