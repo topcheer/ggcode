@@ -37,11 +37,8 @@ func (m *Model) handleClearChat() {
 			m.subAgentMgr.CancelAll()
 		})
 	}
-	if m.swarmMgr != nil {
-		safego.Go("tui.clearChat.cancelSwarm", func() {
-			m.swarmMgr.CancelAll()
-		})
-	}
+	// #5856 user ruling: clear/cancel does NOT cascade into persistent
+	// swarm teams (see cancelActiveRun note).
 
 	if m.session != nil && m.sessionStore != nil {
 		oldSes := m.session
