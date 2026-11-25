@@ -4,6 +4,7 @@ import { ChatWS } from "@/ws/client";
 import MessageList from "@/chat/MessageList";
 import ChatControls, { ModeToggle } from "@/chat/ChatControls";
 import Composer from "@/chat/Composer";
+import InteractionBanner from "@/chat/InteractionBanner";
 import WelcomeScreen from "@/pages/WelcomeScreen";
 import PanelModal from "@/panels/PanelModal";
 import { submitCommand, type PanelDirective } from "@/panels/types";
@@ -74,6 +75,7 @@ export default function Chat() {
           连接断开,自动重连中…(已输入消息将在恢复后补发)
         </div>
       )}
+      <InteractionBanner ws={wsRef.current} />
       {hasMessages ? (
         <>
           <div className="min-h-0 flex-1">

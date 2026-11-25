@@ -1,6 +1,8 @@
 // WS 客户端 — 契约对齐 internal/webui/server_websocket.go（已核）
 // 下行: text_delta|reasoning_delta|tool_call_chunk|tool_call|tool_result|system|done{usage?}|error{error}|user_ack{text}
+//       interaction{kind,id,tool_name?,input?,request?} | interaction_resolved{kind,id,decision} | interaction_ack{id}  (#5865 审批/问卷)
 // 上行: {type:"user_message", text, images?, files?}
+//       {type:"interaction_response", id, decision, answers?}  （应答待处理的审批/问卷）
 // 服务端 30s ping(浏览器自动 pong), 90s 读超时, busy 时回 error
 
 export type StreamMsg =
@@ -17,7 +19,19 @@ export type StreamMsg =
   | { type: "subagent_delta"; id: string; kind: "text" | "reasoning"; text: string }
   | { type: "subagent_done"; id: string; result: string; is_error: boolean }
   // 插入消息队列三事件(append/dequeue/clear)+连接时 list 快照——镜像 TUI 排队区
-  | { type: "queue"; event: "append" | "dequeue" | "clear" | "list"; text?: string; items?: string[]; count?: number };
+  | { type: "queue"; event: "append" | "dequeue" | "clear" | "list"; text?: string; items?: string[]; count?: number }
+  // ask-type gates (#5865): approval | ask_user, replayed on connect
+  | { type: "interaction"; kind: "approval" | "ask_user"; id: string; tool_name?: string; input?: string; request?: AskUserRequest }
+  | { type: "interaction_resolved"; kind: "approval" | "ask_user"; id: string; decision?: string }
+  | { type: "interaction_ack"; id: string };
+
+export type AskUserChoice = { id: string; label: string };
+export type AskUserQuestion = {
+  id: string; title: string; prompt: string; kind: "single" | "multi" | "text";
+  choices?: AskUserChoice[]; allow_freeform?: boolean; placeholder?: string;
+};
+export type AskUserRequest = { title?: string; questions: AskUserQuestion[] };
+export type InteractionAnswer = { question_id: string; choice_ids?: string[]; freeform_text?: string };
 
 type Handlers = {
   onMsg: (m: StreamMsg) => void;
@@ -75,6 +89,12 @@ export class ChatWS {
     const payload = JSON.stringify({ type: "user_message", text, images, files });
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(payload);
     else this.queue.push(payload);
+  }
+
+  /** 应答待处理的审批/问卷 (#5865)。approval: allow|always_allow|deny;ask_user: submitted|cancelled */
+  sendInteractionResponse(id: string, decision: string, answers?: InteractionAnswer[]) {
+    const payload = JSON.stringify({ type: "interaction_response", id, decision, answers });
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(payload);
   }
 
   close() {

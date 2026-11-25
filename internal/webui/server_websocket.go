@@ -167,6 +167,18 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 
 	}
 
+	// #5865: ask-type gates must be answerable from the browser. Replay what
+	// is already pending (a tab opened mid-approval) and stream the rest.
+	var unsubInteractions func()
+	if ib, ok := s.chatBridge.(InteractionBridge); ok {
+		for _, ev := range ib.PendingInteractions() {
+			send(ev)
+		}
+		unsubInteractions = ib.SubscribeInteractions(func(ev InteractionEvent) {
+			send(ev)
+		})
+	}
+
 	for {
 		_, msgBytes, err := conn.ReadMessage()
 		if err != nil {
@@ -174,9 +186,24 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 			if unsub != nil {
 				unsub()
 			}
+			if unsubInteractions != nil {
+				unsubInteractions()
+			}
 			close(writeCh)
 			<-writeDone
 			return
+		}
+
+		// Interaction responses bypass the user_message parser: they answer
+		// a pending gate rather than start a new turn.
+		if resp, isResp := parseInteractionResponse(msgBytes); isResp {
+			ib, ok := s.chatBridge.(InteractionBridge)
+			if ok && ib.RespondInteraction(resp) {
+				send(map[string]interface{}{"type": "interaction_ack", "id": resp.ID})
+			} else {
+				send(map[string]interface{}{"type": "error", "error": fmt.Sprintf("no pending interaction %q (already resolved or unknown)", resp.ID)})
+			}
+			continue
 		}
 
 		msg, errMsg := parseUserMessage(msgBytes)
@@ -424,4 +451,23 @@ func streamEventToJSON(event provider.StreamEvent) map[string]interface{} {
 	default:
 		return nil
 	}
+}
+
+// parseInteractionResponse recognises {"type":"interaction_response",...}
+// from a browser tab. Malformed payloads of this type resolve to an empty
+// response so the handler answers with "no pending interaction" instead of
+// falling through to the user_message parser.
+func parseInteractionResponse(msgBytes []byte) (InteractionResponse, bool) {
+	var head struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(msgBytes, &head); err != nil || head.Type != "interaction_response" {
+		return InteractionResponse{}, false
+	}
+	var resp InteractionResponse
+	if err := json.Unmarshal(msgBytes, &resp); err != nil {
+		return InteractionResponse{}, true
+	}
+	resp.Type = "interaction_response"
+	return resp, true
 }

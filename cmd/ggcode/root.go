@@ -1726,6 +1726,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	tuiBridge := webui.NewTUIChatBridge(ag, &tuiWebchatSender{repl: repl})
 	webuiSrv.SetChatBridge(tuiBridge)
 	repl.SetWebUIBridge(tuiBridge)
+	// #5865: browser tabs answer ask-type gates through the bridge; the REPL
+	// turns the response into a tea message resolved by the Model.
+	tuiBridge.SetInteractionResponder(repl.ResolveWebUIInteraction)
 	// 会话切换执行面注入(webui 发起,实际切换由 TUI resume 全链执行)
 	webuiSrv.SetTunnelStatusFn(repl.TunnelStatusSnapshot)
 	webuiSrv.SetCronListFn(func() []webui.CronJobView {
