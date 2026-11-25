@@ -1,8 +1,17 @@
 import { useState } from "react";
+import NavIcon, { type IconName } from "@/components/NavIcon";
 
 type Props =
   | { embedded?: false } // 独立欢迎页(纯视觉,P0 形态)
   | { embedded: true; onSend: (text: string) => void }; // 嵌入 Chat 空态,可发送
+
+/** 快捷入口:面向用户的说明(不暴露研发阶段/里程碑编号) */
+const QUICK_ENTRIES: { icon: IconName; label: string; note: string }[] = [
+  { icon: "settings", label: "设置", note: "主题、模型、MCP、IM 等配置" },
+  { icon: "clock", label: "定时任务", note: "cron 定时任务,到点自动执行" },
+  { icon: "check", label: "任务清单", note: "agent 执行中的 todo 进度" },
+  { icon: "history", label: "历史会话", note: "切换或回看最近的会话" },
+];
 
 /** WelcomeScreen:居中大 composer+快捷入口;embedded 模式接入真实发送 */
 export default function WelcomeScreen(props: Props) {
@@ -58,19 +67,14 @@ export default function WelcomeScreen(props: Props) {
         </div>
 
         <div className="mt-10 grid w-full grid-cols-2 gap-3 sm:grid-cols-4">
-          {[
-            { icon: "⚙", label: "设置", note: "P2 迁移" },
-            { icon: "⏱", label: "定时任务", note: "cron 待 P2+" },
-            { icon: "✓", label: "任务清单", note: "todo 待 P1.5" },
-            { icon: "🕘", label: "历史会话", note: "sessions 待 P2" },
-          ].map((q) => (
+          {QUICK_ENTRIES.map((q) => (
             <button
               key={q.label}
               className="rounded-xl border border-border bg-card p-3 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
               title={q.note}
             >
-              <span className="text-ui-base">
-                {q.icon} {q.label}
+              <span className="text-ui-base flex items-center gap-2">
+                <NavIcon name={q.icon} className="h-4 w-4 shrink-0" /> {q.label}
               </span>
               <span className="text-ui-xs mt-1 block text-foreground-subtlest">{q.note}</span>
             </button>
