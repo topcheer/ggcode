@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/webui"
 
@@ -59,6 +60,11 @@ type DaemonBridge struct {
 	pendingAsk              *pendingAskUser
 	pendingApproval         chan approvalReply
 	staleReplySuppressUntil time.Time
+	// #5865: browser tabs (webui) are a second answer path next to IM.
+	Interactions            *webui.InteractionHub
+	webuiApprovalCh         chan webui.InteractionResponse
+	webuiAskUserCh          chan webui.InteractionResponse
+	webuiReqSeq             int
 	pendingInterruptions    []pendingInterruption
 	interactiveMsgIDs       map[string]string
 	multiSelectChosen       map[string]bool
@@ -109,7 +115,12 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 		store:    store,
 		sess:     sess,
 		language: emitter.Language(),
+
+		Interactions:    webui.NewInteractionHub(),
+		webuiApprovalCh: make(chan webui.InteractionResponse, 1),
+		webuiAskUserCh:  make(chan webui.InteractionResponse, 1),
 	}
+	b.Interactions.SetResponder(b.routeWebUIInteraction)
 
 	if ag != nil {
 		b.workingDir = ag.WorkingDir()
@@ -630,7 +641,35 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	return nil
 }
 
+// webuiAskUserFirstAnswerWindow is how long a browser tab gets to answer a
+// whole questionnaire before the IM per-question flow takes over.
+const webuiAskUserFirstAnswerWindow = 1500 * time.Millisecond
+
 func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserRequest) (toolpkg.AskUserResponse, error) {
+	// #5865: browser tabs get the whole questionnaire at once; a complete
+	// browser answer short-circuits the per-question IM loop.
+	webuiID := ""
+	if b.Interactions != nil {
+		b.mu.Lock()
+		b.webuiReqSeq++
+		webuiID = fmt.Sprintf("daemon-req-%d", b.webuiReqSeq)
+		b.mu.Unlock()
+		b.Interactions.PublishRequest(webui.InteractionEvent{Kind: webui.InteractionKindAskUser, ID: webuiID, Request: &req})
+		defer b.Interactions.PublishResult(webui.InteractionKindAskUser, webuiID, toolpkg.AskUserStatusSubmitted)
+		// Only a listening tab can answer the whole questionnaire up front;
+		// with none connected go straight to the IM flow (a tab that connects
+		// later still gets the replay and can answer per question below).
+		if b.Interactions.HasSubscribers() {
+			select {
+			case resp := <-b.webuiAskUserCh:
+				return agentruntime.BuildAskUserResponseFromTunnel(req, resp.Decision, resp.Answers), nil
+			case <-ctx.Done():
+				return toolpkg.AskUserResponse{Status: toolpkg.AskUserStatusCancelled, Title: req.Title, QuestionCount: len(req.Questions)}, ctx.Err()
+			case <-time.After(webuiAskUserFirstAnswerWindow):
+				// nobody answered from the browser yet - fall through to IM
+			}
+		}
+	}
 	answers := make([]toolpkg.AskUserAnswer, len(req.Questions))
 	answeredCount := 0
 
@@ -678,6 +717,11 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 		}
 
 		select {
+		case resp := <-b.webuiAskUserCh:
+			if b.Interactions != nil {
+				b.Interactions.PublishResult(webui.InteractionKindAskUser, webuiID, resp.Decision)
+			}
+			return agentruntime.BuildAskUserResponseFromTunnel(req, resp.Decision, resp.Answers), nil
 		case resp := <-pending.response:
 			if len(resp.Answers) > 0 && resp.Answers[0].Answered {
 				answers[i] = resp.Answers[0]
@@ -735,34 +779,26 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 	ch := make(chan approvalReply, 1)
 	b.mu.Lock()
 	b.pendingApproval = ch
+	webuiID := ""
+	if b.Interactions != nil {
+		b.webuiReqSeq++
+		webuiID = fmt.Sprintf("daemon-req-%d", b.webuiReqSeq)
+		b.Interactions.PublishRequest(webui.InteractionEvent{
+			Kind: webui.InteractionKindApproval, ID: webuiID, ToolName: toolName, Input: input,
+		})
+	}
 	b.mu.Unlock()
-	debug.Log("daemon", "approval: waiting for IM reply on tool=%s", toolName)
+	debug.Log("daemon", "approval: waiting for IM or webui reply on tool=%s", toolName)
 
 	select {
 	case reply := <-ch:
-		decision := reply.Decision
-		debug.Log("daemon", "approval: received %v (always=%v) for tool=%s", decision, reply.Always, toolName)
-		if reply.Always && decision == permission.Allow {
-			persistAlwaysAllowGrant(b.agent, toolName, input)
-		}
-		var resultMsg string
-		decisionStr := "deny"
-		if decision == permission.Allow {
-			if reply.Always {
-				decisionStr = "always"
-			} else {
-				decisionStr = "allow"
-			}
-		}
-		if lang == "zh-CN" || lang == "zh" {
-			resultMsg = FormatApprovalResult(ToolLangZhCN, toolName, decisionStr)
-		} else {
-			resultMsg = FormatApprovalResult(ToolLangEn, toolName, decisionStr)
-		}
-		if resultMsg != "" {
-			_ = b.emitter.EmitText(resultMsg)
-		}
-		return decision
+		debug.Log("daemon", "approval: received %v (always=%v) for tool=%s", reply.Decision, reply.Always, toolName)
+		return b.finishApproval(lang, toolName, input, webuiID, reply.Decision, reply.Always)
+	case resp := <-b.webuiApprovalCh:
+		decision, always := webuiApprovalDecision(resp.Decision)
+		debug.Log("daemon", "approval: received from webui %v (always=%v) for tool=%s", decision, always, toolName)
+		b.clearPendingApproval(ch)
+		return b.finishApproval(lang, toolName, input, webuiID, decision, always)
 	case <-ctx.Done():
 		debug.Log("daemon", "approval: context cancelled for tool=%s", toolName)
 		b.mu.Lock()
@@ -779,9 +815,92 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 			b.mu.Unlock()
 			_ = b.emitter.EmitText("⏱ The approval prompt above has expired. Any reply to it now will be treated as a NEW message, not an approval.")
 		}
+		if b.Interactions != nil {
+			b.Interactions.PublishResult(webui.InteractionKindApproval, webuiID, webui.InteractionDecisionCancelled)
+		}
 
 		return permission.DecisionFromContext(ctx.Err())
 	}
+}
+
+// finishApproval is the shared tail of both answer paths (IM reply, browser
+// response): persist an always-allow, tell IM what happened, close the
+// browser tab's request.
+func (b *DaemonBridge) finishApproval(lang, toolName, input, webuiID string, decision permission.Decision, always bool) permission.Decision {
+	if always && decision == permission.Allow {
+		persistAlwaysAllowGrant(b.agent, toolName, input)
+	}
+	decisionStr := "deny"
+	if decision == permission.Allow {
+		if always {
+			decisionStr = "always"
+		} else {
+			decisionStr = "allow"
+		}
+	}
+	var resultMsg string
+	if lang == "zh-CN" || lang == "zh" {
+		resultMsg = FormatApprovalResult(ToolLangZhCN, toolName, decisionStr)
+	} else {
+		resultMsg = FormatApprovalResult(ToolLangEn, toolName, decisionStr)
+	}
+	if resultMsg != "" {
+		_ = b.emitter.EmitText(resultMsg)
+	}
+	if b.Interactions != nil {
+		b.Interactions.PublishResult(webui.InteractionKindApproval, webuiID, decisionStr)
+	}
+	return decision
+}
+
+func (b *DaemonBridge) clearPendingApproval(ch chan approvalReply) {
+	b.mu.Lock()
+	if b.pendingApproval == ch {
+		b.pendingApproval = nil
+	}
+	b.mu.Unlock()
+}
+
+func webuiApprovalDecision(d string) (permission.Decision, bool) {
+	switch d {
+	case webui.InteractionDecisionAllow:
+		return permission.Allow, false
+	case webui.InteractionDecisionAlwaysAllow:
+		return permission.Allow, true
+	default:
+		return permission.Deny, false
+	}
+}
+
+// routeWebUIInteraction is the hub responder (websocket read goroutine):
+// hand the browser response to the waiting gate without blocking.
+func (b *DaemonBridge) routeWebUIInteraction(resp webui.InteractionResponse) {
+	switch resp.Decision {
+	case webui.InteractionDecisionAllow, webui.InteractionDecisionAlwaysAllow, webui.InteractionDecisionDeny:
+		select {
+		case b.webuiApprovalCh <- resp:
+		default:
+		}
+	default:
+		select {
+		case b.webuiAskUserCh <- resp:
+		default:
+		}
+	}
+}
+
+// webui.InteractionBridge: the daemon-hosted webui consumes this via
+// SetChatBridge(bridge).
+func (b *DaemonBridge) SubscribeInteractions(fn func(webui.InteractionEvent)) func() {
+	return b.Interactions.Subscribe(fn)
+}
+
+func (b *DaemonBridge) PendingInteractions() []webui.InteractionEvent {
+	return b.Interactions.Pending()
+}
+
+func (b *DaemonBridge) RespondInteraction(resp webui.InteractionResponse) bool {
+	return b.Interactions.Respond(resp)
 }
 
 func persistAlwaysAllowGrant(ag *agent.Agent, toolName, input string) {

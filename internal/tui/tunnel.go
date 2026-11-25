@@ -188,6 +188,8 @@ func (m *Model) detachTunnelLifecycle() (*tunnel.Session, *tunnel.Broker) {
 	m.resetTunnelMainStream()
 	m.tunnelPendingApprovalID = ""
 	m.tunnelPendingAskUserID = ""
+	m.webUIPendingApprovalID = ""
+	m.webUIPendingAskUserID = ""
 	m.tunnelClientNoticeShown = false
 	m.tunnelSpawned = nil
 	m.tunnelStarting = false

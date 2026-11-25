@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { AskUserRequest } from "@/ws/client";
 
 // 消息模型对齐 provider.ContentBlock / server_websocket.go 线上格式(已核)
 export type Role = "user" | "assistant" | "system";
@@ -27,6 +28,15 @@ export type ToolInvocation = {
 
 type ConnState = "connecting" | "open" | "closed";
 
+/** 待处理的 ask-type gate (#5865):工具审批或 ask_user 问卷,键=id,按到达顺序 */
+export type Interaction = {
+  id: string;
+  kind: "approval" | "ask_user";
+  tool_name?: string;
+  input?: string;
+  request?: AskUserRequest;
+};
+
 /** todo 面板项(运行时实时聚合,键=todo id) */
 export type TodoItem = {
   id: string;
@@ -53,6 +63,7 @@ type ChatStore = {
   subagentStreams: Record<string, SubagentStream>; // §6.1 二层:活跃/完结子代理流
   todos: TodoItem[]; // agent loop 运行时实时推送聚合(todo_write tool_result 解析)
   cronEvents: { text: string; at: string }[]; // [cron] 前缀系统消息归集(右栏 Cron tab)
+  interactions: Interaction[]; // 待应答的审批/问卷(interaction 事件,resolved 时移除)
   loadHistory: () => Promise<void>;
   syncQueue: (items: string[]) => void; // 会话切换/重连后重拉队列快照
   applyMsg: (m: import("@/ws/client").StreamMsg) => void;
@@ -81,6 +92,7 @@ export const useChat = create<ChatStore>((set) => ({
   subagentStreams: {},
   todos: [],
   cronEvents: [],
+  interactions: [],
 
   setConn: (conn) => set({ conn }),
 
@@ -143,7 +155,7 @@ export const useChat = create<ChatStore>((set) => ({
       lastError: null,
     })),
 
-  reset: () => set({ messages: [], busy: false, lastError: null }),
+  reset: () => set({ messages: [], busy: false, lastError: null, interactions: [] }),
 
   syncQueue: (items) => set({ queueItems: items }),
 
@@ -253,6 +265,21 @@ export const useChat = create<ChatStore>((set) => ({
             },
           };
         }
+        case "interaction": {
+          // 审批/问卷到达(含连接时回放):同 id 去重,保持到达顺序
+          if (st.interactions.some((i) => i.id === m.id)) return {};
+          return {
+            interactions: [
+              ...st.interactions,
+              { id: m.id, kind: m.kind, tool_name: m.tool_name, input: m.input, request: m.request },
+            ],
+          };
+        }
+        case "interaction_resolved":
+          // 任一前端(TUI 键盘/IM/移动端/本页)已应答 → 清除
+          return { interactions: st.interactions.filter((i) => i.id !== m.id) };
+        case "interaction_ack":
+          return {};
         case "queue": {
           // 插入消息队列镜像:TUI 排队全链三时机事件+连接时 list 快照
           switch (m.event) {

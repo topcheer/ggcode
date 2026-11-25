@@ -571,6 +571,24 @@ func (r *REPL) SetWebUIBridge(b WebUIEventBroadcaster) {
 	r.model.webuiBridge = b
 }
 
+// ResolveWebUIInteraction is the responder the webui hub calls (on its
+// websocket read goroutine) when a browser tab answers a pending gate. It
+// only enqueues a tea message; the Update loop applies it like a tunnel
+// response, so first-answer-wins is decided in one place.
+func (r *REPL) ResolveWebUIInteraction(resp webui.InteractionResponse) {
+	if r.program == nil {
+		return
+	}
+	switch resp.Decision {
+	case webui.InteractionDecisionAllow, webui.InteractionDecisionAlwaysAllow, webui.InteractionDecisionDeny:
+		r.program.Send(webUIApprovalResponseMsg{id: resp.ID, decision: resp.Decision})
+	case tool.AskUserStatusSubmitted, tool.AskUserStatusCancelled:
+		r.program.Send(webUIAskUserResponseMsg{id: resp.ID, status: resp.Decision, answers: resp.Answers})
+	default:
+		debug.Log("tui", "webui interaction response with unknown decision %q (id=%q) dropped", resp.Decision, resp.ID)
+	}
+}
+
 func (r *REPL) InjectWebchatMessage(text string, images []provider.ContentBlock) {
 	if r.program != nil {
 		r.program.Send(webchatUserMsg{Text: text, Images: images})

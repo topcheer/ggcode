@@ -23,6 +23,7 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
+	"github.com/topcheer/ggcode/internal/webui"
 )
 
 func (m *Model) handleClearChat() {
@@ -237,6 +238,7 @@ func (m *Model) clearPendingApprovals() {
 	if qs := m.pendingQuestionnaire; qs != nil {
 		m.pendingQuestionnaire = nil
 		m.tunnelPendingAskUserID = ""
+		m.resolveWebUIAskUser(toolpkg.AskUserStatusCancelled)
 		if qs.response != nil {
 			resp := qs.buildResponse(toolpkg.AskUserStatusCancelled)
 			select {
@@ -246,6 +248,7 @@ func (m *Model) clearPendingApprovals() {
 		}
 	}
 	m.tunnelPendingApprovalID = ""
+	m.resolveWebUIApproval(webui.InteractionDecisionDeny)
 }
 
 func (m *Model) handleApproval(d permission.Decision) tea.Cmd {
@@ -253,6 +256,9 @@ func (m *Model) handleApproval(d permission.Decision) tea.Cmd {
 	requestID := m.tunnelPendingApprovalID
 	m.pendingApproval = nil
 	m.tunnelPendingApprovalID = ""
+	// Clear every remote copy first so a browser tab never keeps a dead
+	// request on screen, whatever happens to the local waiter below.
+	m.resolveWebUIApproval(tunnelDecisionString(d))
 	if pa == nil || pa.Response == nil {
 		return nil
 	}
@@ -312,6 +318,7 @@ func (m *Model) handleApprovalAllowAlways() tea.Cmd {
 		})
 	}
 	m.pushTunnelApprovalResult(requestID, tunnel.DecisionAlwaysAllow)
+	m.resolveWebUIApproval(webui.InteractionDecisionAlwaysAllow)
 	return nil
 }
 

@@ -454,6 +454,11 @@ type Model struct {
 	webuiURL               string           // WebUI 完整 URL(含 #token)；由 webuiReadyMsg 就绪时写入，/webui 命令消费
 	webuiTunnel            *webui.TunnelCtl // /webui tunnel 控制器(root 注入)
 	webuiBridge            WebUIEventBroadcaster
+	// #5865: pending ids of the approval / ask_user currently surfaced to
+	// browser tabs; empty when nothing is published or no webui is attached.
+	webUIPendingApprovalID string
+	webUIPendingAskUserID  string
+	webUIReqSeq            int
 	updateSvc              *update.Service
 	updateInfo             update.CheckResult
 	updateError            string
@@ -526,6 +531,13 @@ type tunnelShareBootstrapState struct {
 
 type WebUIEventBroadcaster interface {
 	BroadcastEvent(event provider.StreamEvent)
+}
+
+// WebUIInteractionBridge is implemented by *webui.TUIChatBridge: lets the
+// Model surface ask-type gates to browser tabs and resolve them (#5865).
+type WebUIInteractionBridge interface {
+	PublishInteraction(ev webui.InteractionEvent)
+	ResolveInteraction(kind, id, decision string)
 }
 
 type MCPInfo struct {

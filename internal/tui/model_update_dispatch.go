@@ -224,6 +224,13 @@ func init() {
 	regUpdatePlain(func(m Model, msg tunnelAskUserResponseMsg) (tea.Model, tea.Cmd) {
 		return m.handleTunnelAskUserResponse(msg)
 	})
+	// #5865: browser responses take the same path as tunnel responses.
+	regUpdatePlain(func(m Model, msg webUIApprovalResponseMsg) (tea.Model, tea.Cmd) {
+		return m.handleWebUIApprovalResponse(msg)
+	})
+	regUpdatePlain(func(m Model, msg webUIAskUserResponseMsg) (tea.Model, tea.Cmd) {
+		return m.handleWebUIAskUserResponse(msg)
+	})
 	regUpdatePlain(func(m Model, msg tunnelLanguageChangeMsg) (tea.Model, tea.Cmd) {
 		return m.handleTunnelLanguageChangeMsg(msg)
 	})

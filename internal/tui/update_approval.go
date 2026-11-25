@@ -11,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
+	"github.com/topcheer/ggcode/internal/webui"
 )
 
 func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
@@ -22,6 +23,7 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 			m.pushTunnelApprovalResult(oldID, "deny")
 			m.tunnelPendingApprovalID = ""
 		}
+		m.resolveWebUIApproval(webui.InteractionDecisionDeny)
 		safego.Go("tui.model.displaceApproval", func() {
 
 			stale.Response <- permission.Cancelled
@@ -48,6 +50,8 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 			Status:    tunnel.StatusBusy,
 		})
 	}
+	// #5865: browser tabs get the same request the tunnel got.
+	m.webUIPendingApprovalID = m.pushWebUIApprovalRequest(msg.ToolName, msg.Input)
 
 	return m, m.scheduleInputBell("Approval needed: " + msg.ToolName)
 
@@ -101,6 +105,8 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 			Status:    tunnel.StatusBusy,
 		})
 	}
+	// #5865: browser tabs get the same questionnaire the tunnel got.
+	m.webUIPendingAskUserID = m.pushWebUIAskUserRequest(msg.Request)
 
 	return m, m.scheduleInputBell("Question: " + msg.Request.Title)
 

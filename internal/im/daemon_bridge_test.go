@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/webui"
 )
 
 type daemonBridgeMetricsProvider struct {
@@ -908,4 +909,75 @@ func TestExpiryNoticeEmitted(t *testing.T) {
 		}
 		t.Fatal("expiry notice not emitted for cancelled ask_user")
 	})
+}
+
+// #5865: a browser tab is a second answer path next to IM for the daemon's
+// approval gate.
+func TestDaemonApproval_WebUIReply(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := NewDaemonBridge(mgr, nil, emitter, nil, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := make(chan permission.Decision, 1)
+	go func() {
+		result <- bridge.handleApproval(ctx, "run_command", `{"command":"ls"}`)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(bridge.PendingInteractions()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("approval was never published to the webui")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	ev := bridge.PendingInteractions()[0]
+	if ev.Kind != webui.InteractionKindApproval || ev.ToolName != "run_command" || ev.Input != `{"command":"ls"}` {
+		t.Fatalf("unexpected published interaction: %+v", ev)
+	}
+	if !bridge.RespondInteraction(webui.InteractionResponse{ID: ev.ID, Decision: webui.InteractionDecisionAllow}) {
+		t.Fatal("browser response must be accepted while pending")
+	}
+	select {
+	case d := <-result:
+		if d != permission.Allow {
+			t.Fatalf("expected Allow, got %v", d)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("gate did not resolve")
+	}
+	if p := bridge.PendingInteractions(); len(p) != 0 {
+		t.Fatalf("resolved request must leave the pending set, got %+v", p)
+	}
+	bridge.mu.Lock()
+	pendingCh := bridge.pendingApproval
+	bridge.mu.Unlock()
+	if pendingCh != nil {
+		t.Fatal("IM pending channel must be cleared when the webui answered")
+	}
+}
+
+func TestDaemonApproval_WebUIAlwaysAllowPersistsGrant(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := NewDaemonBridge(mgr, nil, emitter, nil, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := make(chan permission.Decision, 1)
+	go func() {
+		result <- bridge.handleApproval(ctx, "run_command", `{"command":"git status"}`)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(bridge.PendingInteractions()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("approval was never published")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	bridge.RespondInteraction(webui.InteractionResponse{ID: bridge.PendingInteractions()[0].ID, Decision: webui.InteractionDecisionAlwaysAllow})
+	if d := <-result; d != permission.Allow {
+		t.Fatalf("expected Allow, got %v", d)
+	}
 }

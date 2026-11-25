@@ -27,10 +27,40 @@ type TUIChatBridge struct {
 	sender WebchatMessageSender
 	subMu  sync.RWMutex
 	subs   []*tuiBridgeSubscriber
+
+	// Interactions (#5865): ask-type gates surfaced to browser tabs. The
+	// TUI publishes approvals / ask_user requests here exactly like it
+	// pushes them to the mobile tunnel, and routes tab responses back.
+	Interactions *InteractionHub
 }
 
 func NewTUIChatBridge(agent TUIAgent, sender WebchatMessageSender) *TUIChatBridge {
-	return &TUIChatBridge{agent: agent, sender: sender}
+	return &TUIChatBridge{agent: agent, sender: sender, Interactions: NewInteractionHub()}
+}
+
+// SetInteractionResponder installs the TUI-side router for browser responses.
+func (b *TUIChatBridge) SetInteractionResponder(fn InteractionResponder) {
+	b.Interactions.SetResponder(fn)
+}
+
+// PublishInteraction / ResolveInteraction are the host-facing surface the
+// TUI Model uses (tui.WebUIInteractionBridge).
+func (b *TUIChatBridge) PublishInteraction(ev InteractionEvent) { b.Interactions.PublishRequest(ev) }
+
+func (b *TUIChatBridge) ResolveInteraction(kind, id, decision string) {
+	b.Interactions.PublishResult(kind, id, decision)
+}
+
+func (b *TUIChatBridge) SubscribeInteractions(fn func(InteractionEvent)) func() {
+	return b.Interactions.Subscribe(fn)
+}
+
+func (b *TUIChatBridge) PendingInteractions() []InteractionEvent {
+	return b.Interactions.Pending()
+}
+
+func (b *TUIChatBridge) RespondInteraction(resp InteractionResponse) bool {
+	return b.Interactions.Respond(resp)
 }
 
 func (b *TUIChatBridge) Messages() []provider.Message {

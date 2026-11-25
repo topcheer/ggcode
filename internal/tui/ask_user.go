@@ -143,6 +143,7 @@ func (m *Model) handleQuestionnaireResult(status string) tea.Cmd {
 	response := qs.buildResponse(status)
 	m.pushTunnelAskUserResponse(m.tunnelPendingAskUserID, response)
 	m.tunnelPendingAskUserID = ""
+	m.resolveWebUIAskUser(status)
 
 	m.emitIMQuestionnaireSummary(qs.request, response)
 
