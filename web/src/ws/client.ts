@@ -9,8 +9,10 @@ export type StreamMsg =
   | { type: "text_delta"; text: string }
   | { type: "reasoning_delta"; text: string }
   | { type: "tool_call_chunk"; id: string; name: string; arguments: string }
-  | { type: "tool_call"; id: string; name: string; arguments: string }
-  | { type: "tool_result"; name: string; result: string; is_error: boolean }
+  // done 事件附带服务端展示名/目标(tool.DescribeTool),卡片永不渲染裸工具名
+  | { type: "tool_call"; id: string; name: string; arguments: string; display_name?: string; detail?: string }
+  // 结果按 id 精确关联;summary/payload/payload_mode 为结果展示形态(tool.DescribeToolResult)
+  | { type: "tool_result"; id?: string; name: string; result: string; is_error: boolean; display_name?: string; detail?: string; summary?: string; payload?: string; payload_mode?: string }
   | { type: "system"; text: string }
   | { type: "done"; usage?: { input_tokens: number; output_tokens: number } }
   | { type: "error"; error: string }

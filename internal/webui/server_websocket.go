@@ -62,17 +62,35 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type contentBlock struct {
-		Type     string          `json:"type"`
-		Text     string          `json:"text,omitempty"`
-		ToolName string          `json:"tool_name,omitempty"`
-		ToolID   string          `json:"tool_id,omitempty"`
-		Input    json.RawMessage `json:"input,omitempty"`
-		Output   string          `json:"output,omitempty"`
-		IsError  bool            `json:"is_error,omitempty"`
+		Type        string          `json:"type"`
+		Text        string          `json:"text,omitempty"`
+		Reasoning   string          `json:"reasoning,omitempty"`
+		ToolName    string          `json:"tool_name,omitempty"`
+		ToolID      string          `json:"tool_id,omitempty"`
+		Input       json.RawMessage `json:"input,omitempty"`
+		DisplayName string          `json:"display_name,omitempty"`
+		Detail      string          `json:"detail,omitempty"`
+		Output      string          `json:"output,omitempty"`
+		IsError     bool            `json:"is_error,omitempty"`
+		Summary     string          `json:"summary,omitempty"`
+		Payload     string          `json:"payload,omitempty"`
+		PayloadMode string          `json:"payload_mode,omitempty"`
 	}
 	type message struct {
 		Role    string         `json:"role"`
 		Content []contentBlock `json:"content"`
+	}
+	// Tool results live in the message AFTER the one that issued the call
+	// (user role in the provider format), so remember every call's input by
+	// id first: the result presentation needs the args, the browser attaches
+	// the result by id.
+	inputByID := make(map[string]string)
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			if b.Type == "tool_use" && b.ToolID != "" {
+				inputByID[b.ToolID] = string(b.Input)
+			}
+		}
 	}
 	result := make([]message, 0, len(msgs))
 	for _, m := range msgs {
@@ -81,7 +99,7 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 		}
 		blocks := make([]contentBlock, 0, len(m.Content))
 		for _, b := range m.Content {
-			blocks = append(blocks, contentBlock{
+			blk := contentBlock{
 				Type:     b.Type,
 				Text:     b.Text,
 				ToolName: b.ToolName,
@@ -89,7 +107,19 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 				Input:    b.Input,
 				Output:   b.Output,
 				IsError:  b.IsError,
-			})
+			}
+			if b.Type == "thinking" || b.Type == "redacted_thinking" {
+				blk.Reasoning = b.ReasoningContent
+			}
+			switch b.Type {
+			case "tool_use":
+				blk.DisplayName, blk.Detail = toolCallDisplay(b.ToolName, string(b.Input)).nameAndDetail()
+			case "tool_result":
+				blk.Output = stripSpotlightWrapper(b.Output)
+				blk.DisplayName, blk.Detail, blk.Summary, blk.Payload, blk.PayloadMode = toolResultDisplay(
+					b.ToolName, inputByID[b.ToolID], blk.Output, b.IsError).resultFields()
+			}
+			blocks = append(blocks, blk)
 		}
 		result = append(result, message{Role: m.Role, Content: blocks})
 	}
@@ -400,15 +430,33 @@ func streamEventToJSON(event provider.StreamEvent) map[string]interface{} {
 			"name": event.Tool.Name, "arguments": string(event.Tool.Arguments),
 		}
 	case provider.StreamEventToolCallDone:
+		// Full args are known here: ship the display form so the browser
+		// renders "Read internal/webui/server.go", not "read_file {json}".
+		rawArgs := string(event.Tool.Arguments)
+		name, detail := toolCallDisplay(event.Tool.Name, rawArgs).nameAndDetail()
 		return map[string]interface{}{
 			"type": "tool_call", "id": event.Tool.ID,
-			"name": event.Tool.Name, "arguments": string(event.Tool.Arguments),
+			"name": event.Tool.Name, "arguments": rawArgs,
+			"display_name": name, "detail": detail,
 		}
 	case provider.StreamEventToolResult:
-		return map[string]interface{}{
-			"type": "tool_result", "name": event.Tool.Name,
+		// The id makes the result attach to the exact call (parallel calls of
+		// the same tool no longer race); summary/payload are the display form.
+		rawArgs := string(event.Tool.Arguments)
+		name, detail, summary, payload, mode := toolResultDisplay(event.Tool.Name, rawArgs, event.Result, event.IsError).resultFields()
+		m := map[string]interface{}{
+			"type": "tool_result", "id": event.Tool.ID, "name": event.Tool.Name,
 			"result": event.Result, "is_error": event.IsError,
+			"display_name": name, "detail": detail,
 		}
+		if summary != "" {
+			m["summary"] = summary
+		}
+		if payload != "" {
+			m["payload"] = payload
+			m["payload_mode"] = mode
+		}
+		return m
 	case provider.StreamEventSubagentDelta:
 		sa := event.Subagent
 		if sa == nil {

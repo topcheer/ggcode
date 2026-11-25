@@ -82,7 +82,7 @@ function splitMarkdownBlocks(text: string): string[] {
   return blocks;
 }
 
-function MarkdownLite({ text }: { text: string }) {
+export function MarkdownLite({ text }: { text: string }) {
   const blocks = splitMarkdownBlocks(text);
   return (
     <div className="text-ui-base flex flex-col gap-2 leading-relaxed">
