@@ -255,30 +255,18 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 			debug.Log("agent", "injected deferred path-scoped project memory for %s (%d files)", targetLabel, len(st.deferredMemoryFiles))
 		}
 
-		if tcMsg, stop := a.toolCallBudget.check(); tcMsg != "" {
-			debug.Log("tool-call-budget", "threshold crossed: calls=%d budget=%d stop=%v",
-				a.toolCallBudget.totalCalls, a.toolCallBudget.effectiveBudget(), stop)
-			if stop {
-
-				runStats.finalize(nil)
-				summary := runStats.Summary()
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventText,
-					Text: fmt.Sprintf("\nTool call budget exhausted (%d calls). Summary: %s.\nYour task may be partially complete - review the changes above. You can continue by sending a follow-up message.", a.toolCallBudget.totalCalls, summary),
-				})
-				err := fmt.Errorf("tool call budget (%d calls) exhausted", a.toolCallBudget.totalCalls)
-				onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
-				return err
-			}
-
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: tcMsg,
-				}},
+		// Only an explicit budget (config tool_call_budget / spawn max_tool_calls)
+		// can end the run here; no default cap, no steering message is injected.
+		if a.toolCallBudget.check() {
+			runStats.finalize(nil)
+			summary := runStats.Summary()
+			onEvent(provider.StreamEvent{
+				Type: provider.StreamEventText,
+				Text: fmt.Sprintf("\nTool call budget exhausted (%d calls). Summary: %s.\nYour task may be partially complete - review the changes above. You can continue by sending a follow-up message.", a.toolCallBudget.totalCalls, summary),
 			})
-			msgs = a.contextManager.Messages()
+			err := fmt.Errorf("tool call budget (%d calls) exhausted", a.toolCallBudget.totalCalls)
+			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
+			return err
 		}
 	}
 

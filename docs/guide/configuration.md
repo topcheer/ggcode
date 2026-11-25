@@ -28,10 +28,10 @@ Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=
 | `api_key` | string | API key (use `${ENV_VAR}` syntax; stored in `keys.env`) |
 | `default_mode` | string | Permission mode for **new** sessions: `supervised` (default) or `bypass`. Legacy names `auto`/`autopilot` normalize to supervised/bypass; `plan` is tool-internal (a stored legacy `plan` value normalizes to `supervised` instead of failing config load) |
 | `language` | string | Interface language: `en` or `zh-CN` |
-| `max_iterations` | int | Agent loop limit per turn (0 = unlimited) |
+| `max_iterations` | int | Agent loop limit per turn (0 = unlimited, the default; applies to every loop - the ACP loop no longer forces 100 when unset) |
 | `session_token_budget` | int | Max total tokens (input + output) per agent run, including sub-agent spend (spawn_agent / use_namedagent). Progressive warnings at 80%/95%, hard stop at 100%. |
 | `session_cost_limit_usd` | float | Max priced USD spend per agent run for metered models with known pricing. Same 80%/95%/100% ladder as `session_token_budget`, priced from the cost table (input/output/cache rates). Subscription/bundled/free or unknown-pricing models accumulate $0 — use `session_token_budget` for those. Default 0 (disabled). |
-| `tool_call_budget` | int | Max total tool calls per agent run. Warnings at 80%/95%, hard stop at 100%. When unset, auto-derived from `max_iterations` (x8), or 500 for unlimited. |
+| `tool_call_budget` | int | Optional hard cap on total tool calls per agent run. 0 (default) = no cap. When set, the run ends with a summary at the cap; no warnings are injected into the conversation. |
 | `output_style` | string | Response verbosity: `default`, `concise` (terse), `detailed` (reasoning + context), `socratic` (guided learning). Default: `default`. Cycle at runtime with `Ctrl+O` or `/style`. |
 | `allowed_dirs` | []string | Directories the agent may access |
 
