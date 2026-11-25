@@ -6,12 +6,11 @@ const copy = (s: string) => s;
 const tabs = [
   { id: 'mac', label: t(locale, 'install.os.mac'), kind: 'cmd', cmd: copy('curl -fsSL https://ggcode.dev/install.sh | bash') },
   { id: 'win', label: t(locale, 'install.os.win'), kind: 'cmd', cmd: copy('irm https://ggcode.dev/install.ps1 | iex') },
-  { id: 'brew', label: t(locale, 'install.os.brew'), kind: 'cmd', cmd: copy('brew install topcheer/tap/ggcode') },
-  { id: 'npm', label: t(locale, 'install.npm'), kind: 'cmd', cmd: copy('npm i -g @topcheer/ggcode') },
+  { id: 'brew', label: t(locale, 'install.os.brew'), kind: 'cmd', cmd: copy('brew install topcheer/homebrew-ggcode/ggcode') },
 ];
 const native = [
-  { id: 'ios', label: t(locale, 'install.ios'), text: t(locale, 'install.ios.text'), cta: t(locale, 'install.ios.cta'), href: 'https://apps.apple.com/app/ggcode/id6745035800' },
-  { id: 'android', label: t(locale, 'install.android'), text: t(locale, 'install.android.text'), cta: t(locale, 'install.android.cta'), href: 'https://play.google.com/store/apps/details?id=dev.ggcode.app' },
+  { id: 'ios', label: t(locale, 'install.ios'), text: t(locale, 'install.ios.text'), cta: t(locale, 'install.ios.cta'), href: 'https://apps.apple.com/us/app/ggcode-mobile/id6770855612' },
+  { id: 'android', label: t(locale, 'install.android'), text: t(locale, 'install.android.text'), cta: t(locale, 'install.android.cta'), href: 'https://play.google.com/store/apps/details?id=gg.ai.ggcode.mobile' },
 ];
 const copyLabel = t(locale, 'install.copy'), copiedLabel = t(locale, 'install.copied');
 ---

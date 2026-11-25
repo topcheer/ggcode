@@ -3,7 +3,15 @@
 ggcode ships prebuilt binaries on every GitHub release. Pick the channel
 that fits your distribution:
 
-## Direct download (all distros)
+## Shell installer (all distros)
+
+```sh
+curl -fsSL https://ggcode.dev/install.sh | bash
+```
+
+Installs to `~/.local/bin` after verifying the archive's SHA-256 (see [install.md](./install.md)).
+
+## Manual download (all distros)
 
 ```sh
 curl -fL https://github.com/topcheer/ggcode/releases/latest/download/ggcode_linux_x86_64.tar.gz | tar -xz

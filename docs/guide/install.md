@@ -6,71 +6,114 @@ All install scripts default to a **non-privileged user install** (no `sudo` or a
 
 ---
 
+## Shell installer (recommended)
+
+**macOS / Linux** — installs to `~/.local/bin`:
+
+```bash
+curl -fsSL https://ggcode.dev/install.sh | bash
+```
+
+**Windows** — PowerShell 5.1+ (installs to `%LOCALAPPDATA%\ggcode\bin` and adds it to the user `PATH`):
+
+```powershell
+irm https://ggcode.dev/install.ps1 | iex
+```
+
+Both installers detect your OS and architecture (`x86_64` / `arm64`), download the matching
+archive from the latest release (resolved through `https://ggcode.dev/downloads/latest/manifest.json`,
+falling back to GitHub), **verify its SHA-256 against the release's `checksums.txt`**, install the
+binary and print the installed version. They never use `sudo` or admin rights.
+
+Useful options:
+
+| | macOS / Linux | Windows (save the script to a file) |
+|---|---|---|
+| Show resolved URLs only | `bash install.sh --dry-run` | `.\install.ps1 -DryRun` |
+| Custom install directory | `GGCODE_INSTALL_DIR=~/.bin bash install.sh` | `.\install.ps1 -InstallDir C:\Tools` |
+| Pin a release | `GGCODE_VERSION=v1.3.292 bash install.sh` | `.\install.ps1 -Version v1.3.292` |
+
+Verify:
+
+```bash
+ggcode --version
+```
+
+---
+
 ## macOS
 
 ### Homebrew
 
 ```bash
-brew tap topcheer/ggcode && brew trust topcheer/ggcode && brew install ggcode
+brew install topcheer/homebrew-ggcode/ggcode
 ```
 
 ### Direct Download
 
-Download the latest `.tar.gz` from [GitHub Releases](https://github.com/topcheer/ggcode/releases):
+Download the latest `.tar.gz` from [GitHub Releases](https://github.com/topcheer/ggcode/releases) — or use the shell installer above, which does this for you with checksum verification:
 
 ```bash
 # Apple Silicon (arm64)
-curl -L https://github.com/topcheer/ggcode/releases/latest/download/ggcode_Darwin_arm64.tar.gz | tar xz
-sudo mv ggcode /usr/local/bin/
+curl -fL https://github.com/topcheer/ggcode/releases/latest/download/ggcode_darwin_arm64.tar.gz | tar -xz
+# Intel (x86_64)
+curl -fL https://github.com/topcheer/ggcode/releases/latest/download/ggcode_darwin_x86_64.tar.gz | tar -xz
 
-# Intel (amd64)
-curl -L https://github.com/topcheer/ggcode/releases/latest/download/ggcode_Darwin_amd64.tar.gz | tar xz
-sudo mv ggcode /usr/local/bin/
+mkdir -p ~/.local/bin && mv ggcode ~/.local/bin/ && ggcode --version
 ```
 
 ---
 
 ## Linux
 
+### Shell installer
+
+```bash
+curl -fsSL https://ggcode.dev/install.sh | bash
+```
+
 ### Direct Download
 
 ```bash
-# amd64
-curl -L https://github.com/topcheer/ggcode/releases/latest/download/ggcode_Linux_x86_64.tar.gz | tar xz
-sudo mv ggcode /usr/local/bin/
-
+# x86_64
+curl -fL https://github.com/topcheer/ggcode/releases/latest/download/ggcode_linux_x86_64.tar.gz | tar -xz
 # arm64
-curl -L https://github.com/topcheer/ggcode/releases/latest/download/ggcode_Linux_arm64.tar.gz | tar xz
-sudo mv ggcode /usr/local/bin/
+curl -fL https://github.com/topcheer/ggcode/releases/latest/download/ggcode_linux_arm64.tar.gz | tar -xz
+
+mkdir -p ~/.local/bin && mv ggcode ~/.local/bin/ && ggcode --version
 ```
 
 ### Package Managers
 
-Packages are published for each release:
+Packages are published for each release (see the [Linux install guide](./install-linux.md)):
 
-| Format | Package Name |
+| Format | Example asset |
 |--------|-------------|
-| Debian/Ubuntu (.deb) | `ggcode_<version>_linux_amd64.deb` |
-| Fedora/RHEL (.rpm) | `ggcode_<version>_linux_amd64.rpm` |
-| Alpine (.apk) | `ggcode_<version>_linux_amd64.apk` |
-| Arch Linux | `ggcode_<version>_linux_amd64.pkg.tar.zst` |
+| Debian/Ubuntu (.deb) | `ggcode_<version>_amd64.deb`, `ggcode_<version>_arm64.deb` |
+| Fedora/RHEL (.rpm) | `ggcode-<version>-1.x86_64.rpm`, `ggcode-<version>-1.aarch64.rpm` |
+| Alpine (.apk) | `ggcode_<version>_x86_64.apk`, `ggcode_<version>_aarch64.apk` |
+| Arch Linux | `ggcode-<version>-1-x86_64.pkg.tar.zst` |
+
+Also available: AUR (`ggcode-bin`), COPR (`topcheer/ggcode`) and Snap — see [install-linux.md](./install-linux.md).
 
 ---
 
 ## Windows
 
-### Winget
+### PowerShell installer
 
 ```powershell
-winget install topcheer.ggcode
+irm https://ggcode.dev/install.ps1 | iex
 ```
 
 ### Direct Download
 
 Download the `.zip` from [GitHub Releases](https://github.com/topcheer/ggcode/releases):
 
-1. Download `ggcode_Windows_x86_64.zip`
+1. Download `ggcode_windows_x86_64.zip` (or `ggcode_windows_arm64.zip`)
 2. Extract `ggcode.exe` to a directory in your `PATH`
+
+> `winget install topcheer.ggcode` is not available yet: the CLI has not been published to winget. Use the PowerShell installer.
 
 ---
 
