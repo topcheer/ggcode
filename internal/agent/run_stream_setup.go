@@ -194,7 +194,6 @@ func (a *Agent) buildRunTurnContextD1(ctx context.Context, content []provider.Co
 		a.errorBudget.reset()
 	}
 	a.toolCallBudget.reset()
-	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
 
 	a.resetSessionTokenUsage()
 

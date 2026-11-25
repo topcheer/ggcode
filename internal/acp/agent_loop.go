@@ -43,12 +43,8 @@ func NewAgentLoop(
 	prov provider.Provider,
 ) *AgentLoop {
 	systemPrompt := config.BuildSystemPrompt(cfg.ExtraPrompt, session.CWD, "", nil, "", nil, nil)
-	maxIter := cfg.MaxIterations
-	if maxIter == 0 {
-		maxIter = 100
-	}
-
-	a := agent.NewAgent(prov, registry, systemPrompt, maxIter)
+	// max_iterations 0 means unlimited, same as the main loop: no forced cap.
+	a := agent.NewAgent(prov, registry, systemPrompt, cfg.MaxIterations)
 	a.SetWorkingDir(session.CWD)
 
 	resolved, resolveErr := cfg.ResolveActiveEndpoint()

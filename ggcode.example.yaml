@@ -557,9 +557,8 @@ max_iterations: 0
 # 80%, finalize pressure at 95%, wind-down at 100%.
 # session_time_budget: 0
 
-# Maximum total tool calls per agent run (0 = auto-derive from max_iterations)
-# When auto-derived: max_iterations * 8 (or 500 for unlimited iterations).
-# Warnings at 80% and 95%, hard stop at 100%.
+# Optional hard cap on total tool calls per agent run. 0 (default) = no cap;
+# nothing is injected into the conversation. Set it only when a bound is wanted.
 # tool_call_budget: 0
 
 # Post-loop verification and success-claim supervision. Both are OFF by

@@ -275,32 +275,28 @@ func TestSpawnAgentMaxToolCallsAccepted(t *testing.T) {
 	}
 }
 
-// #5013 same-day recurrence (sa-16): a spawn that omitted max_tool_calls ran
-// unbounded for 33 minutes / 290 tool calls until manual cancel. These tests
-// pin the new contract: omitted budget => conservative default (bounded),
-// explicit budget => respected verbatim.
+// A spawn has no default budget (the former conservative 60-call default
+// stopped productive runs mid-work): omitted => unbounded, explicit =>
+// respected verbatim.
 
-func TestNormalizeMaxToolCallsDefaults(t *testing.T) {
+func TestNormalizeMaxToolCalls(t *testing.T) {
 	cases := []struct {
-		in            int
-		wantEffective int
-		wantDefaulted bool
+		in   int
+		want int
 	}{
-		{0, DefaultSubAgentMaxToolCalls, true},
-		{-7, DefaultSubAgentMaxToolCalls, true},
-		{1, 1, false},
-		{42, 42, false},
+		{0, 0},
+		{-7, 0},
+		{1, 1},
+		{42, 42},
 	}
 	for _, c := range cases {
-		eff, defaulted := normalizeMaxToolCalls(c.in)
-		if eff != c.wantEffective || defaulted != c.wantDefaulted {
-			t.Errorf("normalizeMaxToolCalls(%d) = (%d, %v), want (%d, %v)",
-				c.in, eff, defaulted, c.wantEffective, c.wantDefaulted)
+		if got := normalizeMaxToolCalls(c.in); got != c.want {
+			t.Errorf("normalizeMaxToolCalls(%d) = %d, want %d", c.in, got, c.want)
 		}
 	}
 }
 
-func TestSpawnAgentDefaultBudgetBounded(t *testing.T) {
+func TestSpawnAgentDefaultBudgetUnbounded(t *testing.T) {
 	mgr := subagent.NewManager(config.SubAgentConfig{
 		MaxConcurrent: 2,
 		Timeout:       5 * time.Second,
@@ -309,8 +305,7 @@ func TestSpawnAgentDefaultBudgetBounded(t *testing.T) {
 
 	s := SpawnAgentTool{Manager: mgr, Provider: nil}
 
-	// Omitted max_tool_calls: spawn result must disclose the conservative
-	// default so the caller knows the run is bounded.
+	// Omitted max_tool_calls: the spawn result must say the run is unbounded.
 	input, _ := json.Marshal(map[string]interface{}{"task": "default budget task"})
 	result, err := s.Execute(context.Background(), input)
 	if err != nil {
@@ -319,11 +314,11 @@ func TestSpawnAgentDefaultBudgetBounded(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	if !containsStr(result.Content, "conservative default") {
-		t.Errorf("spawn without max_tool_calls must report the conservative default budget, got: %s", result.Content)
+	if !containsStr(result.Content, "Budget: unbounded") {
+		t.Errorf("spawn without max_tool_calls must report an unbounded run, got: %s", result.Content)
 	}
-	if !containsStr(result.Content, "Budget: 60 LLM turns AND 60 tool calls") {
-		t.Errorf("spawn without max_tool_calls must report Budget: 60 LLM turns AND 60 tool calls, got: %s", result.Content)
+	if containsStr(result.Content, "60 LLM turns") {
+		t.Errorf("spawn without max_tool_calls must not report the old 60-call default, got: %s", result.Content)
 	}
 }
 
@@ -350,8 +345,8 @@ func TestSpawnAgentExplicitBudgetRespected(t *testing.T) {
 	if !containsStr(result.Content, "Budget: 12 LLM turns AND 12 tool calls") {
 		t.Errorf("explicit max_tool_calls=12 must be respected verbatim, got: %s", result.Content)
 	}
-	if containsStr(result.Content, "conservative default") {
-		t.Errorf("explicit budget must not be reported as defaulted, got: %s", result.Content)
+	if containsStr(result.Content, "unbounded") {
+		t.Errorf("explicit budget must not be reported as unbounded, got: %s", result.Content)
 	}
 }
 
@@ -407,8 +402,8 @@ func TestSpawnAgentLaunchDefaultBudgetReachesFactory(t *testing.T) {
 		}
 		mu.Unlock()
 		if n > 0 {
-			if got != DefaultSubAgentMaxToolCalls {
-				t.Fatalf("AgentFactory maxTurns = %d, want %d (Launch must normalize 0 to the conservative default, #5013 recurrence)", got, DefaultSubAgentMaxToolCalls)
+			if got != 0 {
+				t.Fatalf("AgentFactory maxTurns = %d, want 0 (Launch without max_tool_calls is unbounded)", got)
 			}
 			return
 		}

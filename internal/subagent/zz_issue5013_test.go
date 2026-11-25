@@ -63,11 +63,10 @@ func (p *issue5013BudgetProbe) SetToolCallBudget(budget int) {
 }
 
 func TestIssue5013MaxToolCallsWiresPerCallBudget(t *testing.T) {
-	// Retarget of the former TestIssue5013DefaultStaysUnbounded contract:
-	// at the tool layer normalizeMaxToolCredits maps omitted/<=0 to the
-	// conservative default before RunnerConfig is built, so a live spawn
-	// never passes 0 anymore. The direct-Run contract that still holds is
-	// the wiring one: N>0 must reach BOTH gates (turns + per-call budget).
+	// The tool layer no longer maps an omitted/<=0 budget to a default
+	// (spawns are unbounded unless max_tool_calls is given). The direct-Run
+	// contract that still holds is the wiring one: N>0 must reach BOTH gates
+	// (turns + per-call budget).
 	probe := &issue5013BudgetProbe{}
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 1, Timeout: time.Second})
 	id := mgr.Spawn("worker", "task", "task", nil, context.Background())

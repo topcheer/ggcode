@@ -61,7 +61,7 @@ The loop monitors its own trajectory and injects guidance when patterns look pat
 | Edit fail recovery | `edit_fail_recovery.go` | Consecutive edit failure recovery guidance |
 | Todo staleness | `todo_staleness.go` | Mid-run stale todo detection (plan abandonment awareness) |
 | Latency tracker | `latency_tracker.go` | Per-tool latency baseline and slow-tool outlier detection |
-| Tool call budget | `tool_call_budget.go` | Per-session tool invocation limit with progressive warnings (80%/95%) and hard stop. Auto-derived from maxIter when unset; provides safety net for autopilot/cron (default 500). |
+| Tool call budget | `tool_call_budget.go` | Opt-in per-run cap on actual tool invocations, armed only by an explicit `tool_call_budget` (config) or `max_tool_calls` (spawn). No default cap and nothing injected into the conversation: the former derived default (500 calls / maxIter×8) and the 80%/95% "[tool budget]" steering messages were removed because they made the model wind down productive work early. Session cost budgets (token / cost / wall-clock) are separate. |
 
 ## Tool Reliability
 

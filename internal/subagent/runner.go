@@ -62,7 +62,7 @@ type RunnerConfig struct {
 	// agent's SetToolCallBudget so the exec layer hard-stops after N
 	// actual tool invocations (parallel batching can no longer smuggle
 	// many calls under one turn - sa-18: 248 calls under a 12-call task
-	// budget). 0 = historical default (turn-derived call budget).
+	// budget). 0 = unbounded (no default budget).
 	MaxToolCalls        int
 	OnStreamText        func(agentID, text string)
 	OnUsage             func(provider.TokenUsage)

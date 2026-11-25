@@ -42,21 +42,17 @@ var subAgentBlockedTools = []string{
 	"a2a_send_task",
 }
 
-// DefaultSubAgentMaxToolCalls is the conservative turn budget applied when a
-// spawn omits max_tool_calls. Before this default an omitted budget meant an
-// unbounded agent loop; a looping sub-agent then burned tokens until manual
-// cancel (33min / 290 tool calls, #5013 same-day recurrence sa-16). Spawns
-// are bounded by default now; pass max_tool_calls explicitly for a different
-// budget.
-const DefaultSubAgentMaxToolCalls = 60
-
-// normalizeMaxToolCalls maps an omitted or invalid budget to the conservative
-// default so a spawn can never run unbounded by accident (#5013 recurrence).
-func normalizeMaxToolCalls(n int) (effective int, defaulted bool) {
+// A spawn has NO default turn/call budget: without max_tool_calls the run is
+// unbounded and ends when the model finishes or the caller cancels. The
+// former conservative default (60 turns / 60 calls, #5013) stopped productive
+// runs mid-work; pass max_tool_calls explicitly when a bound is wanted.
+//
+// normalizeMaxToolCalls maps an omitted or negative budget to 0 (unbounded).
+func normalizeMaxToolCalls(n int) (effective int) {
 	if n > 0 {
-		return n, false
+		return n
 	}
-	return DefaultSubAgentMaxToolCalls, true
+	return 0
 }
 
 type SpawnAgentTool struct {
@@ -129,7 +125,7 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 		},
 		"max_tool_calls": {
 			"type": "integer",
-			"description": "Hard budget for the sub-agent run, enforced on BOTH axes: N LLM turns AND N actual tool calls (parallel tool batching cannot smuggle extra calls under one turn). The run stops with its partial result when either budget is reached. If omitted (or <= 0), a conservative default of 60 turns / 60 calls applies - unbounded runs are no longer possible. Raise it explicitly for tasks that legitimately need more calls."
+			"description": "Optional hard budget for the sub-agent run, enforced on BOTH axes: N LLM turns AND N actual tool calls (parallel tool batching cannot smuggle extra calls under one turn). The run stops with its partial result when either budget is reached. If omitted (or <= 0) the run is unbounded: it ends when the task is complete or the caller cancels. Only set it when a bound is genuinely wanted."
 		}
 	},
 	"required": [
@@ -228,7 +224,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	args.Task += readBackNudge(args.Task)
 
-	maxToolCalls, budgetDefaulted := normalizeMaxToolCalls(args.MaxToolCalls)
+	maxToolCalls := normalizeMaxToolCalls(args.MaxToolCalls)
 
 	id, worktreePath, err := t.Launch(ctx, LaunchOptions{
 		Name:         name,
@@ -245,11 +241,11 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: fmt.Sprintf("%v. Fix the git state or retry with isolation=none.", err)}, nil
 	}
 
-	budgetSource := "explicit max_tool_calls"
-	if budgetDefaulted {
-		budgetSource = "conservative default; pass max_tool_calls to change it"
+	budgetLine := "Budget: unbounded (no max_tool_calls) - the run ends when the task is complete or it is cancelled."
+	if maxToolCalls > 0 {
+		budgetLine = fmt.Sprintf("Budget: %d LLM turns AND %d tool calls, whichever is hit first (explicit max_tool_calls). The run stops with its partial result when either budget is reached.", maxToolCalls, maxToolCalls)
 	}
-	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nIt runs asynchronously - before waiting, continue with work that does not depend on this result; harvest it later via wait_agent or list_agents.\nBudget: %d LLM turns AND %d tool calls, whichever is hit first (%s). The run stops with its partial result when either budget is reached.", id, maxToolCalls, maxToolCalls, budgetSource)
+	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nIt runs asynchronously - before waiting, continue with work that does not depend on this result; harvest it later via wait_agent or list_agents.\n%s", id, budgetLine)
 	if worktreePath != "" {
 		content += fmt.Sprintf("\nIsolated in git worktree: %s (branch: %s). Its edits stay off the parent working tree; inspect or merge from that path after the run completes.", worktreePath, filepath.Base(worktreePath))
 	}
@@ -273,19 +269,16 @@ type LaunchOptions struct {
 	// before termination; default forces the strict breaker; auto resolves
 	// from the effective toolset inside the runner (read-only => research).
 	RereadPolicy subagent.RereadPolicy
-	// MaxToolCalls is a deterministic hard budget for the sub-agent's
-	// agent loop (max iterations, each iteration being one LLM turn that
-	// may issue tool calls). Values <= 0 fall back to the conservative
-	// DefaultSubAgentMaxToolCalls - an unbounded run is no longer possible
-	// via this tool; N > 0 stops the run after N turns with the partial
-	// result (#5013 and its same-day recurrence).
+	// MaxToolCalls is an optional hard budget for the sub-agent's agent loop
+	// (max iterations, each iteration being one LLM turn that may issue tool
+	// calls) AND its actual tool calls. 0 (default) = unbounded; N > 0 stops
+	// the run after N turns / N calls with the partial result (#5013).
 	MaxToolCalls int
 }
 
 func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string, string, error) {
-	// Defense in depth: no Launch caller can produce an unbounded run by
-	// passing 0 (#5013 recurrence - the loop only stops on manual cancel).
-	opts.MaxToolCalls, _ = normalizeMaxToolCalls(opts.MaxToolCalls)
+	// Negative values mean the same as omitted: unbounded.
+	opts.MaxToolCalls = normalizeMaxToolCalls(opts.MaxToolCalls)
 
 	id := t.Manager.Spawn(opts.Name, opts.Task, opts.DisplayTask, opts.Tools, ctx)
 
