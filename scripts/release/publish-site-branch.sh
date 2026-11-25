@@ -70,13 +70,11 @@ else
   echo "WARNING: docs/site/ not found, publishing empty site"
 fi
 
-if [[ -d scripts/install ]]; then
-  cp scripts/install/install.sh "${site_dir}/install.sh" 2>/dev/null || true
-  cp scripts/install/install.ps1 "${site_dir}/install.ps1" 2>/dev/null || true
-fi
-
 latest_dir="${site_dir}/downloads/latest"
 mkdir -p "${latest_dir}"
+
+# The installers live in docs/site/public/ (Astro copies public/ into dist/), so they
+# are served at https://ggcode.dev/install.sh and /install.ps1 without any extra copy.
 
 if [[ ${#asset_dirs[@]} -gt 0 ]]; then
   include_release_asset() {
@@ -94,6 +92,10 @@ if [[ ${#asset_dirs[@]} -gt 0 ]]; then
   for asset_dir in "${asset_dirs[@]}"; do
     if [[ ! -d "${asset_dir}" ]]; then
       continue
+    fi
+    # The mirror's checksums.txt is what install.sh / install.ps1 verify against.
+    if [[ ! -f "${latest_dir}/checksums.txt" && -f "${asset_dir}/checksums.txt" ]]; then
+      cp "${asset_dir}/checksums.txt" "${latest_dir}/checksums.txt"
     fi
     while IFS= read -r -d '' file; do
       if include_release_asset "${file}"; then

@@ -22,7 +22,9 @@ curl -fsSL https://ggcode.dev/install.sh | bash
 irm https://ggcode.dev/install.ps1 | iex
 ```
 
-**其他方式:** [Homebrew](docs/guide/install.md#macos) · [winget](docs/guide/install.md#windows) · [npm](docs/guide/install.md#npm) · [pip](docs/guide/install.md#pip) · [源码编译](docs/guide/install.md#build-from-source)
+**其他方式:** [Homebrew](docs/guide/install.md#macos) · [Linux 软件包](docs/guide/install-linux.md) · [源码编译](docs/guide/install.md#build-from-source)
+
+> 旧版 `npm` / `pip` 安装方式已弃用且不再提供文档；请使用 shell 安装脚本或上述方法。
 
 > 所有安装脚本默认非特权安装（不需要 sudo / 管理员权限）。
 
