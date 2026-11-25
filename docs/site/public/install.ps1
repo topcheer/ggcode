@@ -118,6 +118,25 @@ function Install-Ggcode {
             if ($r -and "$($r.GetType().FullName)" -eq "System.Net.Http.HttpResponseMessage") { $location = "$($r.Headers.Location)" }
             elseif ($r) { $location = $r.Headers["Location"] }
         }
+        if (-not $location) {
+            # Windows PowerShell 5.1 sometimes surfaces the 302 without a usable Location on
+            # the exception; a raw HttpWebRequest with auto-redirect disabled is deterministic
+            # on both PS 5.1 and PS 7 and does not touch the rate-limited GitHub API.
+            try {
+                $req = [System.Net.HttpWebRequest]::Create("$githubBase/releases/latest")
+                $req.AllowAutoRedirect = $false
+                $req.Method = "HEAD"
+                $req.UserAgent = "ggcode-installer"
+                $req.Timeout = 30000
+                $resp = $req.GetResponse()
+                $location = $resp.Headers["Location"]
+                $resp.Close()
+            } catch {
+                $err = $_.Exception
+                while ($err -and -not $err.Response) { $err = $err.InnerException }
+                if ($err -and $err.Response -and $err.Response.Headers) { $location = $err.Response.Headers["Location"] }
+            }
+        }
         if ($location) { $tag = "$location".TrimEnd("/").Split("/")[-1] }
         if (-not $tag) {
             try {

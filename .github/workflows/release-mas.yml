@@ -896,41 +896,10 @@ jobs:
         with:
           fetch-depth: 1
           token: ${{ secrets.TAP_GITHUB_TOKEN }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: goreleaser-dist
-          path: dist
-      - uses: actions/download-artifact@v4
-        if: needs.release-macos-pkg.result != 'skipped'
-        with:
-          name: macos-pkg
-          path: dist-site/macos-pkg
-      - uses: actions/download-artifact@v4
-        if: needs.release-windows-msi.result != 'skipped'
-        with:
-          name: windows-msi
-          path: dist-site/windows-msi
-      - uses: actions/download-artifact@v4
-        if: needs.build-desktop-darwin.result != 'skipped'
-        with:
-          name: desktop-darwin
-          path: dist-site/desktop-darwin
-      - uses: actions/download-artifact@v4
-        if: needs.build-desktop-windows.result != 'skipped'
-        with:
-          name: desktop-windows
-          path: dist-site/desktop-windows
-      - uses: actions/download-artifact@v4
-        if: needs.build-desktop-linux-amd64.result != 'skipped'
-        with:
-          name: desktop-linux-amd64
-          path: dist-site/desktop-linux-amd64
-      - uses: actions/download-artifact@v4
-        if: needs.build-desktop-linux-arm64.result != 'skipped'
-        with:
-          name: desktop-linux-arm64
-          path: dist-site/desktop-linux-arm64
-      - name: Publish release assets into deployment branch
+      # Release assets are NOT copied here any more: https://download.ggcode.dev
+      # (workers/download-mirror) streams them from GitHub with zero per-release work.
+      # This job only refreshes the site itself on the deployment branch.
+      - name: Publish site to deployment branch
         env:
           GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         shell: bash
@@ -938,12 +907,5 @@ jobs:
           chmod +x ./scripts/release/publish-site-branch.sh
           ./scripts/release/publish-site-branch.sh \
             --target-branch "${TARGET_BRANCH}" \
-            --asset-dir dist \
-            --asset-dir dist-site/macos-pkg \
-            --asset-dir dist-site/windows-msi \
-            --asset-dir dist-site/desktop-darwin \
-            --asset-dir dist-site/desktop-windows \
-            --asset-dir dist-site/desktop-linux-amd64 \
-            --asset-dir dist-site/desktop-linux-arm64 \
             --source-label "${GITHUB_REF_NAME}"
 

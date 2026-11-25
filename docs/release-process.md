@@ -277,41 +277,21 @@ The desktop application uses:
 - Build tag `goolm` (same as CLI)
 - `make build-desktop-wails` for local builds
 
-### 5.6 Site deployment branch refresh
+### 5.6 Release asset mirror and site deployment branch refresh
 
-Finally, `publish-site-release-branch` runs and pushes release assets into the deployment branch:
+Release assets are mirrored at **https://download.ggcode.dev** by a Cloudflare Worker
+(`workers/download-mirror/`): it resolves `releases/latest`, streams the assets from GitHub
+and caches them at the edge, so the mirror needs **no per-release publishing step** and
+nothing in the release workflow. URLs: `/latest/manifest.json` (built from the tag's
+`checksums.txt`, no GitHub API call), `/latest/checksums.txt`, `/vX.Y.Z/<asset>`. The
+installers use it as their download base and fall back to GitHub for every step.
 
-```text
-copilot/site-release-update
-```
-
-It calls:
+`publish-site-release-branch` still pushes the **site** (not the assets) to the deployment
+branch `copilot/site-release-update` when `docs/site/**` changed:
 
 ```bash
-./scripts/release/publish-site-branch.sh \
-  --target-branch "copilot/site-release-update" \
-  --asset-dir dist \
-  --asset-dir dist-site/macos-pkg \
-  --asset-dir dist-site/windows-msi \
-  --source-label "${GITHUB_REF_NAME}"
+./scripts/release/publish-site-branch.sh \   --target-branch "copilot/site-release-update" \   --source-label "${GITHUB_REF_NAME}"
 ```
-
-That script rebuilds `docs/site/downloads/latest/` and publishes:
-
-- `checksums.txt`
-- archive files (`.tar.gz`, `.zip`)
-- Linux packages (`.deb`, `.rpm`, `.apk`, `.ipk`, `.pkg.tar.zst`)
-- macOS `.pkg`
-- macOS `.dmg` (desktop)
-- Windows `.msi`
-- Windows `.exe` (desktop)
-- generated `manifest.json`
-- generated `index.html`
-
-The published `manifest.json` uses the tag as both:
-
-- `source`
-- `version`
 
 ## 6. What GoReleaser publishes
 
@@ -426,7 +406,7 @@ Use this checklist for every real release:
     - **Delete the tag** (`git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`) and **re-tag** on the fix commit
     - Re-monitor all workflows from step 11
 14. Confirm the release assets exist on GitHub (`gh release view vX.Y.Z`).
-15. Confirm `https://ggcode.dev/downloads/latest/manifest.json` reflects the new tag.
+15. Confirm `https://download.ggcode.dev/latest/manifest.json` reports the new tag and `https://download.ggcode.dev/latest/checksums.txt` matches the release's `checksums.txt` (the mirror is a Worker and needs no publishing; if it does not update, check `/healthz` and the Worker deploy).
 
 ## 10. Recommended monitoring commands
 

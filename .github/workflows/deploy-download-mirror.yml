@@ -1,0 +1,53 @@
+name: Deploy download mirror
+
+# Deploys the Cloudflare Worker behind https://download.ggcode.dev when its source
+# changes. The mirror needs nothing per release - this only runs on Worker changes.
+# Skipped (not failed) until CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID are set:
+# see workers/download-mirror/README.md for the one-time setup.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "workers/download-mirror/**"
+      - ".github/workflows/deploy-download-mirror.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-download-mirror
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: workers/download-mirror/package-lock.json
+      - name: Install
+        working-directory: workers/download-mirror
+        run: npm ci --no-fund --no-audit
+      - name: Check (tsc + vitest)
+        working-directory: workers/download-mirror
+        run: npm run check
+      - name: Deploy
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != '' }}
+        working-directory: workers/download-mirror
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy
+      - name: Skipped notice
+        if: ${{ env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == '' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "::notice::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID are not set - the Worker was not deployed. Run 'npx wrangler deploy' in workers/download-mirror or configure the secrets (see README.md)."
