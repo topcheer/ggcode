@@ -64,9 +64,11 @@ func (m *Model) queuePendingSubmissionOrigin(text string, remote bool) {
 	}
 	m.chatWriteUser(chatID, displayText)
 	m.chatListScrollToBottom()
-	// 队列事件(append):webui 端镜像排队条目(nil fn=TUI 单机,安全 no-op)
+	// 队列事件(append):webui 端镜像排队条目(nil fn=TUI 单机,安全 no-op)。
+	// 必须是入队的原始 text——与 dequeue 事件和 QueuedSubmissions 快照同一文本,
+	// 否则带图片占位前缀的条目在 webui 端永远匹配不上、出队后不消失。
 	if m.queueNotifyFn != nil {
-		m.queueNotifyFn("append", displayText, count)
+		m.queueNotifyFn("append", text, count)
 	}
 }
 

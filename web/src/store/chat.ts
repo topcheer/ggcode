@@ -95,6 +95,7 @@ type ChatStore = {
   conn: ConnState;
   busy: boolean; // agent 处理中(§ WS busy error)
   queueItems: string[]; // 插入消息队列镜像(append/dequeue/clear/list 四事件同步)
+  queueSeq: number; // 最近应用的队列事件序号(丢弃乱序到达的旧快照)
   lastError: string | null;
   subagentStreams: Record<string, SubagentStream>; // §6.1 二层:活跃/完结子代理流
   todos: TodoItem[]; // agent loop 运行时实时推送聚合(todo_write tool_result 解析)
@@ -124,6 +125,7 @@ export const useChat = create<ChatStore>((set) => ({
   conn: "closed",
   busy: false,
   queueItems: [],
+  queueSeq: 0,
   lastError: null,
   subagentStreams: {},
   todos: [],
@@ -325,22 +327,26 @@ export const useChat = create<ChatStore>((set) => ({
         case "interaction_ack":
           return {};
         case "queue": {
-          // 插入消息队列镜像:TUI 排队全链三时机事件+连接时 list 快照
+          // 插入消息队列镜像:事件携带全量快照时以快照为准(文本匹配出队对带图片
+          // 占位前缀的条目曾匹配失败,横幅不消失);seq 防止乱序旧快照回退状态。
+          // 旧服务端(无 items)退回增量 append/dequeue/clear 语义。
+          if (typeof m.seq === "number" && m.seq <= st.queueSeq) return {};
+          const seq = typeof m.seq === "number" ? { queueSeq: m.seq } : {};
+          if (Array.isArray(m.items)) return { ...seq, queueItems: m.items };
           switch (m.event) {
             case "append":
-              return { queueItems: [...st.queueItems, m.text ?? ""] };
+              return { ...seq, queueItems: [...st.queueItems, m.text ?? ""] };
             case "dequeue": {
-              // 按文本移除首条匹配(队列无 id 语义;重复文本罕见可接受)
               const idx = st.queueItems.indexOf(m.text ?? "");
               if (idx < 0) return {};
               const next = [...st.queueItems];
               next.splice(idx, 1);
-              return { queueItems: next };
+              return { ...seq, queueItems: next };
             }
             case "clear":
-              return { queueItems: [] };
+              return { ...seq, queueItems: [] };
             case "list":
-              return { queueItems: m.items ?? [] };
+              return { ...seq, queueItems: m.items ?? [] };
             default:
               return {};
           }

@@ -5,6 +5,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ToolInvocation } from "../src/store/chat";
 import ToolCallCard from "../src/chat/ToolCallCard";
+import { useChat } from "../src/store/chat";
 import { buildDiff, parseNumberedLines, parseRunResult, parseSearchResult, parseUnifiedDiff } from "../src/chat/toolPresent";
 
 let failures = 0;
@@ -109,6 +110,25 @@ const base = (over: Partial<ToolInvocation>): ToolInvocation => ({
   check("parseNumberedLines", !!n && n[1].no === 2 && n[1].text === "func x(){}");
   const u = parseUnifiedDiff("@@ -1,2 +1,2 @@\n-old\n+new\n ctx");
   check("parseUnifiedDiff", !!u && u[1].kind === "del" && u[2].kind === "add" && u[3].kind === "ctx");
+}
+
+// 10. 队列镜像:事件携带全量快照时以快照为准(带图片占位前缀的文本不再依赖匹配),旧 seq 丢弃
+{
+  const st = useChat.getState();
+  st.syncQueue([]);
+  st.applyMsg({ type: "queue", event: "append", text: "[image: a.png] hi", items: ["hi"], count: 1, seq: 10 });
+  const afterAppend = useChat.getState().queueItems;
+  st.applyMsg({ type: "queue", event: "dequeue", text: "hi", items: [], count: 0, seq: 11 });
+  const afterDequeue = useChat.getState().queueItems;
+  st.applyMsg({ type: "queue", event: "append", text: "stale", items: ["stale"], count: 1, seq: 9 });
+  const afterStale = useChat.getState().queueItems;
+  // 旧服务端(无 items/seq)退回增量语义
+  st.applyMsg({ type: "queue", event: "append", text: "legacy" });
+  st.applyMsg({ type: "queue", event: "dequeue", text: "legacy" });
+  const afterLegacy = useChat.getState().queueItems;
+  check("queue: snapshot wins over text matching", JSON.stringify(afterAppend) === '["hi"]' && afterDequeue.length === 0, JSON.stringify({ afterAppend, afterDequeue }));
+  check("queue: stale seq ignored", afterStale.length === 0, JSON.stringify(afterStale));
+  check("queue: legacy incremental still works", afterLegacy.length === 0, JSON.stringify(afterLegacy));
 }
 
 if (failures) {
