@@ -18,8 +18,10 @@
 #   GGCODE_INSTALL_DIR     Install directory (default: ~/.local/bin)
 #   GGCODE_VERSION         Release tag to install (default: latest)
 #   GGCODE_INSTALL_DRY_RUN Set to 1 for a dry run
-#   GGCODE_DOWNLOAD_BASE   Download mirror (default: https://ggcode.dev/downloads/latest;
-#                          manifest.json and checksums.txt are looked up here first)
+#   GGCODE_DOWNLOAD_BASE   Download mirror (default: https://download.ggcode.dev/latest - a
+#                          Cloudflare Worker that streams and edge-caches the GitHub release
+#                          assets; manifest.json and checksums.txt are looked up here first,
+#                          every step falls back to GitHub)
 #   GGCODE_MANIFEST_URL    Explicit manifest.json URL (default: $GGCODE_DOWNLOAD_BASE/manifest.json)
 #   GGCODE_CHECKSUMS_URL   Explicit checksums.txt URL (no fallback when set)
 #   GGCODE_ARCHIVE_URL     Explicit archive URL (no fallback when set)
@@ -27,7 +29,7 @@
 set -euo pipefail
 
 REPO="${GGCODE_REPO:-topcheer/ggcode}"
-DOWNLOAD_BASE="${GGCODE_DOWNLOAD_BASE:-https://ggcode.dev/downloads/latest}"
+DOWNLOAD_BASE="${GGCODE_DOWNLOAD_BASE:-https://download.ggcode.dev/latest}"
 GITHUB_BASE="${GGCODE_GITHUB_BASE:-https://github.com/${REPO}}"
 API_URL="${GGCODE_API_URL:-https://api.github.com/repos/${REPO}/releases/latest}"
 INSTALL_DIR="${GGCODE_INSTALL_DIR:-${HOME:-}/.local/bin}"
@@ -232,10 +234,20 @@ GITHUB_ARCHIVE_URL="${GITHUB_BASE}/releases/download/${TAG}/${ARCHIVE_NAME}"
 ARCHIVE_URL="${ARCHIVE_URL_OVERRIDE}"
 if [[ -z "${ARCHIVE_URL}" && -n "${MANIFEST}" ]]; then
   # The manifest carries per-asset URLs; use the entry for this archive if present.
-  escaped="${ARCHIVE_NAME//./\\.}"
+  # Entries are pretty-printed one key per line: find the "name" line that names
+  # this archive and take the first "url" after it (works with either layout).
   ARCHIVE_URL="$(printf '%s\n' "${MANIFEST}" \
-    | grep -E "\"name\"[[:space:]]*:[[:space:]]*\"${escaped}\"" -A1 \
-    | sed -nE 's/.*"url"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1 || true)"
+    | awk -v n="${ARCHIVE_NAME}" '
+        {
+          if (match($0, /"name"[ \t]*:/) && index($0, "\"" n "\"") > 0) found = 1
+          if (found && match($0, /"url"[ \t]*:[ \t]*"[^"]*"/)) {
+            u = substr($0, RSTART, RLENGTH)
+            sub(/^"url"[ \t]*:[ \t]*"/, "", u)
+            sub(/"$/, "", u)
+            print u
+            exit
+          }
+        }' || true)"
 fi
 [[ -n "${ARCHIVE_URL}" ]] || ARCHIVE_URL="${GITHUB_ARCHIVE_URL}"
 

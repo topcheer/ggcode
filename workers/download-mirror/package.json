@@ -1,0 +1,19 @@
+{
+  "name": "ggcode-download-mirror",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "npm run typecheck && npm run test"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261123.1",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^5.1.0",
+    "wrangler": "^4.168.0"
+  }
+}

@@ -1,0 +1,18 @@
+name = "ggcode-download-mirror"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+workers_dev = false
+
+# Stable, zero-maintenance download mirror: nothing is published per release.
+# Deploy once; the Worker resolves tags and streams GitHub release assets through
+# the edge cache. See README.md.
+
+[[routes]]
+pattern = "download.ggcode.dev"
+custom_domain = true
+
+[vars]
+REPO = "topcheer/ggcode"
+
+# Optional (raises the GitHub API rate limit for manifest generation):
+#   npx wrangler secret put GITHUB_TOKEN

@@ -16,7 +16,9 @@
 #   GGCODE_INSTALL_DIR      Install directory (default: %LOCALAPPDATA%\ggcode\bin)
 #   GGCODE_VERSION          Release tag to install (default: latest)
 #   GGCODE_INSTALL_DRY_RUN  Set to 1 for a dry run
-#   GGCODE_DOWNLOAD_BASE    Download mirror (default: https://ggcode.dev/downloads/latest)
+#   GGCODE_DOWNLOAD_BASE    Download mirror (default: https://download.ggcode.dev/latest - a
+#                           Cloudflare Worker streaming + edge-caching the GitHub release
+#                           assets; every step falls back to GitHub)
 #   GGCODE_CHECKSUMS_URL    Explicit checksums.txt URL (no fallback when set)
 #   GGCODE_ARCHIVE_URL      Explicit archive URL (no fallback when set)
 
@@ -44,7 +46,7 @@ function Fail {
 
 function Install-Ggcode {
     $repo = "topcheer/ggcode"
-    $downloadBase = if ($env:GGCODE_DOWNLOAD_BASE) { $env:GGCODE_DOWNLOAD_BASE.TrimEnd("/") } else { "https://ggcode.dev/downloads/latest" }
+    $downloadBase = if ($env:GGCODE_DOWNLOAD_BASE) { $env:GGCODE_DOWNLOAD_BASE.TrimEnd("/") } else { "https://download.ggcode.dev/latest" }
     $githubBase = "https://github.com/$repo"
     $apiUrl = "https://api.github.com/repos/$repo/releases/latest"
 
