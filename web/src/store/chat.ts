@@ -17,14 +17,50 @@ export type UIMessage = {
 
 export type ToolInvocation = {
   id: string;
-  name: string;
+  name: string; // 原始工具名(run_command / mcp__srv__tool)
   argsText: string; // 累积的 arguments JSON 字符串
-  result?: string;
+  displayName?: string; // 服务端展示名(tool.DescribeTool,与 TUI/desktop 同源)
+  detail?: string; // 一行目标(文件/命令/pattern)
+  result?: string; // 原始结果文本
+  resultSummary?: string; // 结果摘要(tool.DescribeToolResult 或前端推导),折叠态徽章
+  resultPayload?: string; // 按模式渲染的载荷(缺省回退 result)
+  payloadMode?: string; // text | json | task_list | cron_list ...
   isError?: boolean;
   done: boolean;
   startedAt: number;
   endedAt?: number;
 };
+
+type HistoryBlock = {
+  type: string;
+  text?: string;
+  reasoning?: string;
+  tool_name?: string;
+  tool_id?: string;
+  input?: unknown;
+  display_name?: string;
+  detail?: string;
+  output?: string;
+  is_error?: boolean;
+  summary?: string;
+  payload?: string;
+  payload_mode?: string;
+};
+
+/** 服务端展示字段 → 卡片;缺省时用 prettify 兜底(历史/旧事件) */
+function applyToolDisplay(t: ToolInvocation, b: { display_name?: string; detail?: string; tool_name?: string }) {
+  if (b.display_name) t.displayName = b.display_name;
+  if (b.detail) t.detail = b.detail;
+}
+
+function applyToolResult(t: ToolInvocation, b: { output?: string; is_error?: boolean; summary?: string; payload?: string; payload_mode?: string }) {
+  t.result = b.output ?? "";
+  t.isError = b.is_error ?? false;
+  t.resultSummary = b.summary || undefined;
+  t.resultPayload = b.payload || undefined;
+  t.payloadMode = b.payload_mode || undefined;
+  t.done = true;
+}
 
 type ConnState = "connecting" | "open" | "closed";
 
@@ -102,41 +138,42 @@ export const useChat = create<ChatStore>((set) => ({
     try {
       const res = await fetch("/api/chat/history");
       if (!res.ok) return;
-      const data = (await res.json()) as Array<{
-        role: Role;
-        content: Array<{
-          type: string;
-          text?: string;
-          tool_name?: string;
-          tool_id?: string;
-          input?: unknown;
-          output?: string;
-          is_error?: boolean;
-        }>;
-      }>;
+      const data = (await res.json()) as Array<{ role: Role; content: HistoryBlock[] }>;
       const msgs: UIMessage[] = [];
+      // tool_result 位于下一条 user 角色消息(provider 格式):按 tool_id 回填到发起调用的卡片
+      const toolById = new Map<string, ToolInvocation>();
       for (const m of data) {
+        const toolResults = m.content.filter((b) => b.type === "tool_result");
+        const rest = m.content.filter((b) => b.type !== "tool_result");
+        for (const b of toolResults) {
+          const t = b.tool_id ? toolById.get(b.tool_id) : undefined;
+          // 无 id(旧会话)时退回"最后一个未完成的同名调用"
+          const fallback = !t
+            ? [...toolById.values()].reverse().find((x) => x.name === b.tool_name && !x.done)
+            : undefined;
+          const target = t ?? fallback;
+          if (target) applyToolResult(target, b);
+        }
         if (m.role === "user") {
-          const text = m.content.map((b) => b.text ?? "").join("");
-          msgs.push({ id: nid(), role: "user", text, reasoning: "", tools: [] });
+          // 只有真正带文本的 user 消息才是用户气泡(纯 tool_result 的 user 消息不渲染)
+          const text = rest.map((b) => b.text ?? "").join("");
+          if (text.trim()) msgs.push({ id: nid(), role: "user", text, reasoning: "", tools: [] });
           continue;
         }
-        // assistant:文本/思考聚为一个气泡,tool_use+紧随 tool_result 聚为卡片
+        // assistant:文本/思考聚为一个气泡,tool_use 聚为卡片
         const a: UIMessage = { id: nid(), role: "assistant", text: "", reasoning: "", tools: [] };
-        for (const b of m.content) {
+        for (const b of rest) {
           if (b.type === "text") a.text += (a.text ? "\n\n" : "") + (b.text ?? "");
-          else if (b.type === "tool_use")
-            a.tools.push({
-              id: b.tool_id ?? nid(), name: b.tool_name ?? "",
+          else if (b.type === "thinking" || b.type === "redacted_thinking") a.reasoning += b.reasoning ?? "";
+          else if (b.type === "tool_use") {
+            const t: ToolInvocation = {
+              id: b.tool_id || nid(), name: b.tool_name ?? "",
               argsText: typeof b.input === "string" ? b.input : JSON.stringify(b.input ?? {}),
               done: true, startedAt: 0,
-            });
-          else if (b.type === "tool_result" && a.tools.length > 0) {
-            const t = a.tools[a.tools.length - 1];
-            if (!t.result) {
-              t.result = b.output ?? "";
-              t.isError = b.is_error ?? false;
-            }
+            };
+            applyToolDisplay(t, b);
+            a.tools.push(t);
+            if (b.tool_id) toolById.set(b.tool_id, t);
           }
         }
         if (a.text || a.reasoning || a.tools.length) msgs.push(a);
@@ -190,21 +227,28 @@ export const useChat = create<ChatStore>((set) => ({
             a.tools.push(t);
           }
           if (m.type === "tool_call_chunk") t.argsText += m.arguments;
-          else t.argsText = m.arguments; // done 事件带完整参数
+          else {
+            t.argsText = m.arguments; // done 事件带完整参数
+            if (m.display_name) t.displayName = m.display_name;
+            if (m.detail) t.detail = m.detail;
+          }
           return { messages: msgs };
         }
         case "tool_result": {
           const msgs = [...st.messages];
           // tool_result 只带 name,匹配最后一个同名未完成调用
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            const t = msgs[i].tools.find((x) => x.name === m.name && !x.done);
-            if (t) {
-              t.result = m.result;
-              t.isError = m.is_error;
-              t.done = true;
-              t.endedAt = Date.now();
-              break;
-            }
+          // 优先按 id 精确匹配(并行同名调用不串);无 id(旧事件)退回最后一个同名未完成调用
+          let hit: ToolInvocation | undefined;
+          for (let i = msgs.length - 1; i >= 0 && !hit; i--) {
+            hit = m.id
+              ? msgs[i].tools.find((x) => x.id === m.id)
+              : msgs[i].tools.find((x) => x.name === m.name && !x.done);
+          }
+          if (hit) {
+            if (m.display_name) hit.displayName = m.display_name;
+            if (m.detail) hit.detail = m.detail;
+            applyToolResult(hit, m);
+            hit.endedAt = Date.now();
           }
           // todo 面板聚合:todo_write 的结果即最新全量清单(实时推送形态)
           let todos = st.todos;

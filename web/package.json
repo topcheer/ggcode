@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:render": "vite build --ssr scripts/render-check.tsx --outDir node_modules/.cache/ssr --emptyOutDir && node node_modules/.cache/ssr/render-check.js"
   },
   "dependencies": {
     "react": "^19.1.1",

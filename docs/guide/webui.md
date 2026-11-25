@@ -17,7 +17,8 @@ go build -tags goolm ./cmd/ggcode   # 重新编译使新 dist 生效
 
 ## 功能与交互
 
-- **聊天为核心**：首屏 WelcomeScreen + 大输入框；流式 markdown 渲染、思考过程折叠块、工具调用状态卡片（spinner→绿/红+耗时；diff 类结果逐行红绿着色）、乐观 UI（离线消息队列补发）；截图/图片直接粘贴进输入框（缩略图预览，随消息发送）
+- **聊天为核心**：首屏 WelcomeScreen + 大输入框；流式 markdown 渲染、思考过程折叠块、乐观 UI（离线消息队列补发）；截图/图片直接粘贴进输入框（缩略图预览，随消息发送）
+- **工具卡片（tool call / tool result）**：头部始终给结论——状态灯 → 类别图标 → **展示名**（服务端 `tool.DescribeTool`，与 TUI/IM/desktop/移动端同源，永不显示 `read_file` 这类裸名；MCP 工具显示 `Server › Tool`）→ 一行目标 → 结果徽章（`tool.DescribeToolResult` 摘要或按类别推导：行数 / 匹配数 / 失败原因 / 退出码）→ 耗时。正文按**类别**渲染而非 JSON 原文：命令 → shell 块（description 标题 + 完整命令）+ 终端输出（stdout / `STDERR:` / `Command failed:` 分段）；读文件 → `cat -n` 行号代码视图 + 语言标签 + 范围；编辑 → `old_text → new_text` 内联 diff（红/绿、`−n +m` 计数），结果里的 diff 同样着色；写文件 → 内容预览；grep/glob → `path:line: text` 按文件分组、计数；网页 → markdown 渲染；todo → 清单；task/cron/lanchat → 键值表 + 摘要载荷；其他/MCP → 参数键值表 + 文本/JSON 结果。大输出默认截断（200 行 / 20k 字符，可"显示全部"），每卡可切到"原始 JSON"。默认展开规则：错误、编辑、todo、小结果直接展开，大输出折叠由徽章给结论。结果按 `id` 精确关联（并行同名调用不串），历史回填时 tool_result 跨消息按 `tool_id` 关联，并剥离面向模型的 `<untrusted_tool_output>` 围栏。前端渲染冒烟测试：`cd web && npm run test:render`
 - **Composer**：`⌘/Ctrl+Enter` 发送、`Shift+Enter` 换行、输入 `@` 唤起文件（实时搜索 workspace 真实路径）/技能/Agent 彩色引用弹层、活跃发光态
 - **子代理委派**：spawn_agent 等委派在聊天流中以单行 `Spawn <目标>` 条目呈现；右栏自动显示**子代理实时流监视器**（推理/文本增量，完结转状态色，空闲自动隐藏）——TUI/WebUI/桌面共用同一 `StreamEventSubagent*` 事件契约；swarm 队友（tm-*）生命周期事件同样经此面板流式呈现（`internal/tui/repl.go` 将 `teammate_text`→SubagentDelta、`teammate_idle`→SubagentDone 复用既有通道，#5881）
 - **命令面板**：`⌘/Ctrl+K`（切视图/切主题/新建会话/切换最近会话）；`⌘/Ctrl+N` 新会话；TUI 内 `/webui` 打印地址并唤起浏览器（含 `#token=`，服务器未运行时友好提示）
