@@ -34,6 +34,12 @@
 		zstd
 	}
 
+	# The release-asset mirror that used to live under /downloads/latest/ is retired;
+	# keep old copies of the installers working by forwarding them to the Worker mirror
+	# (workers/download-mirror, docs/release-process.md §5.6).
+	@old_mirror path_regexp old_mirror ^/downloads/latest(\/.*)?$
+	redir @old_mirror https://download.ggcode.dev/latest{re.old_mirror.1}{?query} 301
+
 	try_files {path} {path}.html {path}/index.html
 	file_server
 }
