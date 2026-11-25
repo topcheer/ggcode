@@ -36,7 +36,7 @@ interface Env {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    const repo = (env.REPO || "topcheer/ggcode").replace(/\/+$/, "");
+    const repo = trimTrailingSlashes(env.REPO || "topcheer/ggcode");
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
       return new Response("misconfigured REPO", { status: 500 });
     }
@@ -45,7 +45,7 @@ export default {
       return new Response("method not allowed", { status: 405, headers: { allow: "GET, HEAD" } });
     }
 
-    const path = url.pathname.replace(/\/+$/, "");
+    const path = trimTrailingSlashes(url.pathname);
     const cache = caches.default;
 
     // ---- well-known, non-versioned paths ---------------------------------
@@ -88,6 +88,13 @@ export default {
     return handleVersioned(request, cache, repo, env, ctx);
   },
 } satisfies ExportedHandler<Env>;
+
+/** Remove trailing "/" without a regex (CodeQL flags /\/+$/ as polynomial on uncontrolled input). */
+function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 1 && s.charCodeAt(end - 1) === 47) end--;
+  return s.slice(0, end);
+}
 
 // ---------------------------------------------------------------------------
 // Handlers
