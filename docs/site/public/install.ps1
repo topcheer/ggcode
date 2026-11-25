@@ -110,8 +110,11 @@ function Install-Ggcode {
             $location = $resp.Headers["Location"]
         } catch {
             $r = $_.Exception.Response
-            if ($r -is [System.Net.Http.HttpResponseMessage]) { $location = "$($r.Headers.Location)" }   # PowerShell 7
-            elseif ($r) { $location = $r.Headers["Location"] }                                          # Windows PowerShell 5.1
+            # PowerShell 7 exposes System.Net.Http.HttpResponseMessage, Windows PowerShell 5.1 a
+            # HttpWebResponse. Compare by type NAME: the type literal [System.Net.Http.HttpResponseMessage]
+            # itself fails on PS 5.1 ("type not found") because System.Net.Http is not loaded there.
+            if ($r -and "$($r.GetType().FullName)" -eq "System.Net.Http.HttpResponseMessage") { $location = "$($r.Headers.Location)" }
+            elseif ($r) { $location = $r.Headers["Location"] }
         }
         if ($location) { $tag = "$location".TrimEnd("/").Split("/")[-1] }
         if (-not $tag) {
