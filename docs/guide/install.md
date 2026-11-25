@@ -21,8 +21,8 @@ irm https://ggcode.dev/install.ps1 | iex
 ```
 
 Both installers detect your OS and architecture (`x86_64` / `arm64`), download the matching
-archive from the latest release (resolved through `https://ggcode.dev/downloads/latest/manifest.json`,
-falling back to GitHub), **verify its SHA-256 against the release's `checksums.txt`**, install the
+archive from the latest release (resolved through `https://download.ggcode.dev/latest/manifest.json` -
+a Cloudflare Worker mirror that streams and edge-caches the GitHub release assets - falling back to GitHub), **verify its SHA-256 against the release's `checksums.txt`**, install the
 binary and print the installed version. They never use `sudo` or admin rights.
 
 Useful options:
