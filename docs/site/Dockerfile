@@ -8,9 +8,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
-# The release-asset mirror (manifest.json / checksums.txt / index.html) is written by
-# scripts/release/publish-site-branch.sh into docs/site/downloads/ - outside dist/.
-# Publish it next to the Astro output (it only exists in the deployment branch).
+# Legacy: releases used to copy their assets into docs/site/downloads/ (deployment branch
+# only). The mirror now lives in the download.ggcode.dev Worker and /downloads/latest/*
+# is redirected there, so this only matters for branches that still carry the directory.
 RUN if [ -d downloads ]; then mkdir -p dist/downloads && cp -R downloads/. dist/downloads/; fi
 
 FROM caddy:2.10-alpine
