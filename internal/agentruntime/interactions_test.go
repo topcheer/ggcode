@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/permission"
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
 func TestAwaitApprovalHonorsBufferedDecisionOnCtxDone(t *testing.T) {
@@ -157,4 +158,91 @@ func TestAwaitApprovalCtxDoneReturnsNonDecision(t *testing.T) {
 			t.Fatalf("cancelled ctx.Done -> %v, want Cancelled", d)
 		}
 	})
+}
+
+// Regression for #4151: desktop approval handlers with no tunnel broker used
+// to pass requestID "" for every request. Two concurrent approvals then
+// collided on the same map key and the second registration silently
+// overwrote the first waiter - the user's Allow on dialog A resolved
+// waiter B, B's actual decision vanished, and waiter A hung until its
+// 15-minute timeout. The broker must re-key the later waiter so both stay
+// independently resolvable.
+func TestAwaitApprovalSameIDDoesNotOverwriteWaiter(t *testing.T) {
+	b := NewInteractionBroker()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gotA := make(chan permission.Decision, 1)
+	gotB := make(chan permission.Decision, 1)
+	go func() { gotA <- b.AwaitApproval(ctx, ApprovalRequest{ID: "", ToolName: "toolA"}) }()
+	waitForBrokerMapLen(t, b, 1)
+	go func() { gotB <- b.AwaitApproval(ctx, ApprovalRequest{ID: "", ToolName: "toolB"}) }()
+	waitForBrokerMapLen(t, b, 2)
+
+	// The first waiter keeps the original key; resolving it must reach A.
+	if _, ok := b.ResolveApproval("", permission.Allow); !ok {
+		t.Fatal("first waiter (original empty ID) is not resolvable")
+	}
+	// The second waiter must have been re-keyed, not overwritten/lost.
+	pending := b.PendingApprovals()
+	if len(pending) != 1 {
+		t.Fatalf("after resolving the first waiter, want 1 pending waiter, got %d", len(pending))
+	}
+	if pending[0].ID == "" {
+		t.Fatal("second waiter is still registered under the colliding empty ID")
+	}
+	if pending[0].ToolName != "toolB" {
+		t.Fatalf("surviving waiter is %q, want toolB", pending[0].ToolName)
+	}
+	if _, ok := b.ResolveApproval(pending[0].ID, permission.Deny); !ok {
+		t.Fatalf("re-keyed waiter %q is not resolvable", pending[0].ID)
+	}
+
+	if d := <-gotA; d != permission.Allow {
+		t.Fatalf("waiter A received %v, want Allow (decision misrouted)", d)
+	}
+	if d := <-gotB; d != permission.Deny {
+		t.Fatalf("waiter B received %v, want Deny (decision misrouted)", d)
+	}
+}
+
+// #4151: the ask_user path shares the same overwrite hazard.
+func TestAwaitAskUserSameIDDoesNotOverwriteWaiter(t *testing.T) {
+	b := NewInteractionBroker()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gotA := make(chan toolpkg.AskUserResponse, 1)
+	gotB := make(chan toolpkg.AskUserResponse, 1)
+	go func() {
+		r, _ := b.AwaitAskUser(ctx, AskUserRequest{ID: ""})
+		gotA <- r
+	}()
+	waitForAskMapLen(t, b, 1)
+	go func() {
+		r, _ := b.AwaitAskUser(ctx, AskUserRequest{ID: ""})
+		gotB <- r
+	}()
+	waitForAskMapLen(t, b, 2)
+
+	if _, ok := b.ResolveAskUser("", toolpkg.AskUserResponse{Status: toolpkg.AskUserStatusSubmitted}); !ok {
+		t.Fatal("first ask waiter (original empty ID) is not resolvable")
+	}
+	pending := b.PendingAskUsers()
+	if len(pending) != 1 {
+		t.Fatalf("after resolving the first waiter, want 1 pending ask waiter, got %d", len(pending))
+	}
+	if pending[0].ID == "" {
+		t.Fatal("second ask waiter is still registered under the colliding empty ID")
+	}
+	if _, ok := b.ResolveAskUser(pending[0].ID, toolpkg.AskUserResponse{Status: toolpkg.AskUserStatusCancelled}); !ok {
+		t.Fatalf("re-keyed ask waiter %q is not resolvable", pending[0].ID)
+	}
+
+	if r := <-gotA; r.Status != toolpkg.AskUserStatusSubmitted {
+		t.Fatalf("ask waiter A received %+v, want Submitted (response misrouted)", r)
+	}
+	if r := <-gotB; r.Status != toolpkg.AskUserStatusCancelled {
+		t.Fatalf("ask waiter B received %+v, want Cancelled (response misrouted)", r)
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
@@ -1707,7 +1708,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	}
 	b.acpClientMgr = acpclient.NewClientManager(b.workingDir, policy)
 	b.acpClientMgr.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
-		return b.RequestApproval(ctx, "", toolName, input)
+		return b.RequestApproval(ctx, localApprovalRequestID(), toolName, input)
 	})
 	// Sub-agent manager
 	agentFactory := func(prov provider.Provider, t interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
@@ -1980,7 +1981,11 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 
 	// Wire approval handler
 	a.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
-		requestID := ""
+		// #4151: requestID "" was shared by every concurrent approval when no
+		// tunnel broker routed them (pure desktop mode), so the second waiter
+		// overwrote the first and the user's decision landed on the wrong tool
+		// call. Generate a unique local ID instead.
+		requestID := localApprovalRequestID()
 		if broker := b.currentTunnelBroker(); broker != nil {
 			requestID = broker.NextMessageID()
 		}
@@ -1991,7 +1996,9 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	if askTool, ok := b.registry.Get("ask_user"); ok {
 		if aut, ok := askTool.(*tool.AskUserTool); ok {
 			aut.SetHandler(func(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
-				requestID := ""
+				// #4151: same shared-empty-ID hazard as the approval handler - ask
+				// requests also need a locally unique routing ID.
+				requestID := localApprovalRequestID()
 				if broker := b.currentTunnelBroker(); broker != nil {
 					requestID = broker.NextMessageID()
 				}
@@ -2966,6 +2973,15 @@ func (b *ChatBridge) pushTunnelAskUserResponse(id string, response tool.AskUserR
 
 func (b *ChatBridge) nextTunnelRequestID() string {
 	return fmt.Sprintf("req-%d", time.Now().UnixNano())
+}
+
+// localApprovalRequestID returns a unique routing ID for approvals (and ask
+// requests) that are resolved locally with no tunnel broker assigned (#4151).
+// The ID flows: handler -> RequestApproval -> UI event payload ->
+// RespondApproval, so it must be unique per request for decisions to route
+// back to the exact waiter that asked.
+func localApprovalRequestID() string {
+	return "approval-" + uuid.NewString()
 }
 
 func (b *ChatBridge) ResetCurrentSessionTunnelLedger() {

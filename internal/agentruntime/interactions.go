@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -36,18 +37,36 @@ func NewInteractionBroker() *InteractionBroker {
 	}
 }
 
+// uniqueInteractionKey derives a collision-free key for a waiter whose
+// requested ID is already owned by another pending waiter (#4151). The
+// sequence number guarantees uniqueness within the broker's lifetime.
+func uniqueInteractionKey(id string, seq uint64) string {
+	return fmt.Sprintf("%s#%d", id, seq)
+}
+
 func (b *InteractionBroker) AwaitApproval(ctx context.Context, req ApprovalRequest) permission.Decision {
 	ch := make(chan permission.Decision, 1)
 	b.mu.Lock()
 	b.approvalSeq++
-	b.approvals[req.ID] = approvalWaiter{request: req, resp: ch, seq: b.approvalSeq}
+	key := req.ID
+	if _, exists := b.approvals[key]; exists {
+		// #4151: a waiter already holds this ID (approval handlers that have
+		// no tunnel broker used to pass requestID ""). A blind map write
+		// would overwrite the earlier waiter, re-routing the user's decision
+		// to the wrong tool call and stranding the first waiter until its
+		// timeout. Re-key the later waiter; the new key is exposed through
+		// PendingApprovals/FirstPendingApproval so it stays resolvable.
+		key = uniqueInteractionKey(req.ID, b.approvalSeq)
+		req.ID = key
+	}
+	b.approvals[key] = approvalWaiter{request: req, resp: ch, seq: b.approvalSeq}
 	b.mu.Unlock()
 
 	select {
 	case decision := <-ch:
 		return decision
 	case <-ctx.Done():
-		b.removeApproval(req.ID)
+		b.removeApproval(key)
 		// #1482: ResolveApproval may have buffered a decision and already
 		// acknowledged it to the UI before ctx.Done fired. Draining first
 		// honors an approval the user sees as granted instead of racing
@@ -68,14 +87,21 @@ func (b *InteractionBroker) AwaitAskUser(ctx context.Context, req AskUserRequest
 	ch := make(chan toolpkg.AskUserResponse, 1)
 	b.mu.Lock()
 	b.askSeq++
-	b.askUsers[req.ID] = askUserWaiter{request: req, resp: ch, seq: b.askSeq}
+	key := req.ID
+	if _, exists := b.askUsers[key]; exists {
+		// #4151: same overwrite hazard as AwaitApproval - re-key instead of
+		// clobbering the pending waiter that already owns this ID.
+		key = uniqueInteractionKey(req.ID, b.askSeq)
+		req.ID = key
+	}
+	b.askUsers[key] = askUserWaiter{request: req, resp: ch, seq: b.askSeq}
 	b.mu.Unlock()
 
 	select {
 	case response := <-ch:
 		return response, nil
 	case <-ctx.Done():
-		b.removeAskUser(req.ID)
+		b.removeAskUser(key)
 		// #1482: same race as AwaitApproval - a response the UI already
 		// acknowledged must not be discarded when ctx.Done fires first.
 		select {
