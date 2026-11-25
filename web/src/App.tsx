@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Chat from "@/pages/Chat";
 import Settings from "@/pages/Settings";
 import CommandPalette, { type PaletteAction } from "@/pages/CommandPalette";
+import NavIcon from "@/components/NavIcon";
 import ShareModal from "@/pages/ShareModal";
 import TunnelModal from "@/pages/TunnelModal";
 import { useChat } from "@/store/chat";
@@ -40,12 +41,27 @@ export default function App() {
   // §6.1 二层:活跃子代理流(未完结的在前)
   const streams = useChat((s) => s.subagentStreams);
   const activeStreams = Object.entries(streams).filter(([, s]) => !s.done);
+  // 右栏有内容才在桌面占位:空栏不该吃掉 380px 的对话宽度(沉浸优先)
+  const [paneHasContent, setPaneHasContent] = useState(false);
   const todos = useChat((s) => s.todos);
   const cronEvents = useChat((s) => s.cronEvents);
   const [actTab, setActTab] = useState<"todos" | "subs" | "cron">("todos");
   // 移动端抽屉(P5-7):窄屏左栏抽屉化
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // 桌面(md+)左栏可折叠:收起后主区占满(沉浸模式),偏好持久化;⌘B / 主区左上角按钮 / 命令面板切换
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("ggcode-sidebar-collapsed") === "1");
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((v) => {
+      localStorage.setItem("ggcode-sidebar-collapsed", v ? "0" : "1");
+      return !v;
+    });
+  }, []);
+  const conn = useChat((s) => s.conn);
+  const [workspaceName, setWorkspaceName] = useState("");
   const [paneOpen, setPaneOpen] = useState(false); // 移动端右栏 overlay(lg 以下)
+  useEffect(() => {
+    setPaneHasContent(!!paneSpawn || activeStreams.length > 0 || todos.length > 0 || cronEvents.length > 0);
+  }, [paneSpawn, activeStreams.length, todos.length, cronEvents.length]);
   // 桌面(lg+)右栏常驻可隐藏:panePinned=false 时收起,主区占满(与移动 overlay 语义互不干扰)。
   const [panePinned, setPanePinned] = useState(() => localStorage.getItem("ggcode-pane-pinned") !== "0");
   const [shareOpen, setShareOpen] = useState(false); // /share 二维码弹层
@@ -63,10 +79,15 @@ export default function App() {
         e.preventDefault();
         setPaletteOpen((v) => !v);
       }
+      // ⌘B:收起/展开左侧栏(仅桌面断点;窄屏左栏是抽屉,不存在折叠态)
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b" && window.matchMedia("(min-width: 768px)").matches) {
+        e.preventDefault();
+        toggleSidebar();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [toggleSidebar]);
 
   const cycleTheme = () => {
     const next: Theme = theme === "dark" ? "light" : theme === "light" ? "system" : "dark";
@@ -82,6 +103,13 @@ export default function App() {
   const paletteActions: PaletteAction[] = [
     { id: "go-chat", label: "打开会话", hint: "视图", run: () => setView("chat") },
     { id: "go-settings", label: "打开设置", hint: "视图", run: () => setView("settings") },
+    { id: "toggle-sidebar", label: sidebarCollapsed ? "展开左侧栏" : "收起左侧栏", hint: "⌘B", run: toggleSidebar },
+    {
+      id: "toggle-pane",
+      label: panePinned ? "隐藏右侧栏" : "显示右侧栏",
+      hint: "视图",
+      run: () => setPanePinned((v) => togglePersisted("ggcode-pane-pinned", v)),
+    },
     { id: "theme", label: `切换主题 (当前:${THEME_LABEL[currentTheme()]})`, hint: "亦在 设置→常规", run: cycleTheme },
     { id: "new-chat", label: "新建会话(清空当前聊天视图)", hint: "⌘N", run: resetChat },
     // 历史会话切换(P4-2):点击后回 chat 视图并重拉该 session 镜像
@@ -125,6 +153,7 @@ export default function App() {
           return (b.updated_at ?? "").localeCompare(a.updated_at ?? "");
         });
         setSessions(rows);
+        setWorkspaceName(workspaceLabel(typeof d?.current_workspace === "string" ? d.current_workspace : ""));
         if (cur?.sessions?.length) setCurrentSessionId(cur.sessions[0].id);
       })
       .catch(() => {});
@@ -188,7 +217,11 @@ export default function App() {
   return (
     <div className="flex h-full bg-background text-foreground">
       {/* 三栏骨架:左会话栏 + 主区(Chat/Settings 切换) + 右 Pane(P1.5) */}
-      <aside className={`fixed inset-y-0 left-0 z-40 w-[232px] shrink-0 flex-col border-r border-border bg-sidebar transition-transform md:static md:flex ${drawerOpen ? "flex" : "hidden"}`}>
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 w-[232px] shrink-0 flex-col border-r border-border bg-sidebar transition-[width] duration-200 ease-out md:static md:flex ${
+          sidebarCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : ""
+        } ${drawerOpen ? "flex" : "hidden"}`}
+      >
         {drawerOpen && <div className="fixed inset-0 z-[-1] bg-black/40 md:hidden" onClick={() => setDrawerOpen(false)} />}
         <div className="flex items-center gap-2.5 border-b border-border px-4 py-5">
           <img src="/icon.png" alt="ggcode" className="h-9 w-9 rounded-[10px]" />
@@ -200,42 +233,23 @@ export default function App() {
           </div>
         </div>
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2">
-          <button
-            className={
-              "rounded-lg px-3 py-2 text-left text-ui-sm transition-colors " +
-              (view === "chat"
-                ? "bg-selected font-medium text-foreground"
-                : "text-foreground-subtle hover:bg-hover hover:text-foreground")
-            }
-            onClick={() => setView("chat")}
-          >
+          {/* 导航项:线性 SVG 图标(随主题取色,不依赖 emoji 字体),文字 + 图标对齐 */}
+          <button className={navCls(view === "chat")} onClick={() => setView("chat")}>
+            <NavIcon name="chat" />
             会话
           </button>
-          <button
-            className={
-              "rounded-lg px-3 py-2 text-left text-ui-sm transition-colors " +
-              (view === "settings"
-                ? "bg-selected font-medium text-foreground"
-                : "text-foreground-subtle hover:bg-hover hover:text-foreground")
-            }
-            onClick={() => setView("settings")}
-          >
-            ⚙ 设置
+          <button className={navCls(view === "settings")} onClick={() => setView("settings")}>
+            <NavIcon name="settings" />
+            设置
           </button>
-          {/* 双隧道入口:📱 mobile 共享(二维码) / ⇄ et 公网隧道(可点 URL) */}
-          <button
-            className="rounded-lg px-3 py-2 text-left text-ui-sm text-foreground-subtle transition-colors hover:bg-hover hover:text-foreground"
-            onClick={() => setShareOpen(true)}
-            title="共享到 Mobile App(扫码)"
-          >
-            📱 共享
+          {/* 双隧道入口:mobile 共享(二维码) / et 公网隧道(可点 URL) */}
+          <button className={navCls(false)} onClick={() => setShareOpen(true)} title="共享到 Mobile App(扫码)">
+            <NavIcon name="share" />
+            共享
           </button>
-          <button
-            className="rounded-lg px-3 py-2 text-left text-ui-sm text-foreground-subtle transition-colors hover:bg-hover hover:text-foreground"
-            onClick={() => setTunnelOpen(true)}
-            title="et 公网隧道"
-          >
-            ⇄ 隧道
+          <button className={navCls(false)} onClick={() => setTunnelOpen(true)} title="et 公网隧道">
+            <NavIcon name="tunnel" />
+            隧道
           </button>
         </nav>
         {/* 会话列表(同桌面逻辑:本 workspace 全量;busy 会话锁定不可点) */}
@@ -268,11 +282,39 @@ export default function App() {
           })}
           {sessions.length === 0 && <div className="px-3 py-1.5 text-ui-xs text-foreground-subtlest">(暂无会话)</div>}
         </div>
-        <div className="border-t border-border px-4 py-3 text-ui-xs text-foreground-subtlest">
-          WebUI {view === "chat" ? "P1 · 聊天" : "P2 · 设置"} · 建设中
+        {/* 底栏:连接状态 + 当前工作区(不再出现 P1/建设中 这类研发阶段措辞) */}
+        <div className="flex items-center gap-2 border-t border-border px-4 py-3 text-ui-xs text-foreground-subtlest">
+          <span>WebUI</span>
+          {view === "chat" && (
+            <>
+              <span
+                className="inline-block h-2 w-2 shrink-0 rounded-full"
+                style={{
+                  background:
+                    conn === "open" ? "var(--color-success)" : conn === "connecting" ? "var(--color-warning)" : "var(--color-destructive)",
+                }}
+              />
+              <span>{conn === "open" ? "已连接" : conn === "connecting" ? "连接中…" : "未连接"}</span>
+            </>
+          )}
+          {workspaceName && (
+            <span className="ml-auto truncate font-[family-name:var(--font-mono)]" title={workspaceName}>
+              {workspaceName}
+            </span>
+          )}
         </div>
       </aside>
-      <main className="min-w-0 flex-1 overflow-hidden">
+      <main className="relative min-w-0 flex-1 overflow-hidden">
+        {/* 桌面折叠开关:悬浮在聊天页顶栏左侧空位(设置页有自己的返回按钮,不显示) */}
+        {view === "chat" && (
+          <button
+            className="absolute top-2 left-2 z-10 hidden rounded-lg px-2 py-1 text-foreground-subtle hover:bg-hover md:inline-block"
+            onClick={toggleSidebar}
+            title={sidebarCollapsed ? "展开左侧栏 (⌘B)" : "收起左侧栏 (⌘B)"}
+          >
+            <NavIcon name="panelLeft" />
+          </button>
+        )}
         <div className="flex items-center gap-2 border-b border-border px-3 py-2 md:hidden">
           <button
             className="text-ui-sm rounded-lg px-2 py-1 text-foreground-subtle hover:bg-hover"
@@ -315,7 +357,7 @@ export default function App() {
         {view === "chat" ? <Chat /> : <Settings onBack={() => setView("chat")} />}
       </main>
       {paneOpen && <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setPaneOpen(false)} />}
-      <aside className={`fixed inset-y-0 right-0 z-50 w-[92vw] max-w-[420px] flex-col border-l border-border bg-sidebar transition-transform lg:static lg:z-auto lg:w-[380px] lg:max-w-none ${panePinned ? "lg:flex" : "lg:hidden"} ${paneOpen ? "flex" : "hidden"}`} style={paneSpawn || activeStreams.length > 0 || todos.length > 0 || cronEvents.length > 0 ? { width: "380px" } : undefined}>
+      <aside className={`fixed inset-y-0 right-0 z-50 w-[92vw] max-w-[420px] flex-col border-l border-border bg-sidebar transition-transform lg:static lg:z-auto lg:w-[380px] lg:max-w-none ${panePinned && paneHasContent ? "lg:flex" : "lg:hidden"} ${paneOpen ? "flex" : "hidden"}`} style={paneSpawn || activeStreams.length > 0 || todos.length > 0 || cronEvents.length > 0 ? { width: "380px" } : undefined}>
         {/* 活动面板:任务清单/子代理/Cron 三 tab 独立区域(零事件 tab 灰显) */}
         {(todos.length > 0 || activeStreams.length > 0 || cronEvents.length > 0) && (
           <div className="flex min-h-0 flex-col border-b border-border">
@@ -434,4 +476,24 @@ export default function App() {
       {tunnelOpen && <TunnelModal onClose={() => setTunnelOpen(false)} />}
     </div>
   );
+}
+
+/** 导航项样式:选中态 bg-selected,其余 subtle + hover */
+function navCls(active: boolean): string {
+  return "flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-ui-sm transition-colors " +
+    (active ? "bg-selected font-medium text-foreground" : "text-foreground-subtle hover:bg-hover hover:text-foreground");
+}
+
+/** 持久化布尔偏好(localStorage "1"/"0"),返回取反后的新值供 setState */
+function togglePersisted(key: string, current: boolean): boolean {
+  localStorage.setItem(key, current ? "0" : "1");
+  return !current;
+}
+
+/** 工作区路径 → 展示名(末段;根目录/空值原样) */
+function workspaceLabel(p: string): string {
+  const t = p.replace(/[\\/]+$/, "");
+  if (!t) return "";
+  const seg = t.split(/[\\/]/).filter(Boolean);
+  return seg.length ? seg[seg.length - 1] : t;
 }
