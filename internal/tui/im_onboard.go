@@ -344,7 +344,7 @@ func (m Model) renderIMOnboardCockpitBlock(entries []imChannelEntry) string {
 		}
 		sb.WriteString(fmt.Sprintf("\nOnboarding in progress: %s (step %d) - resume in %s; 'x' clears the record\n", rec.Platform, rec.Step, panelCmd))
 	}
-	sb.WriteString("Keys: select a channel + 'o' opens that platform's onboard panel; 'x' clears the onboarding record.")
+	sb.WriteString("Keys: select a channel + 'o' opens that platform's panel (setup guidance when unconfigured, management when configured); 'x' clears the onboarding record.")
 	return sb.String()
 }
 
