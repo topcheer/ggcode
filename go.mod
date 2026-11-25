@@ -12,10 +12,10 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/charmbracelet/x/term v0.2.2
-	github.com/chromedp/cdproto v0.160.7
+	github.com/chromedp/cdproto v0.160.8
 	github.com/chromedp/chromedp v0.24.0
 	github.com/creack/pty/v2 v2.0.1
-	github.com/dop251/goja v0.0.0-20261118204651-8dfece3d1e1d
+	github.com/dop251/goja v0.0.0-20261122185237-35fdc4b88e39
 	github.com/eekstunt/telegramify-markdown-go v0.2.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -30,7 +30,7 @@ require (
 	github.com/muesli/reflow v0.3.0
 	github.com/nbd-wtf/go-nostr v0.52.3
 	github.com/pion/logging v0.2.4
-	github.com/pion/webrtc/v4 v4.2.27
+	github.com/pion/webrtc/v4 v4.2.29
 	github.com/sashabaranov/go-openai v1.43.0
 	github.com/saucelabs/forwarder v1.6.5
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
@@ -54,15 +54,10 @@ require (
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	maunium.net/go/mautrix v0.33.0
-	modernc.org/sqlite v1.62.0
+	modernc.org/sqlite v1.63.0
 )
 
-require (
-	cel.dev/expr v0.26.0 // indirect
-	cloud.google.com/go/auth/oauth2adapt v0.3.1 // indirect
-	fiatjaf.com/lib v0.3.7 // indirect
-	github.com/FastFilter/xorfilter v0.5.1 // indirect
-)
+require cloud.google.com/go/auth/oauth2adapt v0.3.1 // indirect
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
@@ -157,7 +152,7 @@ require (
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.3.0 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/topcheer/etunnel v1.7.26
+	github.com/topcheer/etunnel v1.7.31
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.77.0 // indirect
