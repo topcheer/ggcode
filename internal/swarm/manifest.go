@@ -173,7 +173,11 @@ func (m *Manager) stampTeammateResult(teamID, tmID, result string, lastActive ti
 // findTeamManifestByName scans persisted manifests and matches on team name
 // (case-insensitive) or team ID. Used by the team_restore tool.
 func (m *Manager) findTeamManifestByName(name string) (*TeamManifest, error) {
-	// #5860: scan THIS session's namespace only.
+	// #5860: scan THIS session's namespace only. No namespace = no scan:
+	// the shared root also holds other sessions and the legacy layout.
+	if m.SessionNamespace() == "" {
+		return nil, errNoConfirmedSession
+	}
 	teamsDir := m.sessionTeamsDir()
 	entries, err := os.ReadDir(teamsDir)
 	if err != nil {
