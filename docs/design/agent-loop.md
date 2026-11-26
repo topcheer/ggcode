@@ -15,7 +15,7 @@ Key files:
 
 - `agent.go` — `Agent` struct, `Run`/`RunStream`, provider orchestration, rate-limit awareness.
 - `agent_tool.go` — tool execution, diff confirmation, pre/post hooks.
-- `agent_autopilot.go` — autopilot continuation and goal-directed execution.
+- `agent_autopilot.go` — autopilot continuation and goal-directed execution. When the model ends its turn with a goal still active, the strategist (`autopilot_strategist.go`, an auxiliary LLM call) either injects the next instruction or declares the goal achieved (`<GOAL_ACHIEVED/>`), which ends the run. There is no deterministic termination on "no progress": the former "3 consecutive no-progress rounds -> terminate" gate was removed — the AI decides when to stop (strategist completion, the model's own end of turn, or the user cancelling). The no-progress streak is still surfaced as a status statistic (`no_progress_streak`). The only remaining bound is the per-run strategist call budget (100): once reached, the model gets one continuation and its next end of turn ends the run.
 - `agent_compact.go` — reactive compaction, context budget analysis, fallback checkpoints.
 - `agent_precompact.go` — progressive tool-result clearing and background precompact.
 - `agent_prompt_inject.go` — dynamic system prompt injection (lanchat peers, playbook hints).

@@ -25,7 +25,7 @@ Best for everyday work: near-zero interruptions, with hard floors against prompt
 
 ### `bypass`
 
-Cruise control (goal + strategist oversight) rides on this mode. Nothing is gated except:
+Cruise control (goal + strategist oversight) rides on this mode. When the agent ends its turn while an autopilot goal is still open, a strategist model decides whether the goal is achieved (run ends) or injects the next instruction (run continues). Nothing terminates the run on a "no progress" counter — the agent and the strategist decide when to stop; you can always cancel manually. Nothing is gated except:
 
 - **System-level destructive commands**: Ask
 - **Persistence-backdoor writes**: shell redirects to out-of-sandbox **or** sensitive paths (`~/.ssh/authorized_keys`, `~/.bashrc`, `/etc/**`) and file-tool writes outside the sandbox - Ask. These are rare by construction and never a daily-interruption source.

@@ -220,22 +220,12 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 			a.strategistNoProgressCount++
 			a.autopilotStrategistCount++
 
-			if a.strategistNoProgressCount >= maxConsecutiveStrategistNoProgress {
-				debug.Log("agent", "Iteration %d: autopilot force-terminate after %d consecutive no-progress rounds", iter+1, a.strategistNoProgressCount)
-				preview := textBuf
-				if len(preview) > 200 {
-
-					preview = strings.ToValidUTF8(preview[:200], "")
-				}
-				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Autopilot: agent idle for %d consecutive rounds - terminating to avoid deadlock. Last output: %s]", a.strategistNoProgressCount, preview)})
-				a.ClearAutopilotGoal()
-
-				if codeChangedInRun(runStats) {
-					st.asyncVerifyStats = runStats
-				}
-				return chatTurnFatal, nil
-			}
-			debug.Log("agent", "Iteration %d: autopilot calling strategist (call #%d/%d, no-progress=%d/%d)", iter+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls, a.strategistNoProgressCount, maxConsecutiveStrategistNoProgress)
+			// No deterministic deadlock breaker: the former "3 consecutive
+			// no-progress rounds -> terminate" gate is gone. The AI decides when
+			// to stop - the strategist declares the goal achieved, the model ends
+			// its turn without autopilot re-prompting, or the user cancels. The
+			// streak is still tracked, but only as a status statistic.
+			debug.Log("agent", "Iteration %d: autopilot calling strategist (call #%d/%d, no-progress streak=%d)", iter+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls, a.strategistNoProgressCount)
 			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist #%d/%d: analyzing conversation and deciding next steps...] ", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
 			result, sErr := a.runAutopilotStrategist(ctx, textBuf)
 			if sErr != nil {
@@ -276,7 +266,7 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 					Role: "user",
 					Content: []provider.ContentBlock{{
 						Type: "text",
-						Text: "Continue the task autonomously: check remaining work, run build/tests to verify, then finish and summarize what was completed.",
+						Text: "Continue the task autonomously: check the remaining work and run build/tests to verify it.",
 					}},
 				})
 				return chatTurnContinue, nil
