@@ -66,6 +66,10 @@ mkdir -p "${site_dir}"
 
 if [[ -d docs/site ]]; then
   rsync -a --delete --exclude '.git' docs/site/ "${site_dir}/"
+  # docs/site/scripts/postbuild.mjs turns the README into dist/llms-full.txt. The
+  # Railway image builds with docs/site as the context, so the README has to live
+  # inside it on this branch (in the main repo it is read from the repo root).
+  cp README.md "${site_dir}/README.md"
 else
   echo "WARNING: docs/site/ not found, publishing empty site"
 fi

@@ -30,11 +30,15 @@ if (existsSync(sm)) {
 // llms-full.txt: the full English README for AI crawlers that want the whole
 // text in one fetch (https://llmstxt.org). Regenerated from the repo README on
 // every build so it never drifts.
-const readme = new URL('../../../README.md', import.meta.url);
-if (existsSync(readme.pathname)) {
+// docs/site/README.md on the deployment branch (Docker context = docs/site),
+// ../../../README.md in the main repo checkout.
+const readmeCandidates = [new URL('../README.md', import.meta.url), new URL('../../../README.md', import.meta.url)];
+const readme = readmeCandidates.find((u) => existsSync(u.pathname));
+if (readme) {
   const { copyFileSync } = await import('node:fs');
   copyFileSync(readme.pathname, join(dist, 'llms-full.txt'));
 } else {
   console.error('[postbuild] README.md not found; llms-full.txt not generated');
+  process.exitCode = 1;
 }
 console.log('[postbuild] legal URLs normalised');
