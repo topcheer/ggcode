@@ -97,5 +97,12 @@
   "proof.stars.n": "GitHub",
   "terminal.demo": "Explain the auth flow and refactor for readability",
   "terms.title": "Terms of Service",
-  "video.play": "Play demo"
+  "video.play": "Play demo",
+  "privacy.description": "Privacy policy for ggcode, the open-source AI coding agent for the terminal — what the CLI, desktop and mobile apps store locally, what the optional cloud features collect, and how to delete it.",
+  "terms.description": "Terms of service for ggcode, the MIT-licensed open-source AI coding agent for the terminal — license, acceptable use, and disclaimers.",
+  "notfound.title": "Page not found",
+  "notfound.text": "The page you are looking for moved or never existed. The install command, docs and releases are one click away.",
+  "notfound.cta": "Back to ggcode.dev",
+  "notfound.docs": "Documentation on GitHub",
+  "notfound.releases": "Releases"
 }

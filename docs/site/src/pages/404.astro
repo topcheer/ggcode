@@ -1,0 +1,30 @@
+---
+// Served by the static host for every unknown path (Caddy's file_server uses
+// dist/404.html with a real 404 status). Branded, indexable=no, with the two
+// destinations a lost visitor actually wants: install + docs.
+import Base from '../layouts/Base.astro';
+import { t } from '../i18n/utils';
+---
+
+<Base locale="en" titleKey="notfound.title" path="" softwareEntity={false} noindex>
+  <section class="section">
+    <div class="container nf">
+      <p class="nf-code" aria-hidden="true">404</p>
+      <h1>{t('en', 'notfound.title')}</h1>
+      <p class="sub">{t('en', 'notfound.text')}</p>
+      <div class="cta-actions">
+        <a class="btn btn-primary" href="/">{t('en', 'notfound.cta')}</a>
+        <a class="btn btn-ghost" href="https://github.com/topcheer/ggcode/tree/main/docs" rel="noopener">{t('en', 'notfound.docs')}</a>
+        <a class="btn btn-ghost" href="https://github.com/topcheer/ggcode/releases" rel="noopener">{t('en', 'notfound.releases')}</a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .nf { text-align: center; padding-block: var(--space-9); }
+  .nf-code { font-family: var(--font-mono); font-size: var(--text-6xl, 4rem); line-height: 1; color: var(--accent); opacity: 0.6; margin-bottom: var(--space-3); }
+  .nf h1 { font-size: var(--text-3xl); margin-bottom: var(--space-3); }
+  .nf .sub { max-width: 520px; margin-inline: auto; }
+  .cta-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-6); }
+</style>

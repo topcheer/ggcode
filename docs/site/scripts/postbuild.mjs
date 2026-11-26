@@ -17,10 +17,24 @@ for (const [from, to] of moves) {
   renameSync(src, dst);
   rmSync(join(dist, from.replace('/index.html', '')), { recursive: true, force: true });
 }
+// Astro's i18n fallback emits a redirect stub at zh/404/index.html that points
+// at /404/ - a route that does not exist (the real page is 404.html, which the
+// static host serves for every unknown path, including /zh/*). Drop the stub.
+rmSync(join(dist, 'zh/404'), { recursive: true, force: true });
 // Sitemap: rewrite directory legal URLs to the .html form.
 const sm = join(dist, 'sitemap-0.xml');
 if (existsSync(sm)) {
   const { readFileSync, writeFileSync } = await import('node:fs');
   writeFileSync(sm, readFileSync(sm, 'utf8').replace(/(privacy|terms)\/<\/loc>/g, '$1.html</loc>'));
+}
+// llms-full.txt: the full English README for AI crawlers that want the whole
+// text in one fetch (https://llmstxt.org). Regenerated from the repo README on
+// every build so it never drifts.
+const readme = new URL('../../../README.md', import.meta.url);
+if (existsSync(readme.pathname)) {
+  const { copyFileSync } = await import('node:fs');
+  copyFileSync(readme.pathname, join(dist, 'llms-full.txt'));
+} else {
+  console.error('[postbuild] README.md not found; llms-full.txt not generated');
 }
 console.log('[postbuild] legal URLs normalised');

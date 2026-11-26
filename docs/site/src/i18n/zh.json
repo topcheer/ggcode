@@ -97,5 +97,12 @@
   "proof.stars.n": "GitHub",
   "terminal.demo": "解释认证流程并重构以提升可读性",
   "terms.title": "服务条款",
-  "video.play": "播放演示"
+  "video.play": "播放演示",
+  "privacy.description": "ggcode（开源终端 AI 编程智能体）的隐私政策：CLI、桌面与移动端在本地存储什么、可选云功能收集什么，以及如何删除。",
+  "terms.description": "ggcode（MIT 许可的开源终端 AI 编程智能体）的服务条款：许可、可接受使用与免责声明。",
+  "notfound.title": "页面不存在",
+  "notfound.text": "你要找的页面已移动或从未存在。安装命令、文档与发布版本近在咫尺。",
+  "notfound.cta": "返回 ggcode.dev",
+  "notfound.docs": "GitHub 上的文档",
+  "notfound.releases": "发布版本"
 }

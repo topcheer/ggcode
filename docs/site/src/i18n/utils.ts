@@ -48,5 +48,5 @@ export function localeOgLocale(locale: Locale): string {
 }
 
 export function localeHreflang(locale: Locale): string {
-  return locale === 'zh' ? 'zh-Hans' : 'en';
+  return locale === 'zh' ? 'zh-CN' : 'en';
 }
