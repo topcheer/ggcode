@@ -46,23 +46,13 @@ func (a *Agent) runConversationLoop(ctx context.Context, onEvent func(provider.S
 		}
 		a.guidanceBudget.reset()
 
-		if msg := a.sessionTimeout.check(); msg != "" {
-			onEvent(provider.StreamEvent{
-				Type: provider.StreamEventSystem,
-				Text: msg,
-			})
-			if a.sessionTimeout.shouldStop() {
-				debug.Log("session-timeout", "wall-clock timeout exceeded, stopping agent loop")
-				st.sessionTimedOut = true
-				break
-			}
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: msg,
-				}},
-			})
+		// Wall-clock budget: the 80%/95% "wrap up" nudges are no longer injected
+		// into the conversation; only reaching the limit ends the run (the
+		// user-facing summary is emitted after the loop).
+		if a.sessionTimeout.shouldStop() {
+			debug.Log("session-timeout", "wall-clock timeout exceeded, stopping agent loop")
+			st.sessionTimedOut = true
+			break
 		}
 
 		if a.consumeReadyPreCompact(onEvent) {

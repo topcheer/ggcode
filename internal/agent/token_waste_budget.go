@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,14 +8,6 @@ import (
 )
 
 const (
-	wasteRatioThreshold = 0.40
-
-	wasteMinTotalTokens = 8000
-
-	wasteMinToolResults = 5
-
-	wasteMaxWarnings = 2
-
 	tokensPerChar = 0.25
 
 	wasteEmptyThreshold = 50
@@ -207,49 +198,4 @@ func wastePathKey(p string) string {
 		}
 	}
 	return filepath.Clean(p)
-}
-
-func (a *Agent) maybeWarnTokenWaste() string {
-	if a.tokenWasteBudget == nil {
-		return ""
-	}
-	s := a.tokenWasteBudget
-	s.mu.Lock()
-	if s.warnings >= wasteMaxWarnings {
-		s.mu.Unlock()
-		return ""
-	}
-	if s.totalTokens < wasteMinTotalTokens || len(s.entries) < wasteMinToolResults {
-		s.mu.Unlock()
-		return ""
-	}
-	ratio := float64(s.wasteTokens) / float64(s.totalTokens)
-	if ratio <= wasteRatioThreshold {
-		s.mu.Unlock()
-		return ""
-	}
-	s.warnings++
-	breakdown := ""
-	for _, cat := range []wasteCategory{wasteError, wasteEmpty, wasteRedundant, wasteExpired} {
-		if tokens, ok := s.catTotals[cat]; ok && tokens > 0 {
-			if breakdown != "" {
-				breakdown += ", "
-			}
-			breakdown += fmt.Sprintf("%s=%d", cat, tokens)
-		}
-	}
-	totalTokens := s.totalTokens
-	wasteTokens := s.wasteTokens
-	s.mu.Unlock()
-
-	return fmt.Sprintf(
-		"[token-waste] %.0f%% of your tool-result context budget (%d/%d est tokens) "+
-			"is consumed by wasted content [%s]. Research (AgentDiet, arXiv:2509.23586, "+
-			"FSE 2026) shows trajectories above 40%% waste have significantly higher failure "+
-			"rates. Reduce waste by: (1) avoiding re-reading files you already have in context, "+
-			"(2) using targeted offset/limit reads instead of full-file reads, "+
-			"(3) not repeating failed tool calls without changing arguments, "+
-			"(4) batch-reading files you need once with multi_file_read.\n",
-		ratio*100, wasteTokens, totalTokens, breakdown,
-	)
 }
