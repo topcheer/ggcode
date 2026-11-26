@@ -21,23 +21,26 @@ func Test3683EarlyReturnsSetAsyncVerifyStats(t *testing.T) {
 		}
 		idx += off
 		sites++
-		lo := idx - 350
-		if lo < 0 {
-			lo = 0
-		}
-		hi := idx + 700
-		if hi > len(text) {
-			hi = len(text)
-		}
-		window := text[lo:hi]
-		hasReturn := strings.Contains(window, "return nil") || strings.Contains(window, "return chatTurnFatal, nil")
-		hasGate := strings.Contains(window, "codeChangedInRun(runStats)")
-		if sites <= 2 && (!hasReturn || !hasGate) {
-			t.Fatalf("guard site %d: gate/return wiring incomplete (gate=%v return=%v) — the early-return verify bypass may be back", sites, hasGate, hasReturn)
+		// Every site but the last is an early return (the last one is the main
+		// no-tool path); each early return must be gated by codeChangedInRun and
+		// actually return. The former autopilot deadlock-guard site was removed
+		// (the AI decides when to stop), so the early returns left are the
+		// strategist "goal achieved" guards.
+		if idx+700 < len(text) && strings.Contains(text[idx+700:], assign) {
+			lo := idx - 350
+			if lo < 0 {
+				lo = 0
+			}
+			window := text[lo : idx+700]
+			hasReturn := strings.Contains(window, "return nil") || strings.Contains(window, "return chatTurnFatal, nil")
+			hasGate := strings.Contains(window, "codeChangedInRun(runStats)")
+			if !hasReturn || !hasGate {
+				t.Fatalf("early-return site %d: gate/return wiring incomplete (gate=%v return=%v) — the early-return verify bypass may be back", sites, hasGate, hasReturn)
+			}
 		}
 		off = idx + len(assign)
 	}
-	if sites < 3 {
-		t.Fatalf("expected >=3 asyncVerifyStats = runStats sites (deadlock guard + strategist Complete guard + main path), found %d", sites)
+	if sites < 2 {
+		t.Fatalf("expected >=2 asyncVerifyStats = runStats sites (strategist Complete guard + main path), found %d", sites)
 	}
 }

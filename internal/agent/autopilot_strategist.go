@@ -21,8 +21,6 @@ func stripStrategistCompleteMarker(s string) string {
 	return s
 }
 
-const maxConsecutiveStrategistNoProgress = 3
-
 type strategistResult struct {
 	Guidance string
 	Complete bool
