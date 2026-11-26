@@ -2,6 +2,8 @@ package webui
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 
 	etunnel "github.com/topcheer/etunnel/sdk"
@@ -47,7 +49,7 @@ func (c *TunnelCtl) StartTunnelOpts(localAddr, subdomain, token string) (string,
 		c.cancel = nil
 		c.mu.Unlock()
 		cancel()
-		return "", false, err
+		return "", false, describeTunnelError(err)
 	}
 	c.mu.Lock()
 	c.tunnel = t
@@ -86,4 +88,21 @@ func (c *TunnelCtl) TunnelURL() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.url
+}
+
+// describeTunnelError keeps the server's handshake error verbatim and, when
+// the server refused this client as too old, appends the ggcode-specific
+// remedy. The etunnel server (v1.7.40+) gates clients: an SDK that reports
+// no version or is more than 5 patch releases behind is rejected at hello
+// with code client_outdated and a message carrying the etunnel upgrade URL.
+// For a ggcode user the actionable step is upgrading ggcode itself (the SDK
+// is embedded), so the hint says that; the server text still comes first.
+// The original error stays wrapped (%w) so callers can still errors.As it
+// into *etunnel.APIError.
+func describeTunnelError(err error) error {
+	var apiErr *etunnel.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "client_outdated" {
+		return err
+	}
+	return fmt.Errorf("%w\n[ggcode] this build embeds etunnel SDK %s, which the tunnel server no longer accepts - upgrade ggcode to pick up a newer SDK", err, etunnel.Version)
 }
