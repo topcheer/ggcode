@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type ReviewChanges struct{ WorkingDir string }
@@ -118,15 +119,17 @@ func (t ReviewChanges) Execute(ctx context.Context, input json.RawMessage) (Resu
 	return Result{Content: report}, nil
 }
 
+// getReviewDiff returns the diff for the scope with the harness directory
+// (.ggcode/, often tracked and churning) excluded from the repo root.
 func getReviewDiff(ctx context.Context, dir, scope string) (string, error) {
+	excl := util.HarnessStateExcludePathspec
 	switch scope {
 	case "staged":
-		return runReviewGit(ctx, dir, "diff", "--cached", "--no-color")
+		return runReviewGit(ctx, dir, "diff", "--cached", "--no-color", "--", excl)
 	case "unstaged":
-		return runReviewGit(ctx, dir, "diff", "--no-color")
+		return runReviewGit(ctx, dir, "diff", "--no-color", "--", excl)
 	default:
-
-		return runReviewGit(ctx, dir, "diff", "HEAD", "--no-color")
+		return runReviewGit(ctx, dir, "diff", "HEAD", "--no-color", "--", excl)
 	}
 }
 
@@ -159,7 +162,7 @@ func getUntrackedFiles(ctx context.Context, dir string) []string {
 			if len(file) >= 2 && file[0] == '"' && file[len(file)-1] == '"' {
 				file = file[1 : len(file)-1]
 			}
-			if strings.Contains(status, "?") {
+			if strings.Contains(status, "?") && !util.IsHarnessStatePath(file) {
 				untracked = append(untracked, file)
 			}
 		}

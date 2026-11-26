@@ -74,13 +74,37 @@ The precompact trigger is `AutoCompactThreshold()` = 99% of the usable prompt bu
 | Section | Source | Purpose |
 |---------|--------|---------|
 | **Project layout** | Directory walk (depth 2, max 60 entries) | Codebase structure awareness without tool calls |
-| **Modified files** | `git status --short` (max 20 files) | Working-tree state visibility |
+| **Modified files** | `git status --short` (max 20 files; `.ggcode/` harness state excluded - see below) | Working-tree state visibility |
 | **Repo HEAD** | `git rev-parse --abbrev-ref HEAD` + `git log -1` sha + upstream behind-count | Single-line change-detection marker; commit context is on-demand via `git_log` (#5370) |
 | **Project commands** | Build/test/lint command detection | Verify command suggestions |
 | **Toolchain** | Go/Node/Python version detection | Compatible code generation |
 | **Package symbols** | Go exported declarations per package | API surface awareness for Go projects |
 
 Each section has a 2-second timeout and fails silently (returns empty string) on error. The collector is initialized once and shared globally; pipe/test mode falls back to direct computation.
+
+### Harness state never reaches a review surface
+
+`.ggcode/` (auto memory `memory/*.md` and `memory/experience/`, checkpoints,
+usage / guidance statistics, compaction facts, skills, worktrees) is
+maintained by the harness as a side effect of running and is often **tracked**
+in the user's repository, so it shows up as `M` / `D` on every turn. It is
+not the user's working-tree change and every review surface leaves it out
+(`util.IsHarnessStatePath`, any path segment named `.ggcode`):
+
+| Surface | Exclusion |
+|---|---|
+| **Modified files** prompt section | harness porcelain lines dropped before the 20-line window; no section when only harness state changed |
+| Self-review summary (`diff_summary_gate.go`) | `.ggcode/` and gitignored paths dropped before the min-files check |
+| Adversarial evaluator diff (`evaluator.go`) | `.ggcode/` scopes dropped; whole-tree fallback uses `:(exclude,top).ggcode`; untracked `.ggcode/` lines skipped |
+| `review_changes` tool | diff pathspec `:(exclude,top).ggcode`; untracked scan skips `.ggcode/` |
+
+Field incident 2026-11-26 (GGAiAce): 452 of 475 porcelain lines were memory
+curator churn, so the Modified-files window showed only harness state and the
+self-review made the agent spend a turn attributing "92 deletions" that were
+the curator's prune; the evaluator's whole-tree diff shrank from 143 files /
+5.9k lines to the 21 real files / 76 lines once excluded. Explicitly
+user-invoked `git_status` / `git_diff` are untouched - only the surfaces
+that review "the agent's changes" filter.
 
 ## Persistent Storage
 

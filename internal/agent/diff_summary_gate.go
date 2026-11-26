@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -101,17 +102,7 @@ func (a *Agent) checkDiffSummaryGate(runStats *RunStats) string {
 var harnessStateDirPrefixes = []string{".ggcode/"}
 
 func isHarnessStatePath(path string) bool {
-	p := strings.ReplaceAll(filepath.ToSlash(strings.TrimSpace(path)), "\\", "/")
-	p = strings.TrimPrefix(p, "./")
-	if p == ".ggcode" {
-		return true
-	}
-	for _, pre := range harnessStateDirPrefixes {
-		if strings.HasPrefix(p, pre) {
-			return true
-		}
-	}
-	return false
+	return util.IsHarnessStatePath(path)
 }
 
 // filterDiffSummaryNoise drops diff-stat lines whose path is harness state
