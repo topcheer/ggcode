@@ -1,23 +1,19 @@
 package agent
 
 import (
-	"fmt"
-	"strings"
 	"time"
 )
 
-const (
-	consensusWindowSteps   = 5
-	consensusFireThreshold = 3
-	consensusMaxAlerts     = 2
-	consensusCooldownSteps = 8
-)
+// The cross-detector consensus alert ("[Systemic Failure Detected /
+// Cross-Detector Consensus] ... STOP incremental patching") was removed as
+// dead code: check() had no caller left, and it was a counter-driven steering
+// message. recordFiring stays so the budget-crossing bookkeeping keeps a
+// record of which detectors fired.
+const consensusWindowSteps = 5
 
 type consensusState struct {
-	firings       []consensusFiring
-	alertsIssued  int
-	lastAlertStep int
-	currentStep   int
+	firings     []consensusFiring
+	currentStep int
 }
 
 type consensusFiring struct {
@@ -28,15 +24,12 @@ type consensusFiring struct {
 
 func newConsensusState() *consensusState {
 	return &consensusState{
-		firings:       make([]consensusFiring, 0, 32),
-		lastAlertStep: -consensusCooldownSteps,
+		firings: make([]consensusFiring, 0, 32),
 	}
 }
 
 func (s *consensusState) reset() {
 	s.firings = s.firings[:0]
-	s.alertsIssued = 0
-	s.lastAlertStep = -consensusCooldownSteps
 	s.currentStep = 0
 }
 
@@ -63,70 +56,4 @@ func (s *consensusState) recordFiring(detectorName string, step int) {
 		}
 		s.firings = kept
 	}
-}
-
-func (s *consensusState) check() string {
-	if s == nil {
-		return ""
-	}
-	if s.alertsIssued >= consensusMaxAlerts {
-		return ""
-	}
-
-	if s.currentStep-s.lastAlertStep < consensusCooldownSteps {
-		return ""
-	}
-
-	windowStart := s.currentStep - consensusWindowSteps
-	seen := make(map[string]bool)
-	var recentDetectors []string
-	for _, f := range s.firings {
-		if f.step > windowStart {
-			if !seen[f.detector] {
-				seen[f.detector] = true
-				recentDetectors = append(recentDetectors, f.detector)
-			}
-		}
-	}
-
-	if len(seen) < consensusFireThreshold {
-		return ""
-	}
-
-	s.alertsIssued++
-	s.lastAlertStep = s.currentStep
-
-	detectorList := strings.Join(recentDetectors, ", ")
-
-	var guidance string
-	firstAlert := "[Systemic Failure Detected / Cross-Detector Consensus] " +
-		fmt.Sprintf("%d independent behavioral detectors fired within the last %d tool calls (%s). ",
-			len(seen), consensusWindowSteps, detectorList) +
-		"Research on metacognitive monitoring (Nelson-Narens 1990; MAPE-K Loop) shows that " +
-		"simultaneous activation of multiple independent monitors is the strongest signal of " +
-		"systemic failure -- far more diagnostic than any single detector. " +
-		"You are not experiencing isolated issues; you are in a compounding breakdown. " +
-		"STOP incremental patching. Step back and reassess: (1) Are you solving the RIGHT problem? " +
-		"(2) Is your mental model of the codebase correct? (3) Should you try a fundamentally " +
-		"different approach instead of iterating on the current one?"
-	repeatAlert := "[Systemic Failure / Cross-Detector Consensus -- RECURRING] " +
-		fmt.Sprintf("%d detectors still firing in concert (%s). ", len(seen), detectorList) +
-		"The systemic breakdown persists despite prior warnings. " +
-		"This strongly suggests your current approach is fundamentally wrong. " +
-		"Consider: abandoning the current approach entirely, re-reading the original task " +
-		"requirements, or asking for clarification rather than continuing to patch."
-	if s.alertsIssued == 1 {
-		guidance = firstAlert
-	} else {
-		guidance = repeatAlert
-	}
-
-	return guidance
-}
-
-func (s *consensusState) checkOnly() string {
-	if s == nil {
-		return ""
-	}
-	return s.check()
 }

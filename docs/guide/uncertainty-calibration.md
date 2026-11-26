@@ -5,7 +5,7 @@
 > 已删除；`confidence` 仅保留为 Turn Impact 读取的状态。本文保留为历史实现记录。
 > 保留/移除清单见 [`docs/design/guidance-injection-trim.md`](../design/guidance-injection-trim.md)。
 
-ggcode 的不确定性检测面已有 7 个检测器（trajectory confidence、action hedging、compounded uncertainty、foresight 校准、多检测器共识、ask quality gate、capability boundary）。本节记录 **度量闭环化**：让孤立信号参与决策、让校准记账可反馈。
+ggcode 的不确定性检测面已有 7 个检测器（trajectory confidence、action hedging、compounded uncertainty、foresight 校准、多检测器共识、ask quality gate、capability boundary；其中 trajectory confidence 与多检测器共识只保留统计，其"按计数转向"的提示已移除，见 [error-budget.md](error-budget.md)）。本节记录 **度量闭环化**：让孤立信号参与决策、让校准记账可反馈。
 
 ## P1：logprob 置信接入状态机
 

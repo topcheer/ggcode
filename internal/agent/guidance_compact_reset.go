@@ -288,12 +288,6 @@ var guidanceCounterResets = []func(*Agent){
 	},
 
 	func(a *Agent) {
-		if a.crossDetectorConsensus != nil {
-			a.crossDetectorConsensus.alertsIssued = 0
-		}
-	},
-
-	func(a *Agent) {
 		if a.scopeCreep != nil {
 			a.scopeCreep.warnings = 0
 		}
