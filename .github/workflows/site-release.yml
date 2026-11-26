@@ -37,3 +37,21 @@ jobs:
           ./scripts/release/publish-site-branch.sh \
             --target-branch "${TARGET_BRANCH}" \
             --source-label "${GITHUB_SHA}"
+
+      # HTML is edge-cached for 10 min at Cloudflare (zone cache rule). Railway
+      # rebuilds the image from the deployment branch right after the push above
+      # (typically 3-5 min), so wait for it to be live, then drop the cache. The
+      # token needs "Cache Purge" on the zone; without it the step only warns and
+      # the cache expires on its own within 10 min.
+      - name: Purge Cloudflare cache after the Railway deploy
+        continue-on-error: true
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ZONE_ID: d0af4c147ddac69ad0c05c786bc8d3bb
+        run: |
+          if [ -z "${CF_TOKEN}" ]; then echo "::warning::CLOUDFLARE_API_TOKEN not set - skipped the cache purge"; exit 0; fi
+          sleep 360
+          url="https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache"
+          code=$(curl -sS -o /tmp/purge.json -w '%{http_code}' -X POST "$url" -H "Authorization: Bearer ${CF_TOKEN}" -H "Content-Type: application/json" --data '{"purge_everything":true}')
+          if [ "${code}" = "200" ] && grep -q '"success":true' /tmp/purge.json; then
+            echo "Cloudflare cache purged"; else echo "::warning::Cloudflare purge failed (HTTP ${code}): $(head -c 300 /tmp/purge.json)"; fi

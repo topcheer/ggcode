@@ -6,8 +6,9 @@ Copilot, Baidu AI search, Doubao, Kimi). It shares the technical base with SEO
 and adds entity clarity, machine-readable facts and `llms.txt`.
 
 Audit of 2026-11-26 (production `ggcode.dev`, tag v1.3.294). Items marked
-**[repo]** live in this directory; **[CF]** are Cloudflare dashboard settings
-on the `ggcode.dev` zone (Free plan) and cannot be changed from the repo.
+**[repo]** live in this directory; **[CF]** are settings on the `ggcode.dev`
+Cloudflare zone (Free plan) - the ones listed below were applied through the
+API and must be re-checked if the zone is ever rebuilt.
 
 ## What is already good
 
@@ -36,60 +37,20 @@ on the `ggcode.dev` zone (Free plan) and cannot be changed from the repo.
 | `llms-full.txt` on Railway | The deployment branch now carries `docs/site/README.md` (the Railway build context is `docs/site/`), and postbuild fails the build instead of silently skipping when no README is found. |
 | hreflang | `zh-CN` everywhere (was `zh-Hans` in `<link>` but `zh-CN` in `<html lang>`). |
 
-## Open items that need a decision or the Cloudflare dashboard
+## Cloudflare zone settings (applied 2026-11-26 via API, zone `ggcode.dev`, Free plan)
 
-### 1. [CF] Managed robots.txt blocks the wrong crawlers — highest impact
+| Setting | Before | After | Why |
+| --- | --- | --- | --- |
+| Bot Management → Managed robots.txt | on, `ai_training=disallow`, `ai_user=only_on_ad_pages` | **off**; `ai_training`, `ai_search`, `ai_user` all `disabled`; hard AI-bot blocking stays off | The managed file injected `Disallow: /` for Baiduspider / Bytespider / PetalBot / KimiBot (search engines) and for ClaudeBot / Claude-User / ChatGPT-User / Perplexity-User / GPTBot / Google-Extended (retrieval + training), and dropped the `Sitemap:` line. The origin `public/robots.txt` is served verbatim now: allow all + Sitemap. The training reservation is kept as a `Content-Signal: search=yes,ai-input=yes,ai-train=no,use=reference` line (declaration, not a block) - delete that line to also allow training. **Do not re-enable managed robots.txt / AI crawl control** without checking what it injects. |
+| Redirect Rules | none (`www` CNAME is a parking host -> HTTP 525) | `http.host eq "www.ggcode.dev"` -> 301 `https://ggcode.dev{uri}`, query preserved | Canonical host |
+| Cache Rules | HTML `cf-cache-status: DYNAMIC` | `ggcode.dev` + path ends `/` or `.html` -> eligible, Edge TTL 10 min (override origin); browsers keep `max-age=0` so they revalidate against the edge | TTFB on repeat hits; `site-release.yml` purges the zone 6 min after publishing the deployment branch (Railway build time); falls back to a warning if the token lacks "Cache Purge" |
+| Browser Cache TTL | forced 4 h (overrode `immutable` assets) | Respect Existing Headers | `/_astro/*` keeps `max-age=31536000, immutable` |
+| Early Hints (103) | off | on | Fonts / poster fetch overlaps with HTML on reused connections |
+| Caddy error caching | `*.png` 404 inherited `immutable` (cached a year at the edge) | `handle_errors`: `max-age=60` + branded page; the stale `apple-touch-icon.png` entry was purged | Pre-deploy 404s must not stick |
 
-Production `robots.txt` is **Cloudflare's managed file**, not the repo's
-(`Security → Bots → Managed robots.txt`, `ai_training = disallow`). It:
+Verify after any change: `curl -sI https://www.ggcode.dev/` (301 to apex), `curl -s https://ggcode.dev/robots.txt` (4 lines + Content-Signal, no Disallow), two `curl -sI https://ggcode.dev/` (second is `cf-cache-status: HIT`), `curl -sI https://ggcode.dev/favicon.svg` (`immutable`).
 
-- drops the `Sitemap:` line entirely;
-- disallows `ClaudeBot`, `Claude-Web`, `anthropic-ai`, `GPTBot`,
-  `Google-Extended`, `Applebot-Extended`, `CCBot`, `meta-externalagent`,
-  `MistralAI-Training`, `cohere-ai` — i.e. Claude cannot read the site when a
-  user asks it to look ggcode up, and OpenAI / Google / Apple cannot train on
-  it;
-- disallows **`Baiduspider`, `Bytespider`, `PetalBot`, `KimiBot`** — those are
-  *search* engines (Baidu, ByteDance, Huawei, Moonshot). For a product that
-  ships QQ / Feishu / DingTalk integrations and a Chinese site, being invisible
-  to Baidu and Doubao is a real loss, and it is almost certainly unintended
-  (it is Cloudflare's default "training crawlers" template).
-
-Still allowed: Googlebot, Bingbot, `OAI-SearchBot`, `ChatGPT-User`,
-`PerplexityBot`, `Claude-User` (the `ai_search` / `ai_user` toggles are off, so
-nothing is hard-blocked — only the robots.txt signals are sent).
-
-Options:
-
-- **Recommended for GEO**: turn *Managed robots.txt* off. The repo's
-  `public/robots.txt` is then served: allow everything + the sitemap line.
-- **Keep `ai-train=no`** (EU DSM art. 4 reservation) but unblock the search /
-  assistant crawlers: in Crawl Control set per-bot *Allow* for `Baiduspider`,
-  `Bytespider`, `PetalBot`, `KimiBot`, `ClaudeBot`, `Claude-Web`,
-  `anthropic-ai`, and re-add the sitemap (managed file cannot carry it; then
-  submit `sitemap-index.xml` by hand in Search Console / Bing / Baidu).
-
-### 2. [CF] `www.ggcode.dev` is broken (HTTP 525)
-
-`www` is a proxied CNAME to the registrar's parking host, so the TLS handshake
-to the origin fails. Add a Redirect Rule `www.ggcode.dev/*` →
-`https://ggcode.dev/{uri}` (301) — the rule fires at the edge, the origin is
-never contacted — or repoint the CNAME to `voxe12po.up.railway.app` and
-redirect at the origin.
-
-### 3. [CF] Cache / speed
-
-- HTML is `cf-cache-status: DYNAMIC` with TTFB ~0.8 s (origin: Railway through
-  a Cloudflare tunnel). Add a Cache Rule for `ggcode.dev/*` with path ending
-  in `/` or `.html`: *Eligible for cache*, Edge TTL 10 min, and purge on
-  deploy (`POST /zones/{zone}/purge_cache` from `site-release.yml`, or
-  "Purge Everything" in the dashboard). Browsers keep `max-age=0`, so users
-  always revalidate; only the edge caches.
-- *Browser Cache TTL* is forced to 4 h on the Free plan, overriding the
-  origin's `max-age=31536000, immutable` for `/_astro/*`. Set it to *Respect
-  Existing Headers*.
-- *Early Hints (103)* is off — turn it on (free, helps the font / poster fetch
-  overlap with HTML).
+## Open items that still need a decision
 
 ### 4. [repo + content] Depth is the real GEO ceiling
 
@@ -133,9 +94,10 @@ domain is the single biggest lever for both SEO and GEO:
 
 1. `cd docs/site && npm run build` — must end with `[check-links] ok`.
 2. Deploy; then verify: `curl -sI https://ggcode.dev/llms.txt` (200, text/plain),
-   `curl -s https://ggcode.dev/robots.txt | grep Sitemap` (present only if
-   managed robots.txt is off), `https://ggcode.dev/sitemap-index.xml` lists
-   the pages, `https://www.ggcode.dev/` redirects once item 2 is done.
+   `curl -s https://ggcode.dev/robots.txt` (one `Allow`, one `Sitemap`, no
+   `Disallow` - otherwise managed robots.txt is back on),
+   `https://ggcode.dev/sitemap-index.xml` lists the pages, and the site
+   deploy workflow's purge step logged `Cloudflare cache purged`.
 3. Validate the home JSON-LD in Google's Rich Results Test (SoftwareApplication)
    and in Schema Markup Validator (`@graph` types resolve).
 4. After publishing new docs pages: request indexing in Search Console / Bing

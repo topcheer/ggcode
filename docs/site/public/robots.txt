@@ -1,4 +1,11 @@
+# Everything may crawl, fetch and cite this site (search engines, AI assistants,
+# user-triggered fetches). The only reservation is model *training*, declared via
+# Content-Signal (https://contentsignals.org) instead of a Disallow, so nothing
+# that respects robots.txt is blocked from reading the site.
+# Managed robots.txt / AI crawl control on the Cloudflare zone must stay OFF -
+# they inject Disallow blocks for Baidu, Claude, ChatGPT, Perplexity et al.
 User-agent: *
 Allow: /
+Content-Signal: search=yes,ai-input=yes,ai-train=no,use=reference
 
 Sitemap: https://ggcode.dev/sitemap-index.xml
