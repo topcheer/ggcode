@@ -32,6 +32,8 @@ on the `ggcode.dev` zone (Free plan) and cannot be changed from the repo.
 | Legal pages | Own meta descriptions (they shared the homepage's). |
 | Icons | Real 180x180 `apple-touch-icon.png` (was the 390 KB banner PNG; `apple-touch-icon.png` was 404). `og:image:type` / `og:image:alt` / `twitter:image:alt` added. |
 | 404 | Branded `404.html` (noindex) with install / docs / releases links instead of an empty body. |
+| Error caching | Caddy `handle_errors`: 4xx/5xx no longer inherit the `immutable` asset header (a request for a not-yet-deployed asset was cached as a 404 for a year at the edge) and serve the branded 404 page. |
+| `llms-full.txt` on Railway | The deployment branch now carries `docs/site/README.md` (the Railway build context is `docs/site/`), and postbuild fails the build instead of silently skipping when no README is found. |
 | hreflang | `zh-CN` everywhere (was `zh-Hans` in `<link>` but `zh-CN` in `<html lang>`). |
 
 ## Open items that need a decision or the Cloudflare dashboard

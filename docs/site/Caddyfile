@@ -29,6 +29,15 @@
 	}
 	header @assets Cache-Control "public, max-age=31536000, immutable"
 
+	# Error responses must not inherit the immutable asset header: a request for
+	# a not-yet-deployed asset would otherwise be cached as a 404 for a year at
+	# the edge (seen with apple-touch-icon.png). Short TTL + the branded page.
+	handle_errors {
+		header Cache-Control "public, max-age=60"
+		rewrite * /{err.status_code}.html
+		file_server
+	}
+
 	encode {
 		gzip
 		zstd
