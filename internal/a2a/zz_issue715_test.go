@@ -17,6 +17,7 @@ func issue715Server(t *testing.T, mutate func(*ServerConfig)) *Server {
 	t.Helper()
 	handler := NewTaskHandler(".", nil, nil)
 	cfg := ServerConfig{
+		Host:                  "127.0.0.1",
 		Port:                  0,
 		APIKey:                "issue715-real-key",
 		PushCallbackAllowlist: []string{"push-ok.invalid"},
@@ -70,7 +71,7 @@ func issue715SetPush(t *testing.T, srv *Server, apiKey string, cfg PushNotificat
 func TestIssue715_PushDisabledWithoutRealAuth(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 
-	srvNoAuth := NewServer(ServerConfig{Port: 0}, handler)
+	srvNoAuth := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0}, handler)
 	if err := srvNoAuth.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,7 @@ func TestIssue715_PushDisabledWithoutRealAuth(t *testing.T) {
 		t.Fatalf("expected ErrPushAuthNotConfigured, got %+v", resp.Error)
 	}
 
-	srvDefault := NewServer(ServerConfig{Port: 0, APIKey: config.DefaultA2AAPIKey}, handler)
+	srvDefault := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0, APIKey: config.DefaultA2AAPIKey}, handler)
 	if err := srvDefault.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +97,7 @@ func TestIssue715_PushDisabledWithoutRealAuth(t *testing.T) {
 		t.Fatalf("expected ErrPushAuthNotConfigured, got %+v", resp.Error)
 	}
 
-	srvReal := NewServer(ServerConfig{Port: 0, APIKey: "real-secret"}, handler)
+	srvReal := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0, APIKey: "real-secret"}, handler)
 	if err := srvReal.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -180,6 +181,7 @@ func TestIssue715_WildcardRequiresOptIn(t *testing.T) {
 func TestIssue715_AllowlistCIDRAndHost(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	srv := NewServer(ServerConfig{
+		Host:                  "127.0.0.1",
 		Port:                  0,
 		APIKey:                "issue715-real-key",
 		PushCallbackAllowlist: []string{"192.168.50.0/24", "collector.lan"},
@@ -208,7 +210,7 @@ func TestIssue715_HostnameResolvingToPrivateIPRejected(t *testing.T) {
 	defer ts.Close()
 
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0, APIKey: "issue715-real-key"}, handler)
+	srv := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0, APIKey: "issue715-real-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -233,6 +235,7 @@ func TestIssue715_RedirectRevalidated(t *testing.T) {
 
 	handler := NewTaskHandler(".", nil, nil)
 	srv := NewServer(ServerConfig{
+		Host:                  "127.0.0.1",
 		Port:                  0,
 		APIKey:                "issue715-real-key",
 		PushCallbackAllowlist: []string{"127.0.0.1"},
@@ -274,7 +277,7 @@ func TestIssue715_RedirectRevalidated(t *testing.T) {
 
 func TestIssue715_FireSkipsUnverifiableConfigs(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0, APIKey: "issue715-real-key"}, handler)
+	srv := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0, APIKey: "issue715-real-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}

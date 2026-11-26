@@ -15,6 +15,7 @@ import (
 func TestIssue1073_StreamingSendsRealStatus(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	cfg := ServerConfig{
+		Host:   "127.0.0.1",
 		Port:   0,
 		APIKey: "test-key",
 	}
@@ -68,6 +69,7 @@ func TestIssue1073_StreamingSendsRealStatus(t *testing.T) {
 func TestIssue1075_CancelRaceCondition(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	cfg := ServerConfig{
+		Host:   "127.0.0.1",
 		Port:   0,
 		APIKey: "test-key",
 	}
@@ -159,6 +161,7 @@ func TestIssue1075_CancelRaceCondition(t *testing.T) {
 func TestIssue1076_PushConfigGetMissing(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	cfg := ServerConfig{
+		Host:   "127.0.0.1",
 		Port:   0,
 		APIKey: "test-key",
 	}
@@ -223,6 +226,7 @@ func TestIssue1076_PushConfigGetMissing(t *testing.T) {
 func TestIssue1076_PushConfigGetExisting(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	cfg := ServerConfig{
+		Host:   "127.0.0.1",
 		Port:   0,
 		APIKey: "test-key",
 	}

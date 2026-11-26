@@ -12,7 +12,7 @@ import (
 
 func TestIssue1110_StopBeforeStartDoesNotBlock(t *testing.T) {
 	handler := NewTaskHandler(t.TempDir(), nil, tool.NewRegistry())
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0}, handler)
 	done := make(chan struct{})
 	go func() {
 		srv.Stop()
