@@ -150,7 +150,10 @@ func (a *Agent) handleChatTurnError(ctx context.Context, err error, textBuf stri
 // should be set for this iteration.
 func (a *Agent) noteUsageBudgetCrossing(iter int, msg string, stop bool, detector, debugCat, stopText string, onEvent func(provider.StreamEvent)) bool {
 	a.crossDetectorConsensus.recordFiring(detector, iter)
-	a.injectGuidance(msg)
+	// The crossing text is never injected into the conversation anymore: the
+	// 80%/95% "finalize / prepare to conclude" nudges made the model wind
+	// down productive work. Only the hard stop (explicit budget reached) ends
+	// the run, and that is announced to the user as a system event below.
 	debug.Log(debugCat, "threshold crossed at iteration %d stop=%v", iter, stop)
 	if stop {
 		onEvent(provider.StreamEvent{

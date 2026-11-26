@@ -198,11 +198,6 @@ func (a *Agent) handleNoToolResponse(ctx context.Context, resp *provider.ChatRes
 			a.injectGuidance(healthHint)
 		}
 
-		if wasteHint := a.maybeWarnTokenWaste(); wasteHint != "" {
-			debug.Log("agent", "Iteration %d: token waste budget exceeded 40%% threshold", iter+1)
-			a.injectGuidance(wasteHint)
-		}
-
 		if len(a.contextManager.Messages()) > detectorMsgsBefore && st.detectorContinueBudget > 0 {
 			st.detectorContinueBudget--
 			debug.Log("agent", "Iteration %d: detector guidance injected; continuing run to consume it (#4650)", iter+1)
