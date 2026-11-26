@@ -2,7 +2,7 @@
   "$schema": "https://github.com/GoogleChrome/lighthouse-ci/blob/main/docs/configuration.md",
   "ci": {
     "collect": {
-      "numberOfRuns": 1,
+      "numberOfRuns": 3,
       "url": [
         "http://127.0.0.1:4333/index.html",
         "http://127.0.0.1:4333/zh/index.html",
@@ -26,6 +26,7 @@
       "startServerReadyPattern": "Local"
     },
     "assert": {
+      "aggregationMethod": "median-run",
       "assertMatrix": [
         {
           "matchingUrlPattern": ".*",
