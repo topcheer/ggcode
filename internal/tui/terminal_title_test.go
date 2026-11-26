@@ -21,13 +21,31 @@ func TestDesiredTerminalTitleUsesActivityAndContext(t *testing.T) {
 	}
 }
 
-func TestDesiredTerminalTitleFallsBackToIdleTitle(t *testing.T) {
+// Idle: no "ggcode" prefix - the workspace name and model are the whole
+// title ("<workspace> [model]"). A tab strip full of instances used to read
+// "ggcode — ggcode [glm-5.4]" / "ggcode — et [glm-5.4]"; the product name
+// carried no information and ate the width that the workspace name needs.
+func TestDesiredTerminalTitleIdleIsWorkspaceAndModelOnly(t *testing.T) {
 	m := Model{
-		config: &config.Config{Model: "gpt-5.4"},
+		session: &session.Session{
+			Workspace: "/tmp/demo",
+			Model:     "glm-5.4",
+		},
+	}
+	if got, want := m.desiredTerminalTitle(), "> demo [glm-5.4]"; got != want {
+		t.Fatalf("idle title = %q, want %q", got, want)
 	}
 
-	if got, want := m.desiredTerminalTitle(), "> ggcode — gpt-5.4"; got != want {
-		t.Fatalf("desiredTerminalTitle() = %q, want %q", got, want)
+	// Only a model known (fresh session, no workspace yet): model alone.
+	m = Model{config: &config.Config{Model: "gpt-5.4"}}
+	if got, want := m.desiredTerminalTitle(), "> gpt-5.4"; got != want {
+		t.Fatalf("model-only idle title = %q, want %q", got, want)
+	}
+
+	// Nothing known yet: the product name is still better than an empty title.
+	m = Model{}
+	if got, want := m.desiredTerminalTitle(), "> ggcode"; got != want {
+		t.Fatalf("unknown idle title = %q, want %q", got, want)
 	}
 }
 
@@ -52,7 +70,7 @@ func TestWithTerminalTitleCmdDeduplicatesWrites(t *testing.T) {
 	if got, want := len(titles), 1; got != want {
 		t.Fatalf("title writes = %d, want %d", got, want)
 	}
-	if got, want := titles[0], "> ggcode — demo [glm-5.1]"; got != want {
+	if got, want := titles[0], "> demo [glm-5.1]"; got != want {
 		t.Fatalf("initial title = %q, want %q", got, want)
 	}
 

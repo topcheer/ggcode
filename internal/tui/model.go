@@ -1626,8 +1626,13 @@ func (m Model) desiredTerminalTitle() string {
 		}
 		return fmt.Sprintf("> %s", activity)
 	}
+	// Idle: the workspace name and model already say "ggcode" to the person
+	// at the terminal (every tab in a tmux/terminal multiplexer reads
+	// "ggcode — <workspace> [model]", and the prefix only ate width). The
+	// product name is kept for the degenerate case where neither a
+	// workspace nor a model is known yet.
 	if label != "" {
-		return fmt.Sprintf("> ggcode — %s", label)
+		return fmt.Sprintf("> %s", label)
 	}
 	return "> ggcode"
 }
