@@ -266,7 +266,10 @@ jobs:
     needs:
       - dedup
       - verify
-    runs-on: macos-15
+    # ITMS-90725: since April 2027 App Store Connect only accepts iOS apps
+    # built with the iOS 27 SDK (Xcode 27). GitHub ships Xcode 27 on its own
+    # arm64 image (`xcode-27`, macOS 27); the macos-15 image stops at Xcode 26.
+    runs-on: xcode-27
     if: ${{ needs.dedup.outputs.skip != 'true' && !inputs.expire_and_promote && (inputs.platform == 'both' || inputs.platform == 'ios' || inputs.platform == '' || inputs.platform == null) }}
     defaults:
       run:
@@ -276,10 +279,11 @@ jobs:
       APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
       APP_STORE_PRIVATE_KEY: ${{ secrets.APP_STORE_PRIVATE_KEY }}
     steps:
-      - name: Setup Xcode 26
+      - name: Setup Xcode 27
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '26'
+          # Latest stable 27.x installed on the image (skips beta / RC seeds).
+          xcode-version: 'latest-stable'
 
       - uses: actions/checkout@v4
 
