@@ -37,6 +37,13 @@
 	# The release-asset mirror that used to live under /downloads/latest/ is retired;
 	# keep old copies of the installers working by forwarding them to the Worker mirror
 	# (workers/download-mirror, docs/release-process.md §5.6).
+	# SEO: one URL per page. Directory routes are canonical; the .html and
+	# extension-less variants 301 to them, and the sitemap index answers at
+	# the conventional /sitemap.xml path as well.
+	redir /index.html / 301
+	redir /zh /zh/ 301
+	redir /zh/index.html /zh/ 301
+	redir /sitemap.xml /sitemap-index.xml 301
 	@old_mirror path_regexp old_mirror ^/downloads/latest(\/.*)?$
 	redir @old_mirror https://download.ggcode.dev/latest{re.old_mirror.1}{?query} 301
 

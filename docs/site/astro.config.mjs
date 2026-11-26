@@ -21,5 +21,7 @@ export default defineConfig({
   },
   // The sitemap describes the production host only; a sub-path mirror build
   // (GitHub Pages) skips it - its canonical/hreflang still point at ggcode.dev.
-  integrations: SITE_BASE === '/' ? [sitemap()] : [],
+  // The sitemap must not list the 404 route Astro's i18n fallback emits for
+  // /zh/ (postbuild drops that page); the real 404.html is not a route.
+  integrations: SITE_BASE === '/' ? [sitemap({ filter: (page) => !/\/404\/?$/.test(page) })] : [],
 });

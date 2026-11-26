@@ -20,6 +20,8 @@ interface Props {
   /** Site-relative path of this page WITHOUT locale prefix, e.g. '' or 'privacy' */
   path?: string;
   noindex?: boolean;
+  /** Emit the Organization + WebSite + SoftwareApplication graph. Default: only the home page. */
+  softwareEntity?: boolean;
 }
 
 const {
@@ -30,6 +32,7 @@ const {
   descriptionIsLiteral = false,
   path = '',
   noindex = false,
+  softwareEntity,
 } = Astro.props;
 
 const title = titleIsLiteral ? titleKey : t(locale, titleKey);
@@ -41,28 +44,102 @@ const canonical = new URL(selfPath, site).href;
 const enHref = new URL(localizedPath('en', selfPath), site).href;
 const zhHref = new URL(localizedPath('zh', selfPath), site).href;
 const ogImage = new URL(`/og/${locale}.jpg`, site).href;
+const isHome = softwareEntity ?? path === '';
 
-const jsonLd = {
-  '@context': 'https://schema.org',
-  '@type': 'SoftwareApplication',
-  name: 'ggcode',
-  url: site.href,
-  description: t('en', 'meta.description'),
-  applicationCategory: 'DeveloperApplication',
-  operatingSystem: 'macOS, Linux, Windows, iOS, Android',
-  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
-  featureList: [
-    t('en', 'features.terminal.title'),
-    t('en', 'features.mcp.title'),
-    t('en', 'features.agent.title'),
-    t('en', 'features.im.title'),
-    t('en', 'features.lanchat.title'),
-    t('en', 'features.modes.title'),
-    t('en', 'features.worktrees.title'),
-    t('en', 'features.mobile.title'),
-    t('en', 'features.sessions.title'),
-  ],
-};
+// Entity facts shared by the structured data and llms.txt (keep both in sync).
+const GITHUB_REPO = 'https://github.com/topcheer/ggcode';
+const GITHUB_ORG = 'https://github.com/topcheer';
+const APP_STORE = 'https://apps.apple.com/app/ggcode-mobile/id6770855612';
+const PLAY_STORE = 'https://play.google.com/store/apps/details?id=gg.ai.ggcode.mobile';
+const INSTALL_SCRIPT = new URL('/install.sh', site).href;
+// Optional: set PUBLIC_APP_VERSION at build time (e.g. the released tag) to
+// publish softwareVersion in the structured data.
+const appVersion = import.meta.env.PUBLIC_APP_VERSION || '';
+
+const orgId = `${site.href}#organization`;
+const websiteId = `${site.href}#website`;
+const keywords = [
+  'AI coding agent', 'terminal AI agent', 'CLI coding agent', 'open source coding agent',
+  'MCP client', 'Model Context Protocol', 'A2A protocol', 'multi-agent', 'Claude Code alternative',
+  'Codex CLI alternative', 'Gemini CLI alternative', 'Go', 'MIT',
+];
+
+// Home: Organization + WebSite + SoftwareApplication as one @graph so search and
+// AI engines can link the site, the GitHub repo and the store listings to one entity.
+// Every other page: a WebPage node that is part of the WebSite.
+const jsonLd = isHome
+  ? {
+      '@context': 'https://schema.org',
+      '@graph': [
+        {
+          '@type': 'Organization',
+          '@id': orgId,
+          name: 'topcheer',
+          url: GITHUB_ORG,
+          sameAs: [GITHUB_ORG],
+        },
+        {
+          '@type': 'WebSite',
+          '@id': websiteId,
+          url: site.href,
+          name: 'ggcode',
+          alternateName: 'GGCode',
+          inLanguage: ['en', 'zh'],
+          publisher: { '@id': orgId },
+        },
+        {
+          '@type': 'SoftwareApplication',
+          '@id': `${site.href}#software`,
+          name: 'ggcode',
+          alternateName: 'GGCode',
+          url: site.href,
+          description: t(locale, 'meta.description'),
+          applicationCategory: 'DeveloperApplication',
+          applicationSubCategory: 'Developer Tools',
+          operatingSystem: 'macOS, Linux, Windows, iOS, Android',
+          programmingLanguage: 'Go',
+          isAccessibleForFree: true,
+          license: 'https://spdx.org/licenses/MIT.html',
+          offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD', url: site.href },
+          downloadUrl: INSTALL_SCRIPT,
+          installUrl: INSTALL_SCRIPT,
+          codeRepository: GITHUB_REPO,
+          sameAs: [GITHUB_REPO, APP_STORE, PLAY_STORE],
+          screenshot: [ogImage],
+          featureList: [
+            t(locale, 'features.terminal.title'),
+            t(locale, 'features.mcp.title'),
+            t(locale, 'features.agent.title'),
+            t(locale, 'features.im.title'),
+            t(locale, 'features.lanchat.title'),
+            t(locale, 'features.modes.title'),
+            t(locale, 'features.worktrees.title'),
+            t(locale, 'features.mobile.title'),
+            t(locale, 'features.sessions.title'),
+          ],
+          keywords: keywords.join(', '),
+          inLanguage: ['en', 'zh'],
+          author: { '@id': orgId },
+          publisher: { '@id': orgId },
+          ...(appVersion ? { softwareVersion: appVersion } : {}),
+        },
+      ],
+    }
+  : {
+      '@context': 'https://schema.org',
+      '@type': 'WebPage',
+      name: title,
+      description,
+      url: canonical,
+      inLanguage: localeHtmlLang(locale),
+      isPartOf: {
+        '@type': 'WebSite',
+        name: 'ggcode',
+        url: site.href,
+        inLanguage: ['en', 'zh'],
+        publisher: { '@type': 'Organization', name: 'topcheer', url: GITHUB_ORG },
+      },
+    };
 ---
 
 <!doctype html>
@@ -74,7 +151,7 @@ const jsonLd = {
     <meta name="description" content={description} />
     <meta name="theme-color" content="#0a0e1a" />
     <link rel="icon" type="image/svg+xml" href={withBase('/favicon.svg')} />
-    <link rel="apple-touch-icon" href={withBase('/ggcode-banner.png')} />
+    <link rel="apple-touch-icon" sizes="180x180" href={withBase('/apple-touch-icon.png')} />
     {noindex ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={canonical} />}
     {!noindex && <link rel="alternate" hreflang={localeHreflang('en')} href={enHref} />}
     {!noindex && <link rel="alternate" hreflang={localeHreflang('zh')} href={zhHref} />}
@@ -86,14 +163,17 @@ const jsonLd = {
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:image" content={ogImage} />
+    <meta property="og:image:type" content="image/jpeg" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={title} />
     <meta property="og:locale" content={localeOgLocale(locale)} />
     <meta property="og:locale:alternate" content={locale === 'en' ? 'zh_CN' : 'en_US'} />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={ogImage} />
+    <meta name="twitter:image:alt" content={title} />
     <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
 
     <script>document.documentElement.classList.add('js');setTimeout(function(){document.documentElement.classList.add('reveal-timeout')},2500);</script>

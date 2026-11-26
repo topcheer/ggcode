@@ -1,5 +1,5 @@
 ---
-import { t, localizedPath, withBase, type Locale } from '../i18n/utils';
+import { t, localizedPath, withBase, localeHreflang, type Locale } from '../i18n/utils';
 
 interface Props { locale: Locale; currentPath: string }
 const { locale, currentPath } = Astro.props;
@@ -27,7 +27,7 @@ const links = [
       </ul>
     </nav>
     <div class="nav-actions">
-      <a class="lang-switch" href={otherHref} hreflang={other === 'zh' ? 'zh-Hans' : 'en'} lang={other === 'zh' ? 'zh-CN' : 'en'} data-lang-switch>{t(locale, 'lang.switch')}</a>
+      <a class="lang-switch" href={otherHref} hreflang={localeHreflang(other)} lang={other === 'zh' ? 'zh-CN' : 'en'} data-lang-switch>{t(locale, 'lang.switch')}</a>
       <a class="btn btn-primary btn-sm" href="#install">{t(locale, 'nav.install')} <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
     </div>
   </div>

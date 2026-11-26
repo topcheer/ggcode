@@ -361,6 +361,11 @@ This is separate from the normal release flow and is used when:
 
 It publishes the static site branch while preserving the existing `docs/site/downloads/latest` directory unless explicitly rebuilding from release artifacts.
 
+SEO / GEO baseline for the site (structured data, `llms.txt`, robots, canonical
+redirects) and the Cloudflare-side settings that live outside the repo are
+documented in [`docs/site/SEO.md`](site/SEO.md); run its operator checklist after
+a site deploy.
+
 ## 8. How release notes are chosen
 
 Release notes are resolved by `scripts/release/render-notes.sh`.
