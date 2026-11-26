@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 	"github.com/topcheer/ggcode/internal/vcs"
 )
 
@@ -41,12 +42,22 @@ func computeModifiedFilesSection(workingDir string) string {
 	if err != nil {
 		return ""
 	}
-	status = strings.TrimSpace(status)
+	// Trim trailing whitespace only: porcelain lines start with a status
+	// column that may be a space (" M path"), and a leading TrimSpace would
+	// cut the first line's column off ("M path" -> "path" parsed wrong).
+	status = strings.TrimRight(status, " \t\r\n")
 	if status == "" {
 		return ""
 	}
 
-	lines := strings.Split(status, "\n")
+	// Harness state (.ggcode/: auto memory, checkpoints, usage stats,
+	// skills) churns as a side effect of running and is often TRACKED, so it
+	// shows up here as M/D on every turn. It is not the user's working-tree
+	// change; with hundreds of such entries it also crowded the real changes
+	// out of the 20-line window (field report 2026-11-26). Porcelain paths are
+	// repo-root-relative, so this also drops the root .ggcode/ when the
+	// working dir is a repository subdirectory.
+	lines := util.FilterHarnessStatePorcelainLines(strings.Split(status, "\n"))
 	total := len(lines)
 	if total == 0 {
 		return ""

@@ -11,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -179,6 +180,13 @@ func parseAdversarialVerdict(text string) (verdict, findings string) {
 func (a *Agent) collectAdversarialDiff(paths []string) string {
 	workingDir := a.WorkingDir()
 
+	// Harness state is never part of the change under review: drop .ggcode/
+	// scopes (an edit_file on .ggcode/memory/*.md records one) and, when no
+	// scope is left, exclude the directory from the whole-tree diff. The
+	// memory curator's 92-file prune must not reach the evaluator as
+	// "deleted files".
+	paths = util.FilterHarnessStatePaths(paths)
+
 	cmdCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -188,6 +196,8 @@ func (a *Agent) collectAdversarialDiff(paths []string) string {
 	if len(paths) > 0 {
 		args = append(args, "--")
 		args = append(args, paths...)
+	} else {
+		args = append(args, "--", util.HarnessStateExcludePathspec)
 	}
 	cmd := exec.CommandContext(cmdCtx, "git", args...)
 	cmd.Dir = workingDir
@@ -205,6 +215,9 @@ func (a *Agent) collectAdversarialDiff(paths []string) string {
 		for _, line := range strings.Split(string(sOut), "\n") {
 			if !strings.HasPrefix(line, "??") {
 				continue
+			}
+			if util.IsHarnessStatePorcelainLine(line) {
+				continue // .ggcode/ untracked state is the harness's, not this run's output
 			}
 			if len(paths) > 0 && !untrackedLineInPaths(workingDir, line, paths) {
 				// Other agents' untracked leftovers are not this run's output.
