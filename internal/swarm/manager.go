@@ -373,7 +373,11 @@ func (m *Manager) DeleteTeam(teamID string) error {
 	for _, tm := range team.listTeammates() {
 		m.flushTeammateFooter(tm, "clean")
 	}
-	if err := os.RemoveAll(m.teamDir(teamID)); err != nil {
+	if m.SessionNamespace() == "" {
+		// Unreachable after the restore guards (a team cannot be live without
+		// a namespace), but teamDir() would be the shared root here.
+		debug.Log("swarm", "team dir removal for %s skipped: no confirmed session", teamID)
+	} else if err := os.RemoveAll(m.teamDir(teamID)); err != nil {
 		debug.Log("swarm", "team dir removal for %s failed: %v", teamID, err)
 	}
 

@@ -22,6 +22,18 @@ ownership; there is no separate ownership record, lease, or adoption path.
   structural (it's a different directory), not a policy check.
 - Creating a team before the session is confirmed fails at the tool layer
   (`team_create` reports the session is not confirmed).
+- **Before the session is confirmed** (a fresh instance that has not sent its
+  first message yet) the namespace is empty and nothing is listed, restored
+  or deleted: `AutoRestoreSessionTeams` returns nothing, and `RestoreTeam` /
+  `team_restore` / `findTeamManifestByName` fail with "no confirmed session".
+  This matters because an empty namespace would otherwise resolve to the
+  **shared** root `~/.ggcode/swarm/teams/`, which also holds every other
+  session's namespace and the pre-#5863 legacy layout. Field incident
+  2026-11-26: a new instance started in a parent directory came up with five
+  foreign teams (legacy boards of other workspaces) and re-persisted them
+  under its own new session id. Pinned by
+  `TestUnconfirmedSessionNeverScansSharedRoot` and
+  `TestConfirmedFreshSessionDoesNotAdoptLegacyTeams`.
 
 ## What persists
 
@@ -34,7 +46,16 @@ ownership; there is no separate ownership record, lease, or adoption path.
 The legacy single-level store (`~/.ggcode/swarm/teams/<teamID>/`, plus the
 `owner.json` lease and manifest `ownerSessionID` field) was removed in #5863.
 Pre-#5863 stores should be archived (e.g. `teams.legacy-<date>`); there is no
-in-place migration.
+in-place migration and current binaries never adopt a `teams/<teamID>/`
+directory — only an instance running a pre-#5863 binary can read them, so
+they are inert after the upgrade. Archive with:
+
+```bash
+dest=~/.ggcode/swarm/teams.legacy-$(date +%Y%m%d); mkdir -p "$dest"
+find ~/.ggcode/swarm/teams -mindepth 2 -maxdepth 2 -name manifest.json -print0 |
+  while IFS= read -r -d '' mf; do mv "$(dirname "$mf")" "$dest"/; done
+```
+
 
 ## Discovering teams
 

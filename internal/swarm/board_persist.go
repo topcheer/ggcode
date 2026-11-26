@@ -1,6 +1,7 @@
 package swarm
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,18 @@ import (
 
 var persistMu sync.Mutex
 
+// errNoConfirmedSession is returned by every read / restore / delete entry
+// point while the session namespace is still empty. With no namespace,
+// sessionTeamsDir() collapses to the SHARED root <configDir>/swarm/teams,
+// which also holds other sessions' namespaces and the pre-#5860 legacy
+// layout teams/<teamID>/ (no session at all). Scanning it restored every
+// legacy team of every workspace into a fresh instance, which then
+// re-persisted them under its own new session id (field report 2026-11-26:
+// a new instance at a parent directory came up with 5 foreign teams).
+// CreateTeam already panics on an empty namespace; these are the read-side
+// twins.
+var errNoConfirmedSession = errors.New("swarm: no confirmed session - teams are session-scoped and cannot be listed, restored or deleted before the first message")
+
 // boardRoot returns the persist root for team boards (#5540). Default is
 // the user config dir; tests override the BoardRoot field with a t.TempDir()
 // so per-Manager deterministic team IDs (team-1) cannot collide across
@@ -28,10 +41,13 @@ func (m *Manager) boardRoot() string {
 
 // #5860: teams/<sessionID>/<teamID>/ - the confirmed session id is the
 // namespace; the directory is the ownership. An empty namespace (session
-// never confirmed) must never create or persist a team: CreateTeam panics
-// on it. Cross-process root pollution (teams/<teamID>, #5867) came from
-// pre-#5860 binaries without any namespace - cured by upgrading those
-// processes, not by re-allowing unsessioned boards here.
+// never confirmed) must never create, persist, list, restore or delete a
+// team: CreateTeam panics on it and the read paths return
+// errNoConfirmedSession. NOTE: with an empty namespace this path collapses
+// onto the SHARED root, so no caller may use it before checking
+// SessionNamespace() != "". The legacy layout teams/<teamID>/ (no session,
+// pre-#5860 binaries, #5867) is never adopted by this code; upgrading the
+// processes is the cure, not re-allowing unsessioned boards here.
 func (m *Manager) sessionTeamsDir() string {
 	return filepath.Join(m.boardRoot(), "swarm", "teams", m.SessionNamespace())
 }

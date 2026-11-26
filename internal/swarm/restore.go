@@ -17,6 +17,11 @@ import (
 // loop. A fresh CreateTeam never lands here - inheriting a foreign board is
 // always an explicit decision.
 func (m *Manager) RestoreTeam(teamID string) (TeamSnapshot, error) {
+	if m.SessionNamespace() == "" {
+		// teamDir() would resolve to the shared root and adopt a legacy
+		// teams/<teamID>/ board (errNoConfirmedSession).
+		return TeamSnapshot{}, errNoConfirmedSession
+	}
 	m.mu.Lock()
 	if _, active := m.teams[teamID]; active {
 		// Field symptom (user screenshot, burrow/android-port): a team
@@ -217,6 +222,15 @@ func (m *Manager) restoreTeammate(team *Team, mt *ManifestTeammate) {
 func (m *Manager) AutoRestoreSessionTeams() []TeamSnapshot {
 	var restored []TeamSnapshot
 	sid := m.SessionNamespace()
+	if sid == "" {
+		// Fresh session before its first message: the namespace is not
+		// minted yet and sessionTeamsDir() would be the SHARED root. Scanning
+		// it restored every pre-#5860 legacy team (teams/<teamID>/) of every
+		// workspace into this instance. Restore nothing; the session's own
+		// teams (if any) are restored once it is confirmed.
+		debug.Log("swarm", "AUTO-RESTORE SUMMARY: session= (unconfirmed) scanned=0 restored=0 (no confirmed session: shared root not scanned)")
+		return nil
+	}
 	root := m.sessionTeamsDir()
 	entries, err := os.ReadDir(root)
 	if err != nil {
