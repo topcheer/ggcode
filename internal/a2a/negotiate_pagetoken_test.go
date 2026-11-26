@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -86,7 +87,7 @@ func TestListTasksInvalidPageToken(t *testing.T) {
 
 func TestListTasksRPCInvalidPageToken(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
+	srv := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -103,15 +104,31 @@ func TestListTasksRPCInvalidPageToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rpcResp JSONRPCResponse
-	if derr := json.NewDecoder(resp.Body).Decode(&rpcResp); derr != nil {
-		t.Fatalf("decoding JSON-RPC response: %v", derr)
-	}
+	raw, rerr := io.ReadAll(resp.Body)
 	resp.Body.Close()
+	var rpcResp JSONRPCResponse
+	// Decode from a reader that cannot fail on I/O, so a malformed body is
+	// reported as a JSON error carrying the status and the body prefix (the
+	// flake "invalid character '<'" gave no clue about who answered).
+	if derr := json.NewDecoder(bytes.NewReader(raw)).Decode(&rpcResp); derr != nil {
+		if rerr != nil {
+			t.Fatalf("reading JSON-RPC response: %v", rerr)
+		}
+		t.Fatalf("decoding JSON-RPC response: %v (status %q, content-type %q, body prefix %q)",
+			derr, resp.Status, resp.Header.Get("Content-Type"), bodyPrefix(raw, 300))
+	}
 	if rpcResp.Error == nil {
 		t.Fatal("expected JSON-RPC error for stale page token, got success")
 	}
 	if rpcResp.Error.Code != -32602 {
 		t.Errorf("expected -32602 invalid params, got %d (%s)", rpcResp.Error.Code, rpcResp.Error.Message)
 	}
+}
+
+// bodyPrefix returns the first n bytes of a response body for diagnostics.
+func bodyPrefix(b []byte, n int) string {
+	if len(b) > n {
+		b = b[:n]
+	}
+	return string(b)
 }

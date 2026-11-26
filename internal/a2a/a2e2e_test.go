@@ -47,7 +47,7 @@ func newDiscoveryCluster(t *testing.T) *discoveryCluster {
 
 	for _, ws := range workspaces {
 		handler := NewTaskHandler(ws.dir, nil, nil)
-		srv := NewServer(ServerConfig{Port: 0}, handler)
+		srv := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0}, handler)
 		if err := srv.Start(); err != nil {
 			t.Fatalf("start %s: %v", ws.name, err)
 		}
@@ -239,7 +239,7 @@ func TestCluster_NewInstanceDiscovered(t *testing.T) {
 	t.Logf("Before: A sees 3 instances ✅")
 
 	handlerD := NewTaskHandler("/tmp/test-a2a/notification-service", nil, nil)
-	srvD := NewServer(ServerConfig{Port: 0}, handlerD)
+	srvD := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0}, handlerD)
 	if err := srvD.Start(); err != nil {
 		t.Fatal(err)
 	}

@@ -9,7 +9,7 @@ import (
 func newSkillBroadcastTestServer(t *testing.T) *Server {
 	t.Helper()
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0}, handler)
 	t.Cleanup(func() { srv.Stop() })
 	return srv
 }

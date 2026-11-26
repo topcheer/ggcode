@@ -11,7 +11,7 @@ import (
 
 func TestIssue1049_CancelTaskPushAsync(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
+	srv := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
