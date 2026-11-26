@@ -108,38 +108,6 @@ func TestEnsureMessagesSendableKeepsCleanSequenceUnchanged(t *testing.T) {
 	}
 }
 
-func TestConsensusRecordFiringsAndCheckOnly(t *testing.T) {
-	s := newConsensusState()
-
-	s.recordFiring("Failure Mode", 1)
-	s.recordFiring("Error Cascade", 1)
-	s.recordFiring("Convergence Lock", 1)
-
-	got := s.checkOnly()
-	if got == "" {
-		t.Fatal("expected consensus alert after 3 distinct detectors fired, got empty")
-	}
-	if !strings.Contains(got, "Failure Mode") || !strings.Contains(got, "Error Cascade") {
-		t.Fatalf("alert should name the firing detectors, got: %s", got)
-	}
-}
-
-func TestConsensusLiveDetectorsBelowAndAtThreshold(t *testing.T) {
-	s := newConsensusState()
-
-	s.recordFiring("Error Rush", 1)
-	s.recordFiring("Tunnel Vision", 1)
-	if got := s.checkOnly(); got != "" {
-
-		t.Fatalf("two live tags are below threshold, expected no alert, got: %s", got)
-	}
-
-	s.recordFiring("Analysis Paralysis", 1)
-	if got := s.checkOnly(); got == "" {
-		t.Fatal("three live tags across scans should trigger consensus")
-	}
-}
-
 func TestTokenWasteBudgetOriginalLenDrivesMetering(t *testing.T) {
 	s := newTokenWasteBudgetState()
 

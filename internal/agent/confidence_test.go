@@ -1,9 +1,6 @@
 package agent
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestConfidence_InsufficientData(t *testing.T) {
 	c := newConfidenceState()
@@ -12,9 +9,6 @@ func TestConfidence_InsufficientData(t *testing.T) {
 	}
 	if c.score() != -1 {
 		t.Errorf("expected -1 for insufficient data, got %d", c.score())
-	}
-	if c.maybeIntervene() != "" {
-		t.Error("should not intervene with insufficient data")
 	}
 }
 
@@ -28,9 +22,6 @@ func TestConfidence_HighScoreAllSuccess(t *testing.T) {
 	if s < 70 {
 		t.Errorf("expected high score for all-success trajectory, got %d", s)
 	}
-	if c.maybeIntervene() != "" {
-		t.Error("should not intervene on high-confidence trajectory")
-	}
 }
 
 func TestConfidence_LowScoreAllFailures(t *testing.T) {
@@ -43,9 +34,6 @@ func TestConfidence_LowScoreAllFailures(t *testing.T) {
 		t.Errorf("expected very low score for all-failure trajectory, got %d", s)
 	}
 
-	if c.maybeIntervene() != "" {
-		t.Error("should not intervene when error-streak will handle it (maxErrorCluster >= 4)")
-	}
 }
 
 func TestConfidence_MixedResultsModerateScore(t *testing.T) {
@@ -59,48 +47,6 @@ func TestConfidence_MixedResultsModerateScore(t *testing.T) {
 	s := c.score()
 	if s < 20 || s > 80 {
 		t.Errorf("expected moderate score for mixed trajectory, got %d", s)
-	}
-}
-
-func TestConfidence_EarlyWarning(t *testing.T) {
-	c := newConfidenceState()
-
-	c.recordResult("read_file", false, "a.go")
-	c.recordResult("edit_file", true, "a.go")
-	c.recordResult("edit_file", false, "a.go")
-	c.recordResult("edit_file", true, "a.go")
-	c.recordResult("edit_file", true, "b.go")
-
-	s := c.score()
-
-	if s >= confidenceWarnThreshold {
-		t.Errorf("expected low score, got %d", s)
-	}
-
-	guidance := c.maybeIntervene()
-	if guidance == "" {
-		t.Error("expected early warning guidance for bad trajectory")
-	}
-	if !strings.Contains(guidance, "trajectory confidence") {
-		t.Errorf("guidance should mention confidence, got: %s", guidance)
-	}
-}
-
-func TestConfidence_NoDoubleFire(t *testing.T) {
-	c := newConfidenceState()
-	c.recordResult("read_file", false, "")
-	c.recordResult("edit_file", true, "a.go")
-	c.recordResult("edit_file", false, "a.go")
-	c.recordResult("edit_file", true, "a.go")
-	c.recordResult("edit_file", true, "b.go")
-
-	g1 := c.maybeIntervene()
-	if g1 == "" {
-		t.Fatal("expected first guidance")
-	}
-	g2 := c.maybeIntervene()
-	if g2 != "" {
-		t.Error("should not fire twice")
 	}
 }
 
@@ -195,8 +141,8 @@ func TestConfidence_Reset(t *testing.T) {
 	if len(c.uniqueTools) != 0 || len(c.uniqueFiles) != 0 {
 		t.Error("reset should clear maps")
 	}
-	if c.guidanceGiven {
-		t.Error("reset should clear guidanceGiven")
+	if c.lastLogprob != nil {
+		t.Error("reset should clear lastLogprob")
 	}
 }
 
@@ -231,38 +177,5 @@ func TestConfidence_ClusterPenalty(t *testing.T) {
 	if sClustered >= sSpread {
 		t.Logf("clustered=%d, spread=%d — clustered should be lower (maxErrorCluster: %d vs %d)",
 			sClustered, sSpread, cClustered.maxErrorCluster, cSpread.maxErrorCluster)
-	}
-}
-
-func TestConfidence_GuidanceContainsReasons(t *testing.T) {
-	c := newConfidenceState()
-
-	c.recordResult("edit_file", true, "a.go")
-	c.recordResult("edit_file", false, "a.go")
-	c.recordResult("edit_file", true, "a.go")
-	c.recordResult("edit_file", true, "a.go")
-	c.recordResult("edit_file", true, "a.go")
-
-	guidance := c.maybeIntervene()
-	if guidance == "" {
-		t.Fatal("expected guidance")
-	}
-	if !strings.Contains(guidance, "edits are failing") {
-		t.Logf("guidance: %s", guidance)
-	}
-}
-
-func TestConfidence_HighScoreNoIntervention(t *testing.T) {
-	c := newConfidenceState()
-
-	tools := []string{"read_file", "grep", "list_directory", "edit_file", "run_command", "git_diff", "git_commit"}
-	for _, tool := range tools {
-		c.recordResult(tool, false, "file.go")
-	}
-	if c.score() < 80 {
-		t.Errorf("expected very high score, got %d", c.score())
-	}
-	if c.maybeIntervene() != "" {
-		t.Error("should not intervene on excellent trajectory")
 	}
 }

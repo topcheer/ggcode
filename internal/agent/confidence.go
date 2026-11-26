@@ -1,10 +1,5 @@
 package agent
 
-import (
-	"fmt"
-	"strings"
-)
-
 const (
 	confidenceWarnThreshold = 30
 
@@ -34,8 +29,6 @@ type confidenceState struct {
 	// in from the stream done event; previously a debug-only orphan
 	// (#uncertainty-loop P1). nil = provider did not report.
 	lastLogprob *float64
-
-	guidanceGiven bool
 }
 
 func newConfidenceState() *confidenceState {
@@ -58,7 +51,6 @@ func (c *confidenceState) reset() {
 	c.maxErrorCluster = 0
 	c.lastWasError = false
 	c.lastLogprob = nil
-	c.guidanceGiven = false
 }
 
 func (c *confidenceState) recordResult(toolName string, isError bool, fileHint string) {
@@ -152,66 +144,11 @@ func (c *confidenceState) score() int {
 	return score
 }
 
-func (c *confidenceState) maybeIntervene() string {
-	if c.guidanceGiven {
-		return ""
-	}
-	if c.totalCalls < confidenceMinCalls {
-		return ""
-	}
-
-	s := c.score()
-	if s >= confidenceWarnThreshold {
-		return ""
-	}
-
-	if c.maxErrorCluster >= 4 {
-		return ""
-	}
-
-	c.guidanceGiven = true
-
-	var reasons []string
-
-	if c.editAttempts >= 3 {
-		editFailRate := 1.0 - float64(c.editSuccess)/float64(c.editAttempts)
-		if editFailRate > 0.5 {
-			reasons = append(reasons, fmt.Sprintf("%.0f%% of file edits are failing", editFailRate*100))
-		}
-	}
-
-	if c.maxErrorCluster >= 3 {
-		reasons = append(reasons, fmt.Sprintf("%d consecutive errors detected", c.maxErrorCluster))
-	}
-
-	if len(c.uniqueTools) <= 2 && c.totalCalls >= 5 {
-		reasons = append(reasons, "very low tool diversity - consider a different approach")
-	}
-
-	// Dual evidence: low LM confidence on top of a weak trajectory score.
-	// A polished answer with a low avg logprob is exactly the wrapped-
-	// authority failure mode (arXiv:2608.27167).
-	if c.lastLogprob != nil && *c.lastLogprob <= -2.5 {
-		reasons = append(reasons, fmt.Sprintf("recent turns had low language-model confidence (avg token logprob %.2f)", *c.lastLogprob))
-	}
-
-	successRate := float64(c.successCount) / float64(c.totalCalls) * 100
-	if successRate < 40 {
-		reasons = append(reasons, fmt.Sprintf("overall success rate is only %.0f%%", successRate))
-	}
-
-	reasonStr := "multiple indicators suggest this approach may not be working"
-	if len(reasons) > 0 {
-		reasonStr = strings.Join(reasons, "; ")
-	}
-
-	return fmt.Sprintf(
-		"[trajectory confidence: %d/100] %s. Consider stepping back: re-read the task requirements, "+
-			"verify your assumptions about the codebase, and try a fundamentally different approach "+
-			"before continuing. Early course correction prevents compounding errors.",
-		s, reasonStr,
-	)
-}
+// maybeIntervene (the "[trajectory confidence: N/100] ... N consecutive
+// errors detected" steering message) was removed as dead code: it had no
+// caller left, and it was a counter-driven "step back" nudge - the model
+// decides when an approach is not working. score() is kept: it feeds the
+// confidence statistics.
 
 func isEditTool(toolName string) bool {
 	return sourceMutatingTools[toolName]

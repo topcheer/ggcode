@@ -32,8 +32,9 @@ func (f funcWatcher) ObservePostTool(tc provider.ToolCallDelta, result tool.Resu
 // guardZoneWatchers returns the guard-zone family: build-idempotency ledger,
 // tainted-data influence (2), SLO error budget, exfiltration chain,
 // serial-read/reasoning observation, edit-coverage ledger, self-model,
-// tool-effectiveness ledger. Only the security and budget watchers still
-// return an advisory; the rest record state only.
+// tool-effectiveness ledger. Only the security watchers (tainted-data
+// influence, pseudo-directives, exfiltration chain) still return an
+// advisory; the error budget and the rest record state only.
 func (a *Agent) guardZoneWatchers() []postToolWatcher {
 	return []postToolWatcher{
 		funcWatcher(a.watchBuildIdempotency),
@@ -87,15 +88,11 @@ func (a *Agent) watchPseudoDirectives(tc provider.ToolCallDelta, result tool.Res
 }
 
 func (a *Agent) watchErrorBudget(tc provider.ToolCallDelta, result tool.Result, iter int) string {
-	// #28 SLO error budget: sliding-window success-rate guard. Fast
-	// burn warns once; exhausting the budget trips the breaker and
-	// escalates to ask_user instead of letting the agent keep
-	// burning retries (budget layer vs compounding_failure's hint layer).
+	// SLO error budget: recording only. The former fast-burn warning and
+	// "BUDGET EXHAUSTED ... ask the user" breaker injections are removed -
+	// the AI decides when to stop retrying, not a counter.
 	if a.errorBudget != nil {
-		if budgetMsg := a.errorBudget.evaluate(!result.IsError); budgetMsg != "" {
-			debug.Log("agent", "Iteration %d: error budget event", iter)
-			return budgetMsg
-		}
+		a.errorBudget.evaluate(!result.IsError)
 	}
 	return ""
 }

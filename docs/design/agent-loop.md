@@ -52,6 +52,7 @@ The loop monitors its own trajectory and injects guidance when patterns look pat
 | Overseer | `overseer.go` | Spam, read-only stall, stuck file, error escalation, drift (20/40/60 iterations) |
 | Repetition tracker | `repetition_tracker.go` | Semantic-level failed-edit clusters on the same file |
 | Confidence scorer | `confidence.go` | Holistic 6-signal trajectory confidence score (HTC-inspired) |
+| Error budget | `error_budget.go` | SLO success-rate statistic over a 20-call sliding window (burn rate only; the fast-burn / "BUDGET EXHAUSTED" steering injections and the counter-driven confidence / cross-detector-consensus interventions were removed - the AI decides when to stop retrying, see `docs/guide/error-budget.md`) |
 | Budget guard | `budget_guard.go` | Per-step token cost trend monitoring (BAGEN-inspired) |
 | Error classifier | `error_classifier.go` | Type-specific guidance on first error (10 categories, AgentDebug-inspired) |
 | Scope drift | `scope_drift.go` | Semantic scope creep detection via file-diversity tracking |
