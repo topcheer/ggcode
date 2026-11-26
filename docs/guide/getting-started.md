@@ -56,6 +56,12 @@ Type a message and press Enter. ggcode will:
    (`Canceled at` / `Failed at` for the other outcomes) - so if you step away for hours you can see at a glance
    when the work stopped. Resumed sessions print a recap with the last-active time for the same reason.
 
+The terminal / tab title (OSC 0) follows the session so a strip full of
+instances stays readable: while the agent is working it reads
+`> <activity> — <workspace> [model]` (e.g. `> Thinking ... — burrow [glm-5.4]`),
+and when it is idle just `> <workspace> [model]` (e.g. `> ggcode [glm-5.4]`) -
+no product-name prefix, so the workspace name keeps the width.
+
 ### Input Modes
 
 The input supports three modes:
