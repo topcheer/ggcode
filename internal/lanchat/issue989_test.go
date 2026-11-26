@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -100,5 +101,22 @@ func TestIssue989CustomKeyDMEndToEnd(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("DM never arrived at receiver within 2s (custom-key interop broken)")
+	}
+
+	// The receiver pins the sender's signing key on first contact and writes
+	// node-key-pins.json into its store directory from a detached goroutine
+	// (persistPinsLocked -> safego.Go). Wait for that write to land before the
+	// test returns, otherwise t.TempDir() cleanup races it ("unlinkat storeB:
+	// directory not empty") and the package flakes under load.
+	pinsPath := filepath.Join(storeB.dir, "node-key-pins.json")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(pinsPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("receiver never persisted its key pin at %s", pinsPath)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
