@@ -57,12 +57,7 @@ require (
 	modernc.org/sqlite v1.62.0
 )
 
-require (
-	cel.dev/expr v0.26.0 // indirect
-	cloud.google.com/go/auth/oauth2adapt v0.3.1 // indirect
-	fiatjaf.com/lib v0.3.7 // indirect
-	github.com/FastFilter/xorfilter v0.5.1 // indirect
-)
+require cloud.google.com/go/auth/oauth2adapt v0.3.1 // indirect
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
@@ -157,7 +152,7 @@ require (
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.3.0 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/topcheer/etunnel v1.7.26
+	github.com/topcheer/etunnel v1.7.50
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.77.0 // indirect
