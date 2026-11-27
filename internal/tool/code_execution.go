@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -83,14 +84,20 @@ func SandboxToolNames() []string {
 var sandboxNoMemberPattern = regexp.MustCompile(`Object has no member '([A-Za-z_$][A-Za-z0-9_$]*)'`)
 
 // friendlySandboxError turns goja's bare "Object has no member 'x'" into an
-// actionable message: whether x exists but is not read-only, and how to list
-// what IS callable here.
+// actionable message (see notCallableMessage). It is the backstop for errors
+// that surface outside the tools Proxy, e.g. a bare `tools.x` read.
 func (c CodeExecution) friendlySandboxError(msg string) string {
 	m := sandboxNoMemberPattern.FindStringSubmatch(msg)
 	if m == nil {
 		return msg
 	}
-	name := m[1]
+	return c.notCallableMessage(m[1])
+}
+
+// notCallableMessage says why `tools.<name>` cannot be used here: the tool is
+// registered but not read-only, or nothing of that name is registered - and
+// where to look for what IS callable.
+func (c CodeExecution) notCallableMessage(name string) string {
 	if c.Registry != nil {
 		if _, ok := c.Registry.Get(name); ok {
 			return fmt.Sprintf("tools.%s is not callable inside code_execution: it is not a read-only tool. "+
@@ -99,6 +106,33 @@ func (c CodeExecution) friendlySandboxError(msg string) string {
 	}
 	return fmt.Sprintf("tools.%s does not exist - no tool with that name is registered. "+
 		"Callable here: tools.names()", name)
+}
+
+// sandboxMemberNamePattern limits the Proxy's synthesized members to plain
+// identifiers, so Symbol / __proto__ / then lookups keep JS semantics.
+var sandboxMemberNamePattern = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
+
+// wrapToolsInProxy makes a missing member fail at the SOURCE instead of as
+// goja's "Object has no member": `tools.edit_file` is a function that rejects
+// with notCallableMessage, so a `try { await tools.x() } catch (e)` inside the
+// sandbox sees the actionable text too (the exit-point rewrite only covered
+// uncaught errors).
+func (c CodeExecution) wrapToolsInProxy(vm *goja.Runtime, toolsObj *goja.Object) goja.Value {
+	// goja.Proxy implements valueContainer, so ToValue lifts it into the runtime.
+	return vm.ToValue(vm.NewProxy(toolsObj, &goja.ProxyTrapConfig{
+		Get: func(target *goja.Object, property string, receiver goja.Value) goja.Value {
+			if v := target.Get(property); v != nil && !goja.IsUndefined(v) {
+				return v
+			}
+			if property == "then" || !sandboxMemberNamePattern.MatchString(property) {
+				return goja.Undefined()
+			}
+			msg := c.notCallableMessage(property)
+			return vm.ToValue(func(call goja.FunctionCall) goja.Value {
+				return rejectPromise(vm, errors.New(msg))
+			})
+		},
+	}))
 }
 
 type CodeExecution struct {
@@ -122,7 +156,7 @@ Available tools (call via await tools.NAME(args)), generated from the sandbox al
 	}
 	b.WriteString(`
 Discover at runtime: JSON.parse(await tools.names()) -> sorted names; await tools.describe('grep') -> {name, description, parameters}.
-A tool missing from the list fails with "not callable inside code_execution" - call it as a direct tool call after the run.
+A tool missing from the list rejects with "not callable inside code_execution" (also inside try/catch) - call it as a direct tool call after the run.
 
 MCP tools: tools from read_only MCP servers are bridged into this sandbox:
   await tools['mcp__server__tool']({...})
@@ -473,7 +507,7 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 		return resolvePromise(vm, string(b))
 	})
 
-	vm.Set("tools", toolsObj)
+	vm.Set("tools", c.wrapToolsInProxy(vm, toolsObj))
 
 	safego.Go("code_execution.ctxCancel", func() {
 		<-ctx.Done()
