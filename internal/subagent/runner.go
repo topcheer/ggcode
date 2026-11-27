@@ -44,11 +44,16 @@ type RunnerConfig struct {
 	AllowedTools []string
 	Manager      *Manager
 	SubAgentID   string
-	AgentFactory AgentFactory
-	BuildToolSet func(allowedTools []string, allTools []ToolInfo) interface{}
-	Model        string
-	AgentType    string
-	WorkingDir   string
+	// RootSessionID is the session that spawned this run (the parent agent's
+	// session id). It is stamped on the run context so per-session resources
+	// - the browser profile - are shared with the parent instead of created
+	// per spawn; empty leaves the context as is.
+	RootSessionID string
+	AgentFactory  AgentFactory
+	BuildToolSet  func(allowedTools []string, allTools []ToolInfo) interface{}
+	Model         string
+	AgentType     string
+	WorkingDir    string
 	// RereadPolicy calibrates the #5013 same-file reread breaker for this
 	// run (#5737). Zero value (RereadPolicyAuto) keeps the strict #5013
 	// trip-after-3 behavior for every run that can edit files and grants
@@ -89,6 +94,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	subCtx, cancel := context.WithTimeout(ctx, timeout)
 
 	subCtx = util.WithActor(subCtx, cfg.SubAgentID)
+	subCtx = util.EnsureSessionID(subCtx, cfg.RootSessionID)
 	defer cancel()
 	if !cfg.Manager.SetCancel(cfg.SubAgentID, cancel) {
 

@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/rexcache"
+	"github.com/topcheer/ggcode/internal/util"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -104,9 +105,9 @@ func (b *Browser) Parameters() json.RawMessage {
 			"type": "string",
 			"description": "URL to navigate to (for 'navigate' action). Only http/https URLs are allowed; file:// and other schemes are rejected (use read_file for local files)."
 		},
-		"profile": {
-			"type": "string",
-			"description": "Chrome profile name. Each profile runs a separate Chrome instance with its own cookies, extensions, and settings. Use 'default' for a clean ephemeral profile, or specify a name like 'work', 'personal' to persist data between sessions. Defaults to 'default' (temporary, cleared on exit). 'system' is a persistent dedicated profile under ~/.ggcode/browser-profiles/system - it does NOT reuse your logged-in Chrome session (Chrome locks the default user data dir while running, and Chrome 136+ disables CDP debugging on it), so reuse of an already-open browser is not supported; log in once inside the 'system' profile and it persists across sessions. Any browser instance is shut down automatically after 3 minutes without use (GGCODE_BROWSER_IDLE_SECS), so there is no need to call action 'close' unless you want to end one sooner; if its Chrome process died meanwhile, the next call starts a fresh one."
+		"shared_profile": {
+			"type": "boolean",
+			"description": "Optional. The Chrome profile is fixed per ggcode session (its cookies, logins and settings persist for that session and are reused when it resumes; the 'profile' argument is no longer accepted). Set shared_profile=true to use the ONE shared persistent profile (~/.ggcode/browser-profiles/system) instead, for a site you already logged into there - it does NOT reuse your logged-in Chrome session (Chrome locks the default user data dir while running, and Chrome 136+ disables CDP debugging on it), so log in once inside that shared profile and it persists across sessions. Any browser instance is shut down automatically after 3 minutes without use (GGCODE_BROWSER_IDLE_SECS), so there is no need to call action 'close' unless you want to end one sooner; if its Chrome process died meanwhile, the next call starts a fresh one."
 		},
 		"session": {
 			"type": "string",
@@ -179,24 +180,27 @@ func (b *Browser) Parameters() json.RawMessage {
 }
 
 type browserActionArgs struct {
-	Action      string `json:"action"`
-	URL         string `json:"url"`
-	Profile     string `json:"profile"`
-	Session     string `json:"session"`
-	Selector    string `json:"selector"`
-	Text        string `json:"text"`
-	Value       string `json:"value"`
-	Key         string `json:"key"`
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Frame       string `json:"frame"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
-	Expression  string `json:"expression"`
-	WaitFor     string `json:"wait_for"`
-	WaitTimeout int    `json:"wait_timeout"`
-	Headless    *bool  `json:"headless"`
-	OutputPath  string `json:"output_path"`
+	Action string `json:"action"`
+	URL    string `json:"url"`
+	// Profile is NOT settable any more (kept so a stale caller gets a clear
+	// error instead of silence): the profile is fixed per ggcode session.
+	Profile       string `json:"profile"`
+	SharedProfile bool   `json:"shared_profile"`
+	Session       string `json:"session"`
+	Selector      string `json:"selector"`
+	Text          string `json:"text"`
+	Value         string `json:"value"`
+	Key           string `json:"key"`
+	Name          string `json:"name"`
+	Path          string `json:"path"`
+	Frame         string `json:"frame"`
+	Width         int    `json:"width"`
+	Height        int    `json:"height"`
+	Expression    string `json:"expression"`
+	WaitFor       string `json:"wait_for"`
+	WaitTimeout   int    `json:"wait_timeout"`
+	Headless      *bool  `json:"headless"`
+	OutputPath    string `json:"output_path"`
 }
 
 var browserActions = map[string]func(*Browser, context.Context, *browserActionArgs) (Result, error){
@@ -384,9 +388,11 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return annotateErrcode(Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}), nil
 	}
 
-	if args.Profile == "" {
-		args.Profile = "default"
+	profile, err := b.resolveProfile(ctx, args.Profile, args.SharedProfile)
+	if err != nil {
+		return annotateErrcode(Result{IsError: true, Content: err.Error()}), nil
 	}
+	args.Profile = profile
 	if args.Session == "" {
 		args.Session = "default"
 	}
@@ -504,6 +510,49 @@ func getChromeVersion(chromePath string) int {
 		return 0
 	}
 	return ver
+}
+
+// sessionProfilePrefix marks the per-session profile directories under
+// ~/.ggcode/browser-profiles/ so the stale-profile GC and an operator can tell
+// them from the shared "system" profile.
+const sessionProfilePrefix = "sess-"
+
+// resolveProfile maps a browser call to the Chrome profile it runs in. The
+// profile is not a tool argument any more: it is derived from the ggcode
+// session the call belongs to (context key set by the agent run, inherited by
+// sub-agents), so every session owns exactly one persistent profile -
+// `sess-<sessionID>` - instead of the model inventing a new ~150 MB directory
+// per task ("og-check", "og-check-2", "tcshots", ... 1.4 GB in two days).
+//
+//   - requested != "" -> error: a stale caller passing "profile" must learn
+//     that the argument is gone rather than be silently ignored.
+//   - shared -> the one shared "system" profile (logins that should outlive a
+//     session); it never multiplies because it is a single fixed name.
+//   - no session on the context (pipe mode without a confirmed session,
+//     tests) -> "default": ephemeral temp dir, nothing on disk.
+func (b *Browser) resolveProfile(ctx context.Context, requested string, shared bool) (string, error) {
+	if strings.TrimSpace(requested) != "" {
+		return "", fmt.Errorf("the 'profile' argument is no longer supported: the Chrome profile is fixed to this ggcode session%s. Drop 'profile' from the call; use shared_profile=true only for the shared ~/.ggcode/browser-profiles/system profile", sessionProfileNote(ctx))
+	}
+	if shared {
+		return "system", nil
+	}
+	sid := strings.TrimSpace(util.SessionIDFromContext(ctx))
+	if sid == "" {
+		return "default", nil
+	}
+	name := sessionProfilePrefix + sid
+	if err := validateBrowserProfileName(name); err != nil {
+		return "", fmt.Errorf("cannot derive the browser profile from the session id: %w", err)
+	}
+	return name, nil
+}
+
+func sessionProfileNote(ctx context.Context) string {
+	if sid := util.SessionIDFromContext(ctx); sid != "" {
+		return fmt.Sprintf(" (%s%s)", sessionProfilePrefix, sid)
+	}
+	return ""
 }
 
 func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, error) {

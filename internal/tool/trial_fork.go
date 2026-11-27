@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type TrialForkTool struct {
@@ -166,14 +167,15 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		res := &results[i]
 		res.Index, res.Strategy, res.Branch, res.Worktree = i+1, strategy, branches[i], dirs[i]
 		cfg := subagent.RunnerConfig{
-			Provider:     t.Provider,
-			AllTools:     allToolInfo,
-			Task:         task,
-			Manager:      mgr,
-			SubAgentID:   ids[i],
-			AgentFactory: t.AgentFactory,
-			WorkingDir:   dirs[i],
-			OnMetric:     t.OnMetric,
+			Provider:      t.Provider,
+			AllTools:      allToolInfo,
+			Task:          task,
+			Manager:       mgr,
+			SubAgentID:    ids[i],
+			RootSessionID: util.SessionIDFromContext(ctx),
+			AgentFactory:  t.AgentFactory,
+			WorkingDir:    dirs[i],
+			OnMetric:      t.OnMetric,
 			OnUsage: func(u provider.TokenUsage) {
 				res.Tokens += u.Total()
 				if t.OnUsage != nil {

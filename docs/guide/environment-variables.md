@@ -40,6 +40,22 @@ ggcode reads configuration from `GGCODE_*` environment variables. Unless noted o
 | `GGCODE_BROWSER_PROFILE_TTL_DAYS` | Age threshold before a stale browser profile is collected. | Days (integer). |
 | `GGCODE_BROWSER_IDLE_SECS` | How long an unused browser instance (profile + Chrome process) survives after its last `browser` call before it is shut down; `0` disables idle shutdown. | Seconds (integer); default 180. |
 
+### Browser profiles
+
+The `browser` tool has no `profile` argument. The Chrome profile a call runs in is **fixed to
+the ggcode session** the call belongs to: `~/.ggcode/browser-profiles/sess-<sessionID>` (cookies,
+logins and settings persist for that session and are reused when it is resumed). Sub-agents spawned
+from the session share it. One exception, as an explicit opt-in: `shared_profile=true` runs the call
+in the single shared profile `~/.ggcode/browser-profiles/system` (for a site you already logged into
+there). Without a confirmed session (pipe mode before the first message) the call uses an ephemeral
+temporary profile and leaves nothing on disk.
+
+Each Chrome profile directory is roughly 100-200 MB, so before this rule the model invented a new
+one per task ("og-check", "og-check-2", "tcshots", ...) and the directory grew by 1.4 GB in two
+days. Now every session owns exactly one, and `GC removed stale profile dir` (visible with
+`GGCODE_DEBUG=1`) deletes a session's directory once it is older than `GGCODE_BROWSER_PROFILE_TTL_DAYS`
+(default 7) and no Chrome process holds it; the shared `system` profile is never collected.
+
 ## Debugging & observability
 
 | Variable | Purpose | Value semantics |

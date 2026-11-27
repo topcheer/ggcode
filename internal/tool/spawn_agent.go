@@ -11,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 var subAgentBlockedTools = []string{
@@ -333,6 +334,7 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 			AllowedTools:        opts.Tools,
 			Manager:             t.Manager,
 			SubAgentID:          id,
+			RootSessionID:       util.SessionIDFromContext(ctx),
 			AgentFactory:        t.AgentFactory,
 			Model:               model,
 			AgentType:           opts.AgentType,
