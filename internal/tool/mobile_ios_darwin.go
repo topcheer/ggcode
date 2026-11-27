@@ -21,6 +21,15 @@ type iosBackend struct {
 
 	mu         sync.Mutex
 	cachedUDID string
+
+	// idb-first control (see mobile_ios_idb_darwin.go). snapshots holds the
+	// last accessibility tree per UDID for @eN refs; idbConnected caches the
+	// companion connection per UDID. The locator is shared process-wide so the
+	// (slow, one-shot) auto-install attempt happens at most once.
+	snapshots    map[string]*uiElement
+	idbConnected map[string]bool
+	idbLocator   *idbLocator
+	run          simCmdRunner // idb command runner override (tests)
 }
 
 func newIOSBackend() *iosBackend {
@@ -28,7 +37,41 @@ func newIOSBackend() *iosBackend {
 	if err != nil {
 		return nil
 	}
-	return &iosBackend{xcrunPath: path}
+	return &iosBackend{
+		xcrunPath:    path,
+		snapshots:    map[string]*uiElement{},
+		idbConnected: map[string]bool{},
+		idbLocator:   sharedIDBLocator,
+	}
+}
+
+// idbPath resolves the idb client (installing it on first use when missing).
+// Empty string means "use the AppleScript fallback".
+func (b *iosBackend) idbPath(ctx context.Context) string {
+	if b.idbLocator == nil {
+		b.idbLocator = sharedIDBLocator
+	}
+	p, _ := b.idbLocator.resolve(ctx)
+	return p
+}
+
+// resolveRef maps an @eN reference from the last snapshot to a logical point.
+func (b *iosBackend) resolveRef(device, ref string) (int, int, error) {
+	if !strings.HasPrefix(ref, "@e") {
+		return 0, 0, fmt.Errorf("invalid element reference %q (expected @eN)", ref)
+	}
+	b.mu.Lock()
+	root := b.snapshots[device]
+	b.mu.Unlock()
+	if root == nil {
+		return 0, 0, fmt.Errorf("element reference %q requires a prior snapshot - call snapshot first", ref)
+	}
+	el := findElementByID(root, ref)
+	if el == nil || el.Rect == nil {
+		return 0, 0, fmt.Errorf("element %q not found in the last snapshot - the UI may have changed; take a new snapshot", ref)
+	}
+	cx, cy := el.Rect.center()
+	return cx, cy, nil
 }
 
 func (b *iosBackend) defaultDevice() string {
@@ -185,12 +228,10 @@ func (b *iosBackend) close(ctx context.Context, device, pkg string) (Result, err
 }
 
 func (b *iosBackend) snapshot(ctx context.Context, device string) (Result, error) {
-
 	devInfo := fmt.Sprintf("Platform: iOS\nDevice: %s\n", device)
 
 	out, _, err := runCommand(ctx, 10*time.Second, b.xcrunPath, "simctl", "spawn", device, "launchctl", "list")
 	if err == nil && out != "" {
-
 		for _, line := range strings.Split(out, "\n") {
 			if strings.Contains(line, "Application") || strings.Contains(line, "UIKitApplication") {
 				devInfo += "Running apps detected.\n"
@@ -199,9 +240,30 @@ func (b *iosBackend) snapshot(ctx context.Context, device string) (Result, error
 		}
 	}
 
-	devInfo += "\nNote: iOS UI tree snapshot requires additional setup.\n" +
-		"Use action=\"screenshot\" to visually inspect the UI.\n" +
-		"Or install the app's accessibility audit via: xcrun simctl accessibility enable"
+	// idb path: real accessibility tree with @eN refs usable by tap/type/swipe.
+	if idb := b.idbPath(ctx); idb != "" {
+		raw, stderr, err := b.idb(ctx, idb, device, 20*time.Second, "ui", "describe-all", "--json")
+		if err == nil {
+			root, perr := parseIDBDescribeAll(raw, device)
+			if perr == nil {
+				b.mu.Lock()
+				b.snapshots[device] = root
+				b.mu.Unlock()
+				devInfo += fmt.Sprintf("Driver: idb (%d elements)\n", len(root.Children))
+				return Result{Content: formatSnapshot(root, devInfo)}, nil
+			}
+			devInfo += fmt.Sprintf("\nidb describe-all returned unusable data (%v); falling back.\n", perr)
+		} else {
+			devInfo += fmt.Sprintf("\nidb describe-all failed (%v %s); falling back.\n", err, strings.TrimSpace(stderr))
+		}
+	} else if b.idbLocator != nil {
+		if _, reason := b.idbLocator.resolve(ctx); reason != "" {
+			devInfo += fmt.Sprintf("\nidb unavailable: %s\n", reason)
+		}
+	}
+
+	devInfo += "\nNote: without idb the iOS UI tree is not available.\n" +
+		"Use action=\"screenshot\" to visually inspect the UI, or install idb (brew install idb-companion) and retry snapshot for element refs."
 
 	return Result{Content: devInfo}, nil
 }
@@ -234,12 +296,28 @@ func (b *iosBackend) screenshot(ctx context.Context, device, format string, qual
 func (b *iosBackend) tap(ctx context.Context, device, ref string, x, y int) (Result, error) {
 
 	if ref != "" {
-		return Result{IsError: true, Content: "element reference requires a prior snapshot - tap the field first with explicit coordinates"}, nil
+		cx, cy, rerr := b.resolveRef(device, ref)
+		if rerr != nil {
+			return Result{IsError: true, Content: rerr.Error()}, nil
+		}
+		x, y = cx, cy
+	} else {
+		sx, sy := b.scaleForDevice(device)
+		if sx > 1 || sy > 1 {
+			x, y = x/sx, y/sy
+		}
 	}
+	return b.tapLogical(ctx, device, x, y)
+}
 
-	sx, sy := b.scaleForDevice(device)
-	if sx > 1 || sy > 1 {
-		x, y = x/sx, y/sy
+// tapLogical taps a simulator point (logical coordinates) through idb, or via
+// the AppleScript fallback when idb is unavailable.
+func (b *iosBackend) tapLogical(ctx context.Context, device string, x, y int) (Result, error) {
+	if idb := b.idbPath(ctx); idb != "" {
+		if _, stderr, err := b.idb(ctx, idb, device, 15*time.Second, "ui", "tap", fmt.Sprint(x), fmt.Sprint(y)); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("idb tap failed: %v %s", err, strings.TrimSpace(stderr))}, nil
+		}
+		return Result{Content: fmt.Sprintf("Tapped at (%d, %d) via idb.", x, y)}, nil
 	}
 	script := tapAppleScript(simFrontendApp(ctx, runCommand), x, y)
 	_, stderr, err := runCommand(ctx, 10*time.Second, "osascript", "-e", script)
@@ -304,9 +382,24 @@ func (b *iosBackend) scaleForDevice(device string) (int, int) {
 }
 
 func (b *iosBackend) typeText(ctx context.Context, device, ref, text string, x, y int) (Result, error) {
+	fromRef := false
+	if ref != "" {
+		cx, cy, rerr := b.resolveRef(device, ref)
+		if rerr != nil {
+			return Result{IsError: true, Content: rerr.Error()}, nil
+		}
+		x, y = cx, cy
+		fromRef = true
+	}
 	if x != 0 || y != 0 {
-
-		if tapRes, err := b.tap(ctx, device, "", x, y); err != nil || tapRes.IsError {
+		var tapRes Result
+		var err error
+		if fromRef {
+			tapRes, err = b.tapLogical(ctx, device, x, y)
+		} else {
+			tapRes, err = b.tap(ctx, device, "", x, y)
+		}
+		if err != nil || tapRes.IsError {
 
 			reason := error(err)
 			if reason == nil {
@@ -317,6 +410,12 @@ func (b *iosBackend) typeText(ctx context.Context, device, ref, text string, x, 
 		time.Sleep(300 * time.Millisecond)
 	}
 
+	if idb := b.idbPath(ctx); idb != "" {
+		if _, stderr, err := b.idb(ctx, idb, device, 30*time.Second, "ui", "text", text); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("idb text failed: %v %s", err, strings.TrimSpace(stderr))}, nil
+		}
+		return Result{Content: fmt.Sprintf("Typed: %q via idb", text)}, nil
+	}
 	escapedText := escapeAppleScriptString(text)
 	script := typeAppleScript(simFrontendApp(ctx, runCommand), escapedText)
 	_, stderr, err := runCommand(ctx, 10*time.Second, "osascript", "-e", script)
@@ -328,21 +427,29 @@ func (b *iosBackend) typeText(ctx context.Context, device, ref, text string, x, 
 
 func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y int, endX, endY *int) (Result, error) {
 
-	if ref != "" {
-		return Result{IsError: true, Content: "element reference requires a prior snapshot - swipe with explicit start/end coordinates"}, nil
-	}
-
 	if endX == nil || endY == nil {
 		return Result{IsError: true, Content: "swipe requires end_x and end_y (the swipe destination); provide both explicitly"}, nil
 	}
 	ex, ey := *endX, *endY
-	if x == 0 && y == 0 && ex == 0 && ey == 0 {
+	if ref != "" {
+		cx, cy, rerr := b.resolveRef(device, ref)
+		if rerr != nil {
+			return Result{IsError: true, Content: rerr.Error()}, nil
+		}
+		x, y = cx, cy
+	} else if x == 0 && y == 0 && ex == 0 && ey == 0 {
 		return Result{IsError: true, Content: "swipe requires explicit start/end coordinates (got all zeros)"}, nil
 	}
 
 	sx, sy := b.scaleForDevice(device)
 	if sx > 1 || sy > 1 {
 		x, y, ex, ey = x/sx, y/sy, ex/sx, ey/sy
+	}
+	if idb := b.idbPath(ctx); idb != "" {
+		if _, stderr, err := b.idb(ctx, idb, device, 20*time.Second, "ui", "swipe", fmt.Sprint(x), fmt.Sprint(y), fmt.Sprint(ex), fmt.Sprint(ey), "--duration", "0.3"); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("idb swipe failed: %v %s", err, strings.TrimSpace(stderr))}, nil
+		}
+		return Result{Content: fmt.Sprintf("Swiped from (%d,%d) to (%d,%d) via idb.", x, y, ex, ey)}, nil
 	}
 	script := swipeAppleScript(simFrontendApp(ctx, runCommand), x, y, ex, ey)
 	_, stderr, err := runCommand(ctx, 15*time.Second, "osascript", "-e", script)
@@ -353,6 +460,35 @@ func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y int, en
 }
 
 func (b *iosBackend) press(ctx context.Context, device, key string) (Result, error) {
+	if strings.EqualFold(key, "back") {
+		return Result{IsError: true, Content: "iOS does not have a hardware back button. Use swipe from left edge (or the app's own back control)."}, nil
+	}
+	if idb := b.idbPath(ctx); idb != "" {
+		var args []string
+		switch strings.ToLower(key) {
+		case "home":
+			args = []string{"ui", "button", "HOME"}
+		case "lock", "sleep":
+			args = []string{"ui", "button", "LOCK"}
+		case "siri":
+			args = []string{"ui", "button", "SIRI"}
+		case "side_button", "sidebutton":
+			args = []string{"ui", "button", "SIDE_BUTTON"}
+		default:
+			if code, ok := idbKeyFor(key); ok {
+				args = []string{"ui", "key", fmt.Sprint(code)}
+			} else if len(key) == 1 {
+				// A single character is typed, not pressed.
+				args = []string{"ui", "text", key}
+			}
+		}
+		if args != nil {
+			if _, stderr, err := b.idb(ctx, idb, device, 15*time.Second, args...); err != nil {
+				return Result{IsError: true, Content: fmt.Sprintf("idb press %s failed: %v %s", key, err, strings.TrimSpace(stderr))}, nil
+			}
+			return Result{Content: fmt.Sprintf("Pressed %s via idb.", key)}, nil
+		}
+	}
 	script, ok := pressAppleScript(simFrontendApp(ctx, runCommand), key)
 	if !ok {
 		return Result{IsError: true, Content: "iOS does not have a hardware back button. Use swipe from left edge."}, nil

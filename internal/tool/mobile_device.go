@@ -57,7 +57,10 @@ func (t *MobileDeviceTool) Name() string { return "mobile_device" }
 func (t *MobileDeviceTool) Description() string {
 	return "Control native mobile apps on iOS Simulator or Android Emulator/Device. " +
 		"Actions: devices, boot, install, launch, snapshot (UI tree), screenshot, tap, type, swipe, press, logs, close, list_apps. " +
-		"Use action=\"devices\" first. snapshot returns @eN element references for tap/type/swipe."
+		"Use action=\"devices\" first. snapshot returns @eN element references for tap/type/swipe. " +
+		"iOS on macOS is driven through idb (installed automatically via Homebrew on first use when missing; set GGCODE_MOBILE_NO_INSTALL=1 to skip): " +
+		"coordinates are simulator points, text input and snapshot work without a visible simulator window; without idb the tool falls back to " +
+		"AppleScript clicks (needs Accessibility permission and the simulator window)."
 }
 
 func (t *MobileDeviceTool) Parameters() json.RawMessage {
