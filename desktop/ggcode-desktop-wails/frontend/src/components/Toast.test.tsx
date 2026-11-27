@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, afterEach } from 'vitest'
-import { render, screen, act, cleanup } from '@testing-library/react'
+import { render, screen, act, cleanup, waitFor } from '@testing-library/react'
 import { ToastContainer, type ToastMessage } from './Toast'
 
 afterEach(cleanup)
@@ -49,7 +49,7 @@ describe('ToastContainer', () => {
     expect(dismissBtns.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('calls onDismiss when dismiss button clicked', () => {
+  it('animates out, then calls onDismiss when the dismiss button is clicked', async () => {
     let dismissedId = -1
     render(
       <ToastContainer
@@ -59,7 +59,10 @@ describe('ToastContainer', () => {
     )
     const dismissBtn = screen.getAllByLabelText('common.dismiss')[0]
     act(() => { dismissBtn.click() })
-    expect(dismissedId).toBe(42)
+    // Exit animation first (toast-exit, 150ms), removal after.
+    expect(dismissedId).toBe(-1)
+    expect(dismissBtn.closest('.toast-exit')).not.toBeNull()
+    await waitFor(() => { expect(dismissedId).toBe(42) }, { timeout: 1000 })
   })
 
   it('toast has role="status" for screen readers', () => {

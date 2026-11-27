@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react'
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { ShieldAlert, XCircle, CheckCircle2, ShieldCheck, FileEdit, FilePlus, Terminal, FileJson, Copy, Check, Zap, AlertTriangle, Eye } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
@@ -493,12 +493,44 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
     onClose()
   }, [responding, request.requestID, onClose])
 
+  // D2: the dialog takes focus on mount and traps it; Enter/Escape only act
+  // when focus is inside the dialog, never during IME composition, and not in
+  // the first 400ms (a user typing in the composer must not approve a command
+  // by reflex when the dialog pops up).
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const openedAtRef = useRef(Date.now())
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null
+    dialogRef.current?.focus()
+    return () => { previouslyFocused?.focus?.() }
+  }, [])
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const root = dialogRef.current
+      if (!root || !root.contains(document.activeElement)) return
+      if (e.isComposing || e.keyCode === 229) return
+      if (Date.now() - openedAtRef.current < 400) return
+      if (e.key === 'Tab') {
+        const focusables = Array.from(root.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        )).filter(el => el.offsetParent !== null)
+        if (focusables.length === 0) return
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+        return
+      }
       if (e.key === 'Escape') {
         e.preventDefault()
         handleRespond('deny')
-      } else if (e.key === 'Enter') {
+      } else if (e.key === 'Enter' && !(document.activeElement instanceof HTMLButtonElement)) {
         e.preventDefault()
         handleRespond(e.shiftKey ? 'always_allow' : 'allow')
       }
@@ -513,13 +545,14 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
   const diffStats = useMemo(() => getDiffStats(request.toolName, request.input), [request.toolName, request.input])
 
   return (
-    <div role="dialog" aria-modal="true" aria-label={t('common.toolApproval')} tabIndex={-1} style={{
+    <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={t('common.toolApproval')} tabIndex={-1} className="dlg-backdrop" style={{
       position: 'fixed', inset: 0,
       background: 'rgba(0,0,0,0.6)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       zIndex: 1000,
+      outline: 'none',
     }}>
-      <div style={{
+      <div className="dlg-enter" style={{
         background: 'var(--color-surface)',
         borderRadius: 'var(--radius-lg)',
         border: '1px solid var(--color-border)',

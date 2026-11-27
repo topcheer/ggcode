@@ -190,7 +190,11 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
                 return (
                   <div
                     key={choice.id}
+                    role="radio"
+                    aria-checked={isSelected}
+                    tabIndex={0}
                     onClick={() => handleSingleSelect(q.id, choice.id)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSingleSelect(q.id, choice.id) } }}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 10,
                       padding: '6px 0', cursor: 'pointer',
@@ -218,7 +222,11 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
                 return (
                   <div
                     key={choice.id}
+                    role="checkbox"
+                    aria-checked={isSelected}
+                    tabIndex={0}
                     onClick={() => handleMultiToggle(q.id, choice.id)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleMultiToggle(q.id, choice.id) } }}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 10,
                       padding: '6px 0', cursor: 'pointer',

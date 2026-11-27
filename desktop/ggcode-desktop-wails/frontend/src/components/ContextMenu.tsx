@@ -87,22 +87,22 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
               padding: '6px 12px',
               background: 'transparent',
               border: 'none',
-              color: item.danger ? '#f87171' : 'var(--text-secondary)',
+              color: item.danger ? 'var(--color-error)' : 'var(--text-secondary)',
               fontSize: 13,
               textAlign: 'left',
               cursor: item.disabled ? 'default' : 'pointer',
               opacity: item.disabled ? 0.4 : 1,
-              transition: 'background 0.1s',
+              transition: 'background var(--motion-fast)',
             }}
             onMouseEnter={e => {
               if (!item.disabled) {
-                e.currentTarget.style.background = item.danger ? 'rgba(220,38,38,0.12)' : 'rgba(128,128,128,0.12)'
-                e.currentTarget.style.color = item.danger ? '#f87171' : 'var(--text-primary)'
+                e.currentTarget.style.background = item.danger ? 'color-mix(in srgb, var(--color-error) 12%, transparent)' : 'var(--color-hover)'
+                e.currentTarget.style.color = item.danger ? 'var(--color-error)' : 'var(--text-primary)'
               }
             }}
             onMouseLeave={e => {
               e.currentTarget.style.background = 'transparent'
-              e.currentTarget.style.color = item.danger ? '#f87171' : 'var(--text-secondary)'
+              e.currentTarget.style.color = item.danger ? 'var(--color-error)' : 'var(--text-secondary)'
             }}
           >
             {item.icon && <span style={{ display: 'flex', flexShrink: 0 }}>{item.icon}</span>}

@@ -73,6 +73,11 @@ const en = {
   'status.offline': 'Не в сети',
 
   'chat.placeholder': 'Сообщение ggcode...',
+  'code.copy': 'Копировать',
+  'code.copied': 'Скопировано',
+  'code.expandLines': 'Развернуть ({n} строк)',
+  'code.collapse': 'Свернуть',
+  'chat.cancelled': 'Отменено',
   'chat.agentWorking': 'Агент работает...',
   'chat.welcome.title': 'Чем я могу помочь сегодня?',
   'chat.welcome.subtitle': 'Спросите что угодно о вашем коде или попробуйте:',

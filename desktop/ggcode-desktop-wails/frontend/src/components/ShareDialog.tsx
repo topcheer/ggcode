@@ -107,7 +107,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
         {error && (
           <div style={{
             padding: 12, borderRadius: 'var(--radius-md)',
-            background: 'rgba(220,38,38,0.1)', color: '#f87171', fontSize: 13,
+            background: 'color-mix(in srgb, var(--color-error) 12%, transparent)', color: 'var(--color-error)', fontSize: 13,
           }}>
             {error}
           </div>
@@ -183,8 +183,8 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
         {shareInfo && (
           <button onClick={stopSharing} style={{
             padding: '8px 16px', borderRadius: 'var(--radius-md)',
-            background: 'rgba(220,38,38,0.1)', color: '#f87171',
-            border: '1px solid rgba(220,38,38,0.3)',
+            background: 'color-mix(in srgb, var(--color-error) 12%, transparent)', color: 'var(--color-error)',
+            border: '1px solid color-mix(in srgb, var(--color-error) 30%, transparent)',
             cursor: 'pointer', fontWeight: 600, fontSize: 13,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
           }}><StopCircle size={16} /> {t('share.stopSharing')}</button>

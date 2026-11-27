@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   appendAssistantChunk,
+  appendBufferedChunks,
   appendReasoningChunk,
   appendUserMessage,
   finishAssistantMessage,
@@ -150,5 +151,46 @@ describe('desktop chat stream state', () => {
       content: 'thinking more',
       streaming: true,
     })
+  })
+})
+
+describe('appendBufferedChunks (stream batching)', () => {
+  it('applies 50 text deltas as one message update on a single assistant message', () => {
+    const r = appendBufferedChunks<StreamChatMessage>([], null, Array.from({ length: 50 }, (_, i) => ({ type: 'text' as const, content: `${i},` })), idFactory(), now)
+    expect(r.messages).toHaveLength(1)
+    expect(r.messages[0].role).toBe('assistant')
+    expect(r.messages[0].streaming).toBe(true)
+    expect(r.messages[0].content.endsWith('48,49,')).toBe(true)
+    expect(r.messages[0].content.startsWith('0,1,2,')).toBe(true)
+    expect(r.streamingMessageID).toBe(r.messages[0].id)
+  })
+
+  it('keeps interleaved reasoning and text on their own streaming messages in order', () => {
+    const r = appendBufferedChunks<StreamChatMessage>([], null, [
+      { type: 'reasoning', content: 'think ' },
+      { type: 'reasoning', content: 'more' },
+      { type: 'text', content: 'answer' },
+      { type: 'text', content: '!' },
+    ], idFactory(), now)
+    expect(r.messages.map(m => m.role)).toEqual(['reasoning', 'assistant'])
+    expect(r.messages[0].content).toBe('think more')
+    expect(r.messages[1].content).toBe('answer!')
+  })
+
+  it('continues the message identified by streamingMessageID and honours explicit ids', () => {
+    const first = appendBufferedChunks<StreamChatMessage>([], null, [{ type: 'text', content: 'a' }], idFactory(), now)
+    const second = appendBufferedChunks(first.messages, first.streamingMessageID, [{ type: 'text', content: 'b' }], idFactory(), now)
+    expect(second.messages).toHaveLength(1)
+    expect(second.messages[0].content).toBe('ab')
+    const explicit = appendBufferedChunks(second.messages, second.streamingMessageID, [{ type: 'text', content: 'c', messageID: 'srv-1' }], idFactory(), now)
+    expect(explicit.messages.map(m => m.id)).toEqual([second.messages[0].id, 'srv-1'])
+    expect(explicit.streamingMessageID).toBe('srv-1')
+  })
+
+  it('returns the input untouched for an empty batch', () => {
+    const msgs: StreamChatMessage[] = [{ id: 'x', role: 'assistant', content: 'hi' }]
+    const r = appendBufferedChunks(msgs, 'x', [], idFactory(), now)
+    expect(r.messages).toBe(msgs)
+    expect(r.streamingMessageID).toBe('x')
   })
 })

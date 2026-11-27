@@ -73,6 +73,11 @@ const en = {
   'status.offline': '오프라인',
 
   'chat.placeholder': 'ggcode에 메시지 입력...',
+  'code.copy': '복사',
+  'code.copied': '복사됨',
+  'code.expandLines': '펼치기 ({n}줄)',
+  'code.collapse': '접기',
+  'chat.cancelled': '취소됨',
   'chat.agentWorking': '에이전트가 작업 중...',
   'chat.welcome.title': '오늘 어떤 도움이 필요하신가요?',
   'chat.welcome.subtitle': '코드에 대해 무엇이든 물어보시거나, 아래 중 하나를 시도해 보세요:',

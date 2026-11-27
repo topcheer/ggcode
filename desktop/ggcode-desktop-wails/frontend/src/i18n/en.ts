@@ -76,6 +76,11 @@ const en = {
   'status.zoomReset': 'Reset Zoom (Cmd+0)',
 
   'chat.placeholder': 'Message ggcode...',
+  'code.copy': 'Copy',
+  'code.copied': 'Copied',
+  'code.expandLines': 'Expand ({n} lines)',
+  'code.collapse': 'Collapse',
+  'chat.cancelled': 'Cancelled',
   'chat.agentWorking': 'Agent is working...',
   'chat.welcome.title': 'How can I help you today?',
   'chat.welcome.subtitle': 'Ask me anything about your code, or try one of these:',

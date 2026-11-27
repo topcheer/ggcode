@@ -4,11 +4,21 @@
     <meta charset="UTF-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
     <title>GGCode Desktop</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+        // Paint the theme before React mounts: reads the saved mode the same way
+        // useTheme does ('auto' follows the OS). Previously the body was pinned
+        // to the dark background, so light users saw a dark flash on launch.
+        (function () {
+            try {
+                var m = localStorage.getItem('ggcode-theme');
+                var dark = m === 'dark' || (m !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                document.documentElement.classList.toggle('dark', dark);
+                document.documentElement.style.backgroundColor = dark ? '#0D1117' : '#FFFFFF';
+            } catch (e) { }
+        })();
+    </script>
     <style>
-        body { margin: 0; padding: 0; background-color: #0D1117; overflow: hidden; }
+        html, body { margin: 0; padding: 0; overflow: hidden; background-color: inherit; }
     </style>
 </head>
 <body>

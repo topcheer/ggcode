@@ -2,6 +2,7 @@ import React from 'react'
 import { MessageSquare, FolderOpen, Settings, Radio, Server, Terminal, PanelLeft, Users, Clock } from 'lucide-react'
 import { ViewMode } from '../types'
 import { useTranslation } from '../i18n'
+import { modKey } from '../utils/platform'
 
 interface Props {
   view: ViewMode
@@ -14,7 +15,9 @@ interface Props {
 
 function NavItems() {
   const { t } = useTranslation()
-  const shortcuts = ['⌘1', '⌘2', '⌘3', '⌘4', '⌘5', '⌘6', '⌘7', '⌘8']
+  // D19: labels follow Layout's real mapping (⌘7 = LAN Chat, ⌘8 = Cron) and
+  // the platform modifier. The old positional array labelled Cron ⌘7.
+  const shortcutFor: Record<string, string> = { chat: '1', files: '2', im: '3', mcp: '4', settings: '5', debug: '6', lanchat: '7', cron: '8' }
   const items = [
     { id: 'chat' as ViewMode, icon: <MessageSquare size={18} />, tooltip: t('nav.chat') },
     { id: 'files' as ViewMode, icon: <FolderOpen size={18} />, tooltip: t('nav.files') },
@@ -26,7 +29,7 @@ function NavItems() {
   ]
   return items.map((item, i) => ({
     ...item,
-    tooltip: `${item.tooltip} (${shortcuts[i]})`,
+    tooltip: `${item.tooltip} (${modKey}${shortcutFor[item.id] ?? i + 1})`,
   }))
 }
 
@@ -108,7 +111,7 @@ export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sideba
       {}
       <button
         onClick={() => onViewChange('lanchat')}
-        title={`LAN Chat (⌘7)`}
+        title={`LAN Chat (${modKey}7)`}
         className="nav-rail-btn"
         style={{
           width: 36, height: 36, borderRadius: 6,

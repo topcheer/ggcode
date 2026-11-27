@@ -12,10 +12,24 @@
   --color-info: #0969DA;
   --color-error-rgb: 207, 34, 46;
 
+  /* Aliases for variables that were referenced but never defined (hover
+     backgrounds came out transparent, LanChat fell back to dark-only rgba). */
+  --color-hover: rgba(0, 0, 0, 0.06);
+  --color-nav-hover: rgba(0, 0, 0, 0.06);
+  --color-selected: rgba(9, 105, 218, 0.12);
+  --accent: var(--color-primary);
+  --bg-secondary: var(--color-card);
+  --bg-tertiary: var(--color-surface);
+  --border-color: var(--color-border);
+  --color-danger: var(--color-error);
+  --color-text-tertiary: var(--text-tertiary);
+
   /* Text — Light */
   --text-primary: #1F2328;
   --text-secondary: #656D76;
-  --text-tertiary: #8C959F;
+  /* D4: was #8C959F (3.0:1 on bg, 2.5:1 on card) - failed AA everywhere it
+     carried 10-12px metadata. #5E6770 is 5.6:1 on bg / 5.0:1 on card. */
+  --text-tertiary: #5E6770;
 
   /* Spacing */
   --spacing-xs: 4px;
@@ -31,8 +45,36 @@
   --radius-xl: 12px;
 
   /* Font */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+  /* CJK + Windows fallbacks: 13 locales ship but Chinese text previously fell
+     back to the browser default, Windows got no UI font. */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Mono', Consolas, 'PingFang SC', 'Microsoft YaHei', monospace;
+
+  /* Motion spec (shared semantics; see docs/reviews/desktop-mobile-ux-motion-review-2026-11-27.md §4).
+     Only opacity / transform / colors may animate - never width/height/top/left. */
+  --dur-micro: 100ms;      /* hover, press, color, send<->stop, copy tick */
+  --dur-base: 150ms;       /* most state changes, expand/collapse */
+  --dur-enter: 200ms;      /* dialogs, sheets, sidebar, palette, banners */
+  --dur-exit: 150ms;       /* every exit - always shorter than enter */
+  --dur-emphasis: 300ms;   /* progress bars, large surface changes */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-decelerate: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);
+  --motion-fast: var(--dur-micro) var(--ease-standard);
+  --motion-base: var(--dur-base) var(--ease-standard);
+  --motion-enter: var(--dur-enter) var(--ease-decelerate);
+  --motion-exit: var(--dur-exit) var(--ease-accelerate);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.4);
+  --z-popover: 1000;
+  --z-menu: 9999;
+  --z-toast: 10000;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
 
   /* Font sizes */
   --font-size-base: 15px;
@@ -43,7 +85,7 @@
   /* Sizing */
   --nav-rail-width: 48px;
   --sidebar-width: 280px;
-  --topbar-height: 48px;
+  --topbar-height: 36px;
   --statusbar-height: 28px;
 
   color-scheme: light;
@@ -67,7 +109,15 @@
   /* Text — Dark */
   --text-primary: #E6EDF3;
   --text-secondary: #8B949E;
-  --text-tertiary: #484F58;
+  /* D4: was #484F58 (1.8-2.5:1 on every surface). #7D8590 is 5.2:1 on bg / 4.6:1 on card. */
+  --text-tertiary: #7D8590;
+
+  --color-hover: rgba(255, 255, 255, 0.08);
+  --color-nav-hover: rgba(255, 255, 255, 0.08);
+  --color-selected: rgba(31, 111, 235, 0.25);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.6);
 
   color-scheme: dark;
 }
@@ -88,7 +138,6 @@ html, body, #root {
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  color-scheme: light dark;
   text-rendering: optimizeLegibility;
 }
 
@@ -110,13 +159,53 @@ input, textarea {
   background: transparent;
 }
 
+/* D21: the thumb was --color-surface on --color-bg (1.2:1 light / 1.5:1 dark). */
 ::-webkit-scrollbar-thumb {
-  background: var(--color-surface);
+  background: color-mix(in srgb, var(--text-tertiary) 45%, transparent);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-border);
+  background: color-mix(in srgb, var(--text-tertiary) 75%, transparent);
+}
+
+/* D16: keyboard focus on wrapped inputs (search fields etc.) - the inputs
+   themselves set outline:none, so the wrapper shows the focus state. */
+.field:focus-within {
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 30%, transparent);
+}
+
+/* ── Shared surface motion (dialogs, menus, toasts) ─────────────────────── */
+.dlg-backdrop {
+  animation: dlgBackdropIn var(--motion-base) both;
+}
+.dlg-enter {
+  animation: dlgIn var(--motion-enter) both;
+}
+@keyframes dlgBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dlgIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.toast-exit {
+  animation: toastExit var(--motion-exit) forwards !important;
+  pointer-events: none;
+}
+@keyframes toastExit {
+  to { opacity: 0; transform: translateX(8px); }
+}
+@keyframes toastProgressScaleX {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dlg-backdrop, .dlg-enter, .toast-enter, .toast-exit, .toast-progress, .msg-enter, .streaming-cursor {
+    animation: none !important;
+  }
 }
 
 input, textarea, select, button {

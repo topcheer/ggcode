@@ -77,6 +77,11 @@ const id = {
 
   // ChatView
   'chat.placeholder': 'Kirim pesan ke ggcode...',
+  'code.copy': 'Salin',
+  'code.copied': 'Disalin',
+  'code.expandLines': 'Perluas ({n} baris)',
+  'code.collapse': 'Ciutkan',
+  'chat.cancelled': 'Dibatalkan',
   'chat.agentWorking': 'Agent sedang bekerja...',
   'chat.welcome.title': 'Apa yang bisa saya bantu hari ini?',
   'chat.welcome.subtitle': 'Tanyakan apa saja tentang kode Anda, atau coba salah satu ini:',

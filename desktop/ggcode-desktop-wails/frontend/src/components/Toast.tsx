@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react'
 import { useTranslation } from '../i18n'
 
@@ -47,21 +47,32 @@ const toastConfig: Record<ToastType, {
   },
 }
 
+// Exit animation length; must match the .toast-exit keyframes in style.css.
+const TOAST_EXIT_MS = 150
+
 function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss: (id: number) => void }) {
   const { t } = useTranslation()
   const duration = toast.type === 'error' ? 6000 : 3500
   const config = toastConfig[toast.type]
+  const [leaving, setLeaving] = useState(false)
+
+  // D14: toasts animate out instead of popping. The item stays mounted for the
+  // exit animation, then is removed from the list.
+  const requestDismiss = useCallback(() => {
+    setLeaving(true)
+    window.setTimeout(() => onDismiss(toast.id), TOAST_EXIT_MS)
+  }, [toast.id, onDismiss])
 
   useEffect(() => {
-    const id = window.setTimeout(() => onDismiss(toast.id), duration)
+    const id = window.setTimeout(requestDismiss, duration)
     return () => window.clearTimeout(id)
-  }, [toast.id, duration, onDismiss])
+  }, [toast.id, duration, requestDismiss])
 
   return (
     <div
       role="status"
       aria-live="polite"
-      className="toast-enter"
+      className={leaving ? 'toast-enter toast-exit' : 'toast-enter'}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -86,7 +97,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss: (id: 
       <button
         type="button"
         aria-label={t('common.dismiss')}
-        onClick={() => onDismiss(toast.id)}
+        onClick={requestDismiss}
         style={{
           width: 22,
           height: 22,
@@ -120,7 +131,8 @@ function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss: (id: 
             height: '100%',
             background: config.progressColor,
             opacity: 0.6,
-            animationName: 'toastProgressShrink',
+            transformOrigin: 'left',
+            animationName: 'toastProgressScaleX',
             animationDuration: `${duration}ms`,
             animationTimingFunction: 'linear',
             animationFillMode: 'forwards',

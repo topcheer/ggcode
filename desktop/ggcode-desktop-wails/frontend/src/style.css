@@ -13,29 +13,9 @@
  * - Reasoning panel subtle shimmer
  */
 
-/* ── CSS Variables (fallback values if not set by theme) ─────────────────── */
-:root {
-    --color-primary: #3b82f6;
-    --color-success: #22c55e;
-    --color-warning: #f59e0b;
-    --color-error: #ef4444;
-    --color-info: #06b6d4;
-    --color-card: #1e1e2e;
-    --color-surface: #181825;
-    --color-border: #313244;
-    --text-primary: #cdd6f4;
-    --text-secondary: #a6adc8;
-    --text-tertiary: #7f849c;
-    --font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace;
-    --font-size-base: 14px;
-    --font-size-small: 12px;
-    --radius-sm: 4px;
-    --radius-md: 8px;
-    --radius-lg: 12px;
-    --spacing-sm: 4px;
-    --spacing-md: 8px;
-    --spacing-lg: 16px;
-}
+/* Design tokens (colors, spacing, radius, typography, motion) live in App.css.
+   An earlier fallback :root block here was fully overridden by App.css (import
+   order) and only caused confusion about which values were live. */
 
 /* ── Markdown body styles ───────────────────────────────────────────────── */
 
@@ -205,16 +185,17 @@
 
 /* Links — animated underline on hover (discoverability micro-interaction) */
 .markdown-body a {
-    color: var(--color-primary);
+    /* D22: --color-info passes AA as text in both themes (7.5:1 dark / 5.2:1 light); --color-primary was 4.08:1 dark. */
+    color: var(--color-info);
     text-decoration: none;
     background-image: linear-gradient(currentColor, currentColor);
     background-position: 0 100%;
     background-size: 0% 1px;
     background-repeat: no-repeat;
-    transition: color 0.15s ease, background-size 0.2s ease;
+    transition: color var(--motion-fast), background-size var(--dur-base) var(--ease-standard);
 }
 .markdown-body a:hover {
-    color: #60a5fa;
+    color: color-mix(in srgb, var(--color-info) 80%, var(--text-primary));
     background-size: 100% 1px;
 }
 /* External links get a subtle indicator */
@@ -232,31 +213,7 @@
 
 /* ── Global utilities ────────────────────────────────────────────────────── */
 
-/* Custom scrollbar styling */
-* {
-    scrollbar-width: thin;
-    scrollbar-color: rgba(128, 128, 128, 0.3) transparent;
-}
-*::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-*::-webkit-scrollbar-track {
-    background: transparent;
-}
-*::-webkit-scrollbar-thumb {
-    background: rgba(128, 128, 128, 0.25);
-    border-radius: 4px;
-    border: 2px solid transparent;
-    background-clip: padding-box;
-}
-*::-webkit-scrollbar-thumb:hover {
-    background: rgba(128, 128, 128, 0.45);
-    background-clip: padding-box;
-}
-*::-webkit-scrollbar-corner {
-    background: transparent;
-}
+/* Scrollbar styling lives in App.css (one rule set, contrast-corrected thumb). */
 
 /* ── Text selection color (theme-matched) ─────────────────────────────────── */
 ::selection {
@@ -271,7 +228,7 @@
 *:focus-visible {
     outline: 2px solid var(--color-primary, #3b82f6);
     outline-offset: 2px;
-    border-radius: 2px;
+    /* D16: no border-radius here - it mutated the focused element's shape. */
 }
 /* Remove focus-visible from elements that have their own focus styling */
 button:focus-visible,
@@ -280,123 +237,42 @@ textarea:focus-visible {
     outline-offset: 1px;
 }
 
-/* ── Smooth scroll behavior for message container ─────────────────────────── */
-/* Only apply to scrollable containers, not the whole page */
-div[style*="overflow"] {
-    scroll-behavior: smooth;
-}
+/* D8: the former global `div[style*="overflow"] { scroll-behavior: smooth }`
+   rule turned every programmatic scrollTop into an animation, which made the
+   streaming auto-follow lag and then disable itself. Callers pass
+   behavior:'smooth' explicitly where they want it. */
 
-/* ── Streaming UX: Message entrance animation ───────────────────────────── */
-/* New messages fade and slide in from the bottom for a polished feel. */
-/* Applied via .msg-enter class on each message wrapper. */
-@keyframes msgEnter {
-    from {
-        opacity: 0;
-        transform: translateY(8px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
+/* ── Message motion ──────────────────────────────────────────────────────── */
+/* New user/tool rows fade+slide in. Never applied to the streaming row. */
 .msg-enter {
-    animation: msgEnter 0.25s ease-out;
+    animation: msgEnter var(--motion-enter) both;
+}
+@keyframes msgEnter {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Streaming UX: Tool call shimmer skeleton ────────────────────────────── */
-/* While a tool is executing (streaming: true, no content yet), show a */
-/* shimmering placeholder bar instead of an empty box. */
-@keyframes shimmerSlide {
-    0% {
-        background-position: -200px 0;
-    }
-    100% {
-        background-position: 200px 0;
-    }
-}
-.tool-shimmer {
-    height: 3px;
-    width: 100%;
-    border-radius: 2px;
-    background: linear-gradient(
-        90deg,
-        rgba(255,255,255,0.05) 0%,
-        rgba(255,255,255,0.15) 50%,
-        rgba(255,255,255,0.05) 100%
-    );
-    background-size: 400px 100%;
-    animation: shimmerSlide 1.2s ease-in-out infinite;
-}
-
-/* ── Skeleton loading placeholders ───────────────────────────────────────── */
-.skeleton-shimmer {
-    background: linear-gradient(
-        90deg,
-        var(--color-surface) 0%,
-        var(--color-border) 50%,
-        var(--color-surface) 100%
-    );
-    background-size: 200% 100%;
-    animation: shimmerSlide 1.5s ease-in-out infinite;
-}
-
-/* ── Streaming UX: Smooth gradient cursor for streaming text ─────────────── */
-/* A more refined cursor than the plain pulse bar — uses a gradient that */
-/* shifts hue gently, giving a "thinking" feel. */
-@keyframes cursorGradient {
-    0%, 100% {
-        background: var(--color-success);
-        box-shadow: 0 0 4px rgba(34, 197, 94, 0.4);
-    }
-    50% {
-        background: var(--color-primary);
-        box-shadow: 0 0 6px rgba(59, 130, 246, 0.5);
-    }
-}
-.streaming-cursor {
+/* Streaming caret: drawn after the last block of the reply so it sits at the
+   end of the text instead of on its own line. Opacity-only (cheap to composite). */
+.msg-content.is-streaming > :last-child::after,
+.msg-content.is-streaming:not(:has(> *))::after {
+    content: "";
     display: inline-block;
     width: 2px;
-    height: 1.1em;
+    height: 1em;
     margin-left: 2px;
     vertical-align: text-bottom;
-    border-radius: 1px;
-    animation: cursorGradient 1.4s ease-in-out infinite;
+    background: var(--color-success);
+    animation: streamingCaret 1s ease-in-out infinite;
 }
-
-/* ── Streaming UX: Reasoning panel subtle glow ───────────────────────────── */
-/* While the agent is reasoning (before text tokens arrive), add a very */
-/* subtle pulsing glow to the reasoning area to signal active thinking. */
-@keyframes reasoningGlow {
-    0%, 100% {
-        box-shadow: inset 2px 0 0 var(--text-tertiary);
-    }
-    50% {
-        box-shadow: inset 2px 0 0 var(--color-warning);
-    }
-}
-.reasoning-active {
-    animation: reasoningGlow 2s ease-in-out infinite;
-}
-
-/* ── Streaming UX: Reduced motion support (accessibility) ────────────────── */
-/* Respect prefers-reduced-motion: disable all non-essential animations. */
-@media (prefers-reduced-motion: reduce) {
-    .msg-enter,
-    .tool-shimmer,
-    .streaming-cursor,
-    .reasoning-active,
-    .toast-enter,
-    .toast-progress {
-        animation: none !important;
-    }
-    div[style*="overflow"] {
-        scroll-behavior: auto;
-    }
+@keyframes streamingCaret {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
 }
 
 /* ── Toast notifications: enter/exit animations ─────────────────────────── */
 .toast-enter {
-    animation: toastEnter 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    animation: toastEnter var(--dur-enter) var(--ease-decelerate);
 }
 
 @keyframes toastEnter {
@@ -410,10 +286,6 @@ div[style*="overflow"] {
     }
 }
 
-@keyframes toastProgressShrink {
-    from { width: 100%; }
-    to { width: 0%; }
-}
 
 /* ── Agent tab pulse animation ────────────────────────────────────────── */
 @keyframes agentPulse {
@@ -427,7 +299,14 @@ div[style*="overflow"] {
 /* ── Message hover timestamp ──────────────────────────────────────────── */
 /* Timestamp hidden by default, revealed on message hover (Slack/Discord pattern). */
 .message-row {
+    /* D9: flex column lets a user bubble's align-self:flex-end take effect;
+         the row used to be position:relative only, so bubbles sat flush left. */
+    display: flex;
+    flex-direction: column;
     position: relative;
+}
+.message-row > * {
+    min-width: 0;
 }
 .msg-timestamp {
     position: absolute;

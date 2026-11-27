@@ -344,8 +344,10 @@ function LayoutInner() {
       }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 't') {
         e.preventDefault()
-        const isDark = document.documentElement.classList.toggle('dark')
-        localStorage.setItem('ggcode-theme', isDark ? 'dark' : 'light')
+        // D23: go through useTheme so React state, the .dark class and the
+        // persisted mode stay in sync (the old direct DOM toggle left the hook
+        // stale, which made ⌘K "Toggle theme" a no-op and dropped 'auto').
+        toggleTheme()
       }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
         e.preventDefault()
@@ -365,7 +367,7 @@ function LayoutInner() {
       }
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
         const num = parseInt(e.key)
-        if (num >= 1 && num <= 7) {
+        if (num >= 1 && num <= 8) {
           e.preventDefault()
           const views: ViewMode[] = ['chat', 'files', 'im', 'mcp', 'settings', 'debug', 'lanchat', 'cron']
           const target = views[num - 1]
@@ -486,8 +488,18 @@ function LayoutInner() {
           <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
             <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} lanChatUnread={view === 'lanchat' ? 0 : lanChatUnread} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
 
-            {sidebarOpen && view === 'chat' && (
-              <>
+            {view === 'chat' && (
+              <div
+                style={{
+                  // D14: the sidebar slides instead of popping. It stays mounted
+                  // (its state is kept) and is revealed by animating the wrapper width.
+                  width: sidebarOpen ? sidebarWidth + 5 : 0,
+                  overflow: 'hidden',
+                  flexShrink: 0,
+                  display: 'flex',
+                  transition: 'width var(--motion-enter)',
+                }}
+              >
                 <Sidebar key={currentWorkspace || 'default-workspace'} width={sidebarWidth} workspace={currentWorkspace} onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} onShare={() => setShareDialogOpen(true)} showToast={showToast} />
                 {}
                 <div
@@ -501,12 +513,12 @@ function LayoutInner() {
                     cursor: 'col-resize',
                     flexShrink: 0,
                     background: 'transparent',
-                    transition: 'background 0.15s',
+                    transition: 'background var(--motion-fast)',
                   }}
                   onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--color-border)' }}
                   onMouseLeave={(e) => { if (!sidebarDragRef.current) (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
                 />
-              </>
+              </div>
             )}
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>

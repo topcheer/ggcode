@@ -85,6 +85,29 @@ export function appendAssistantChunk<T extends StreamChatMessage>(
   return { messages: out, streamingMessageID: id }
 }
 
+export function appendBufferedChunks<T extends StreamChatMessage>(
+  messages: T[],
+  streamingMessageID: string | null,
+  chunks: Array<{ type: 'text' | 'reasoning'; content: string; messageID?: string }>,
+  nextID: () => string,
+  now: () => number = () => Date.now(),
+): ApplyChunkResult<T> {
+  if (chunks.length === 0) return { messages, streamingMessageID }
+  let out = messages
+  let sid = streamingMessageID
+  for (const c of chunks) {
+    if (!c.content) continue
+    if (c.type === 'reasoning') {
+      out = appendReasoningChunk(out, c.content, nextID, now, c.messageID)
+    } else {
+      const r = appendAssistantChunk(out, sid, c.content, nextID, now, c.messageID)
+      out = r.messages
+      sid = r.streamingMessageID
+    }
+  }
+  return { messages: out, streamingMessageID: sid }
+}
+
 export function appendReasoningChunk<T extends StreamChatMessage>(
   messages: T[],
   content: string,

@@ -73,6 +73,11 @@ const en = {
   'status.offline': 'Ngoại tuyến',
 
   'chat.placeholder': 'Nhắn tin cho ggcode...',
+  'code.copy': 'Sao chép',
+  'code.copied': 'Đã sao chép',
+  'code.expandLines': 'Mở rộng ({n} dòng)',
+  'code.collapse': 'Thu gọn',
+  'chat.cancelled': 'Đã hủy',
   'chat.agentWorking': 'Agent đang làm việc...',
   'chat.welcome.title': 'Tôi có thể giúp gì cho bạn hôm nay?',
   'chat.welcome.subtitle': 'Hỏi tôi bất cứ điều gì về mã của bạn, hoặc thử một trong các gợi ý:',

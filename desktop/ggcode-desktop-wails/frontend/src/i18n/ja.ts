@@ -73,6 +73,11 @@ const en = {
   'status.offline': 'オフライン',
 
   'chat.placeholder': 'ggcodeにメッセージを送信...',
+  'code.copy': 'コピー',
+  'code.copied': 'コピーしました',
+  'code.expandLines': '展開（{n} 行）',
+  'code.collapse': '折りたたむ',
+  'chat.cancelled': 'キャンセルしました',
   'chat.agentWorking': 'エージェントが実行中...',
   'chat.welcome.title': '今日は何をお手伝いしましょうか?',
   'chat.welcome.subtitle': 'コードについて何でも聞いてください。または以下をお試しください:',

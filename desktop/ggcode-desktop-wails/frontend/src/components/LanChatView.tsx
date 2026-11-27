@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import * as App from '../../wailsjs/go/main/App'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
+import { sanitizeMarkdownHTML } from '../utils/sanitize'
 import { LanChatParticipant, LanChatMessage } from '../types'
 import { useTranslation } from '../i18n'
 
@@ -10,7 +11,7 @@ marked.setOptions({ gfm: true, breaks: true })
 export function renderMarkdown(text: string): string {
   if (!text) return ''
   try {
-    return marked.parse(text) as string
+    return sanitizeMarkdownHTML(marked.parse(text) as string)
   } catch {
     return text.replace(/</g, '&lt;').replace(/>/g, '&gt;')
   }

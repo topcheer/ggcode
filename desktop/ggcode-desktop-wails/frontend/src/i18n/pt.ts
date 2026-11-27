@@ -73,6 +73,11 @@ const en = {
   'status.offline': 'Offline',
 
   'chat.placeholder': 'Envie uma mensagem para o ggcode...',
+  'code.copy': 'Copiar',
+  'code.copied': 'Copiado',
+  'code.expandLines': 'Expandir ({n} linhas)',
+  'code.collapse': 'Recolher',
+  'chat.cancelled': 'Cancelado',
   'chat.agentWorking': 'O agente está trabalhando...',
   'chat.welcome.title': 'Como posso ajudar você hoje?',
   'chat.welcome.subtitle': 'Pergunte-me qualquer coisa sobre seu código, ou tente uma destas opções:',

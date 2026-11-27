@@ -71,4 +71,40 @@ describe('useStreamBuffer', () => {
       { type: 'text', content: 'hello', messageID: 'msg-1' },
     ])
   })
+
+  it('coalesces many deltas into one flush per interval (fake timers)', () => {
+    vi.useFakeTimers()
+    try {
+      const onFlush = vi.fn()
+      const { result } = renderHook(() => useStreamBuffer(onFlush, true, 30))
+      act(() => {
+        for (let i = 0; i < 50; i++) result.current.buffer({ type: 'text', content: 'x' })
+      })
+      // Nothing rendered yet, exactly one timer armed.
+      expect(onFlush).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(1)
+      act(() => { vi.advanceTimersByTime(29) })
+      expect(onFlush).not.toHaveBeenCalled()
+      act(() => { vi.advanceTimersByTime(1) })
+      expect(onFlush).toHaveBeenCalledTimes(1)
+      expect(onFlush.mock.calls[0][0]).toHaveLength(50)
+      // Idle buffer -> no timer running (the old rAF loop ran forever).
+      expect(vi.getTimerCount()).toBe(0)
+      expect(result.current.hasPending()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('flushes the pending tail when the document becomes hidden', () => {
+    const onFlush = vi.fn()
+    const { result } = renderHook(() => useStreamBuffer(onFlush, true, 30))
+    act(() => { result.current.buffer({ type: 'text', content: 'tail' }) })
+    expect(onFlush).not.toHaveBeenCalled()
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+    act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+    expect(onFlush).toHaveBeenCalledTimes(1)
+    expect(onFlush).toHaveBeenCalledWith([{ type: 'text', content: 'tail' }])
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
+  })
 })

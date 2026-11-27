@@ -20,8 +20,13 @@ export function useZoom() {
   })
 
   useEffect(() => {
+    // D3: zoom used to set html{font-size}, but App.css pins html/body/#root to
+    // 13px and the stylesheet uses px (0 rem), so nothing scaled. CSS `zoom`
+    // on <body> scales px sizes too (WKWebView, WebView2 and WebKitGTK all
+    // support it), which is what ⌘+ / ⌘- promises.
     document.documentElement.style.setProperty('--app-zoom', String(zoom))
     document.documentElement.style.fontSize = `${zoom * 100}%`
+    document.body.style.zoom = String(zoom)
     localStorage.setItem(STORAGE_KEY, String(zoom))
   }, [zoom])
 

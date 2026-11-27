@@ -73,6 +73,11 @@ const fr = {
   'status.offline': 'Hors ligne',
 
   'chat.placeholder': 'Écrire à ggcode...',
+  'code.copy': 'Copier',
+  'code.copied': 'Copié',
+  'code.expandLines': 'Déplier ({n} lignes)',
+  'code.collapse': 'Replier',
+  'chat.cancelled': 'Annulé',
   'chat.agentWorking': 'L\'agent travaille...',
   'chat.welcome.title': 'Comment puis-je vous aider aujourd\'hui ?',
   'chat.welcome.subtitle': 'Posez-moi une question sur votre code, ou essayez une de ces options :',

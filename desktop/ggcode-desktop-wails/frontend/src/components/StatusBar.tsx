@@ -182,11 +182,14 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
         const color = pct >= 85 ? '#ef4444' : pct >= 65 ? '#f59e0b' : '#22c55e'
         const bgColor = pct >= 85 ? 'rgba(239,68,68,0.15)' : pct >= 65 ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.12)'
         return (
-          <div
+          <button
+            type="button"
             title={`Context: ${formatTokens(info.contextUsed)} / ${formatTokens(info.contextTotal)} (${Math.round(pct)}%) — ${t('settings.clickToEdit')}`}
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
               cursor: 'pointer', position: 'relative',
+              background: 'transparent', border: 'none', padding: 0,
+              font: 'inherit', color: 'inherit',
             }}
             onClick={handleContextPillClick}
           >
@@ -205,7 +208,7 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
             <span style={{ color, fontSize: 10, minWidth: 28, fontVariantNumeric: 'tabular-nums' }}>
               {Math.round(pct)}%
             </span>
-          </div>
+          </button>
         )
       })()}
       {showLimitsPopover && (

@@ -78,6 +78,11 @@ const zh: Record<TranslationKey, string> = {
   'status.zoomReset': '重置缩放 (Cmd+0)',
 
   'chat.placeholder': '给 ggcode 发消息...',
+  'code.copy': '复制',
+  'code.copied': '已复制',
+  'code.expandLines': '展开（{n} 行）',
+  'code.collapse': '收起',
+  'chat.cancelled': '已取消',
   'chat.agentWorking': 'Agent 工作中...',
   'chat.welcome.title': '今天我能帮你做什么？',
   'chat.welcome.subtitle': '问我任何关于代码的问题，或者试试：',

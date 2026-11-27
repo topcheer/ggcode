@@ -68,4 +68,15 @@ describe('useZoom', () => {
     })
     expect(result.current.zoom).toBe(0.7)
   })
+
+  it('applies the zoom to <body> (html font-size alone scaled nothing)', () => {
+    const bodyZoom: string[] = []
+    Object.defineProperty(document.body.style, 'zoom', { configurable: true, get: () => bodyZoom[0] ?? '', set: (v: string) => { bodyZoom[0] = v } })
+    const { result } = renderHook(() => useZoom())
+    act(() => { result.current.zoomIn() })
+    expect(result.current.zoom).toBe(1.1)
+    expect(bodyZoom[0]).toBe('1.1')
+    act(() => { result.current.resetZoom() })
+    expect(bodyZoom[0]).toBe('1')
+  })
 })

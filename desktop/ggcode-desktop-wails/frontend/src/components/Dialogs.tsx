@@ -44,13 +44,13 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div style={{
+    <div role="dialog" aria-modal="true" aria-label={t('about.title')} className="dlg-backdrop" style={{
       position: 'fixed', inset: 0,
       background: 'rgba(0,0,0,0.5)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      zIndex: 1000,
+      zIndex: 'var(--z-popover, 1000)',
     }} onClick={onClose}>
-      <div style={{
+      <div className="dlg-enter" style={{
         width: 420, background: 'var(--color-card)', borderRadius: 'var(--radius-xl)',
         border: '1px solid var(--color-border)',
         display: 'flex', flexDirection: 'column',

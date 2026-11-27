@@ -73,6 +73,11 @@ const tr = {
   'status.offline': 'Cevrimdisi',
 
   'chat.placeholder': 'ggcode\'a mesaj gönder...',
+  'code.copy': 'Kopyala',
+  'code.copied': 'Kopyalandı',
+  'code.expandLines': 'Genişlet ({n} satır)',
+  'code.collapse': 'Daralt',
+  'chat.cancelled': 'İptal edildi',
   'chat.agentWorking': 'Agent çalışıyor...',
   'chat.welcome.title': 'Bugün size nasıl yardımcı olabilirim?',
   'chat.welcome.subtitle': 'Kodunuz hakkında her şeyi sorabilir veya şunlardan birini deneyebilirsiniz:',

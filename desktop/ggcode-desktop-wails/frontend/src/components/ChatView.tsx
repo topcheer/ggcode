@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy, Search, X, ChevronUp, Download, ImagePlus, Plus, RefreshCw } from 'lucide-react'
+import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy, Search, X, ChevronUp, Download, ImagePlus, Plus, RefreshCw, FileDiff, FlaskConical, Bug } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { ClipboardGetText, EventsOn, BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
@@ -8,7 +8,10 @@ import { useTranslation } from '../i18n'
 import { SkeletonMessages } from './Skeleton'
 import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { TeamBoard, type TeamBoardSnapshot } from './TeamBoard'
-import { appendAssistantChunk, appendReasoningChunk, appendUserMessage, finishAssistantMessage, finishAssistantRun, parseStreamData } from './chatStreamState'
+import { appendBufferedChunks, appendUserMessage, finishAssistantMessage, finishAssistantRun, parseStreamData } from './chatStreamState'
+import { useStreamBuffer, type BufferedChunk } from '../hooks/useStreamBuffer'
+import { prefersReducedMotion } from '../utils/motion'
+import { sanitizeMarkdownHTML, sanitizeSVGHTML } from '../utils/sanitize'
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -43,13 +46,44 @@ function splitContent(content: string): { type: 'markdown' | 'mermaid' | 'svg'; 
 function safeMarkdown(text: string): string {
   if (!text) return ''
   try {
-    return marked.parse(text) as string
+    return sanitizeMarkdownHTML(marked.parse(text) as string)
   } catch {
     return text.replace(/</g, '&lt;').replace(/>/g, '&gt;')
   }
 }
 
-function enhanceCodeBlocks(container: HTMLElement) {
+// Highlighted HTML cache. During streaming the message's innerHTML is rebuilt on
+// every flush, which wipes `data-highlighted` and used to re-run highlight.js
+// on every code block each time (with language auto-detection for untagged
+// blocks). Keyed by language + source text, so a settled block costs a map
+// lookup; auto-detection is off (untagged blocks stay plain text) and very long
+// blocks are not highlighted at all.
+const highlightCache = new Map<string, string>()
+const HIGHLIGHT_CACHE_MAX = 500
+const HIGHLIGHT_MAX_LINES = 2000
+
+function applyHighlighted(code: HTMLElement, lang: string) {
+  const text = code.textContent || ''
+  if (!lang || !hljs.getLanguage(lang)) return
+  if (text.split('\n').length > HIGHLIGHT_MAX_LINES) return
+  const key = `${lang}\u0000${text}`
+  let html = highlightCache.get(key)
+  if (html === undefined) {
+    try {
+      html = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value
+    } catch {
+      return
+    }
+    if (highlightCache.size >= HIGHLIGHT_CACHE_MAX) highlightCache.clear()
+    highlightCache.set(key, html)
+  }
+  code.innerHTML = html
+  code.classList.add('hljs', `language-${lang}`)
+}
+
+export interface CodeBlockLabels { copy: string; copied: string; expandLines: (n: number) => string; collapse: string }
+
+function enhanceCodeBlocks(container: HTMLElement, labels: CodeBlockLabels) {
   const preBlocks = container.querySelectorAll('pre')
   preBlocks.forEach((pre) => {
     if (pre.querySelector('.code-block-header')) return
@@ -62,11 +96,7 @@ function enhanceCodeBlocks(container: HTMLElement) {
 
     try {
       if (!code.hasAttribute('data-highlighted')) {
-        if (lang && hljs.getLanguage(lang)) {
-          hljs.highlightElement(code)
-        } else {
-          hljs.highlightElement(code)
-        }
+        applyHighlighted(code, lang)
         code.setAttribute('data-highlighted', 'true')
       }
     } catch {  }
@@ -83,8 +113,9 @@ function enhanceCodeBlocks(container: HTMLElement) {
     header.appendChild(langSpan)
 
     const copyBtn = document.createElement('button')
-    copyBtn.textContent = 'Copy'
-    copyBtn.style.cssText = 'padding:1px 8px;border-radius:3px;border:1px solid var(--color-border);background:var(--color-surface);color:var(--text-tertiary);cursor:pointer;font-size:11px;opacity:0;transition:opacity 0.15s;'
+    copyBtn.textContent = labels.copy
+    copyBtn.type = 'button'
+    copyBtn.style.cssText = 'padding:1px 8px;border-radius:3px;border:1px solid var(--color-border);background:var(--color-surface);color:var(--text-tertiary);cursor:pointer;font-size:11px;opacity:0;transition:opacity var(--motion-fast);'
     copyBtn.addEventListener('mouseenter', () => { copyBtn.style.opacity = '1' })
     copyBtn.addEventListener('mouseleave', () => { copyBtn.style.opacity = '0' })
 
@@ -96,12 +127,12 @@ function enhanceCodeBlocks(container: HTMLElement) {
       e.stopPropagation()
       const text = code.textContent || ''
       navigator.clipboard.writeText(text).then(() => {
-        copyBtn.textContent = '✓ Copied'
+        copyBtn.textContent = labels.copied
         copyBtn.style.color = 'var(--color-success)'
         copyBtn.style.borderColor = 'var(--color-success)'
         copyBtn.style.opacity = '1'
         setTimeout(() => {
-          copyBtn.textContent = 'Copy'
+          copyBtn.textContent = labels.copy
           copyBtn.style.color = ''
           copyBtn.style.borderColor = ''
           copyBtn.style.opacity = '0'
@@ -122,8 +153,9 @@ function enhanceCodeBlocks(container: HTMLElement) {
       pre.style.position = 'relative'
 
       const expandBtn = document.createElement('button')
-      expandBtn.textContent = `Expand (${lineCount} lines)`
-      expandBtn.style.cssText = 'position:absolute;bottom:0;left:0;right:0;padding:6px 0;background:linear-gradient(transparent,var(--color-surface));border:none;color:var(--color-primary);cursor:pointer;font-size:11px;font-family:var(--font-mono,monospace);text-align:center;transition:background 0.15s;'
+      expandBtn.textContent = labels.expandLines(lineCount)
+      expandBtn.type = 'button'
+      expandBtn.style.cssText = 'position:absolute;bottom:0;left:0;right:0;padding:6px 0;background:linear-gradient(transparent,var(--color-surface));border:none;color:var(--color-primary);cursor:pointer;font-size:11px;font-family:var(--font-mono,monospace);text-align:center;transition:background var(--motion-fast);'
       let expanded = false
       expandBtn.addEventListener('click', (e) => {
         e.preventDefault()
@@ -132,13 +164,13 @@ function enhanceCodeBlocks(container: HTMLElement) {
         if (expanded) {
           pre.style.maxHeight = ''
           pre.style.overflow = ''
-          expandBtn.textContent = 'Collapse'
+          expandBtn.textContent = labels.collapse
           expandBtn.style.position = 'sticky'
           expandBtn.style.background = 'var(--color-surface)'
         } else {
           pre.style.maxHeight = collapsedMaxHeight
           pre.style.overflow = 'hidden'
-          expandBtn.textContent = `Expand (${lineCount} lines)`
+          expandBtn.textContent = labels.expandLines(lineCount)
           expandBtn.style.position = 'absolute'
           expandBtn.style.background = 'linear-gradient(transparent,var(--color-surface))'
         }
@@ -183,24 +215,29 @@ function enhanceDiffBlocks(container: HTMLElement) {
   })
 }
 
-const MessageContent = React.memo(function MessageContent({ content }: { content: string }) {
+const MessageContent = React.memo(function MessageContent({ content, streaming }: { content: string; streaming?: boolean }) {
+  const { t } = useTranslation()
+  const labels = useMemo<CodeBlockLabels>(() => ({
+    copy: t('code.copy'), copied: t('code.copied'), collapse: t('code.collapse'),
+    expandLines: (n: number) => t('code.expandLines', { n }),
+  }), [t])
   const segments = useMemo(() => splitContent(content), [content])
   const htmlCache = useMemo(() => segments.map(seg => {
     if (seg.type === 'markdown') return { type: 'markdown' as const, html: safeMarkdown(seg.text) }
-    if (seg.type === 'svg') return { type: 'svg' as const, html: seg.text }
+    if (seg.type === 'svg') return { type: 'svg' as const, html: sanitizeSVGHTML(seg.text) }
     return { type: 'mermaid' as const, text: seg.text }
   }), [segments])
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (containerRef.current) {
-      enhanceCodeBlocks(containerRef.current)
+      enhanceCodeBlocks(containerRef.current, labels)
       enhanceDiffBlocks(containerRef.current)
     }
-  }, [htmlCache])
+  }, [htmlCache, labels])
 
   return (
-    <div ref={containerRef}>
+    <div ref={containerRef} className={streaming ? 'msg-content is-streaming' : 'msg-content'}>
       {htmlCache.map((seg, i) => {
         if (seg.type === 'markdown') {
           return <div key={i} className="markdown-body" dangerouslySetInnerHTML={{ __html: seg.html }} />
@@ -214,6 +251,8 @@ const MessageContent = React.memo(function MessageContent({ content }: { content
           </pre>
         )
       })}
+      {/* Inline caret rendered via CSS ::after on the last block, so it sits at the
+          end of the text instead of on its own line (style.css .is-streaming). */}
     </div>
   )
 })
@@ -854,7 +893,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       messagesRef.current = loaded
       setMessages(loaded)
       setHistoryLoading(false)
-      try { sessionStorage.removeItem(`scroll:${sessionId}`) } catch {}
+      // Restore the scroll position saved for this session (D24): the pending
+      // ref is consumed by the effect below once the history has rendered.
+      scrollRestorePendingRef.current = sessionId
     }).catch(() => { setHistoryLoading(false) })
     return () => { cancelled = true }
   }, [sessionId])
@@ -953,10 +994,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     return () => { offTrayNew() }
   }, [onNewSession])
 
-  const currentTabStreaming = activeTab === 'main'
-    ? isStreaming
-    : (agentPanels.get(activeTab)?.status === 'running')
-
   const scrollRafRef = useRef<number | null>(null)
   const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const programmaticScrollRef = useRef(false)
@@ -1004,26 +1041,20 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     messagesRef.current = messages
   }, [messages])
 
-  useEffect(() => {
-    if (!currentTabStreaming) return
-    const id = window.setInterval(() => {
-      if (getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
-      const last = lastManualScrollAtByTabRef.current[activeTab] ?? 0
-      if (last === 0) return
-      if (Date.now() - last < 10_000) return
-      autoScrollByTabRef.current[activeTab] = true
-      doScrollToBottom()
-    }, 2000)
-    return () => window.clearInterval(id)
-  }, [currentTabStreaming, activeTab, doScrollToBottom])
+  // D10: the former 10 s "re-arm auto-scroll and yank to bottom" timer is gone.
+  // It interrupted users who were reading earlier messages during a run;
+  // follow is re-enabled only when the user scrolls back near the bottom
+  // (onScroll) or presses the jump button.
 
   useEffect(() => {
-    const blocks = document.querySelectorAll('.mermaid-src:not([data-done])')
+    const blocks = document.querySelectorAll('.mermaid-src:not([data-done]):not([data-fail])')
     if (blocks.length === 0) return
     let cancelled = false;
     (async () => {
       const mermaid = (await import('mermaid')).default
-      mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
+      // D7: keyed on `messages` so streamed diagrams render once their closing
+      // fence arrives, and follow the active theme instead of assuming dark.
+      mermaid.initialize({ startOnLoad: false, theme: document.documentElement.classList.contains('dark') ? 'dark' : 'default', securityLevel: 'loose' })
       for (const block of Array.from(blocks)) {
         if (cancelled) break
         const code = block.querySelector('code')
@@ -1048,27 +1079,38 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       }
     })()
     return () => { cancelled = true }
-  }, [sessionId])
+  }, [sessionId, messages])
+
+  // D13: text/reasoning deltas are coalesced by useStreamBuffer (>=30ms, one
+  // setMessages per flush) instead of one state update + markdown re-parse per
+  // network delta. Every other event flushes first so tool calls stay ordered
+  // after the text that preceded them.
+  const { buffer: bufferStream, flush: flushStream } = useStreamBuffer(useCallback((chunks: BufferedChunk[]) => {
+    setCurrentActivity('Writing response...')
+    setMessages(prev => {
+      const result = appendBufferedChunks(prev, streamingMsgID.current, chunks, nextID)
+      streamingMsgID.current = result.streamingMessageID
+      return result.messages
+    })
+  }, []), true)
 
   const handleStreamEvent = useCallback((evt: StreamEvent) => {
       const raw = evt.data
+
+      if (evt.type !== 'text' && evt.type !== 'reasoning') flushStream()
 
       switch (evt.type) {
         case 'text': {
           const p = parseJSON<{ content: string; message_id?: string }>(raw)
           if (!p || !p.content) break
           setCurrentActivity('Writing response...')
-          setMessages(prev => {
-            const result = appendAssistantChunk(prev, streamingMsgID.current, p.content, nextID, undefined, p.message_id)
-            streamingMsgID.current = result.streamingMessageID
-            return result.messages
-          })
+          bufferStream({ type: 'text', content: p.content, messageID: p.message_id })
           break
         }
         case 'reasoning': {
           const p = parseJSON<{ content: string; message_id?: string }>(raw)
           if (!p || !p.content) break
-          setMessages(prev => appendReasoningChunk(prev, p.content, nextID, undefined, p.message_id))
+          bufferStream({ type: 'reasoning', content: p.content, messageID: p.message_id })
           break
         }
         case 'reasoning_done': {
@@ -1398,7 +1440,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           break
         }
       }
-    }, [ensureAgentPanel, refreshTeamBoard, updateAgentPanel])
+    }, [ensureAgentPanel, refreshTeamBoard, updateAgentPanel, bufferStream, flushStream])
 
   useEffect(() => {
     const off = EventsOn('chat:stream', (evt: StreamEvent) => {
@@ -1440,6 +1482,15 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   }, [sessionId])
 
   const [pastedImages, setPastedImages] = useState<PastedImageAttachment[]>([])
+
+  const pastedImagesRef = useRef<PastedImageAttachment[]>([])
+  // D12: attachments belong to the session they were pasted in. Without this
+  // reset an image attached in session A was sent with session B's first message.
+  useEffect(() => {
+    if (pastedImagesRef.current.length > 0) setPastedImages([])
+    pastedImagesRef.current = []
+  }, [sessionId])
+  useEffect(() => { pastedImagesRef.current = pastedImages }, [pastedImages])
 
   const markMessageDelivery = useCallback((id: string, deliveryStatus: ChatMessage['deliveryStatus']) => {
     setMessages(prev => prev.map(msg => msg.id === id ? { ...msg, deliveryStatus } : msg))
@@ -1793,11 +1844,24 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     })
   }, [])
 
+  // D27: cancel must not depend on a `run_done` event arriving. Reset the
+  // streaming state locally, close open streams and append a system row; a
+  // late `run_done` is harmless (state is already idle).
   const handleCancel = useCallback(() => {
     try {
       App.CancelMessage()
     } catch {  }
-  }, [])
+    flushStream()
+    setIsStreaming(false)
+    runActiveRef.current = false
+    setThinking(false)
+    setCurrentActivity(null)
+    streamingMsgID.current = null
+    setStatusBar(s => ({ ...s, status: 'idle' }))
+    setMessages(prev => appendAndTrim(finishAssistantRun(prev), {
+      id: nextID(), role: 'system' as ChatRole, content: t('chat.cancelled'), timestamp: Date.now(),
+    }))
+  }, [flushStream, t])
 
   const cycleReasoningEffort = useCallback(async () => {
     try {
@@ -1813,6 +1877,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   }, [showToast])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // D1: Enter/Escape during IME composition (Pinyin candidates, etc.) must
+    // keep their IME meaning - never send or cancel the run.
+    if (e.nativeEvent?.isComposing || e.keyCode === 229) return
     if (slashOpen && slashFiltered.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -1922,11 +1989,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
   }, [searchOpen])
 
-  const [fontSize, setFontSize] = useState(() => {
-    const saved = localStorage.getItem('ggcode-font-size')
-    return saved ? parseInt(saved) : 15
-  })
-
   useEffect(() => {
     const off = EventsOn('notification', (n: { title: string; body: string; count?: string }) => {
       const c = parseInt(n?.count || '0', 10)
@@ -1947,37 +2009,24 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     return () => { off() }
   }, [])
   useEffect(() => {
-    localStorage.setItem('ggcode-font-size', String(fontSize))
-    document.documentElement.style.setProperty('--font-size-base', `${fontSize}px`)
-  }, [fontSize])
-  useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault()
         e.stopPropagation()
         setSearchOpen(prev => !prev)
         return
       }
-      if ((e.metaKey || e.ctrlKey) && (e.key === '=' || e.key === '+')) {
-        e.preventDefault()
-        setFontSize(prev => Math.min(24, prev + 1))
-        return
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === '-') {
-        e.preventDefault()
-        setFontSize(prev => Math.max(11, prev - 1))
-        return
-      }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'ArrowDown') {
         e.preventDefault()
         const c = scrollContainerRef.current
-        if (c) c.scrollTo({ top: c.scrollHeight, behavior: 'smooth' })
+        if (c) c.scrollTo({ top: c.scrollHeight, behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
         return
       }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'ArrowUp') {
         e.preventDefault()
         const c = scrollContainerRef.current
-        if (c) c.scrollTo({ top: 0, behavior: 'smooth' })
+        if (c) c.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
         return
       }
       if (e.key === 'Escape' && searchOpen) {
@@ -1998,13 +2047,14 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     if (!searchOpen || searchMatches.length === 0) return
     const idx = searchMatches[Math.min(searchMatchIdx, searchMatches.length - 1)]
     if (idx === undefined) return
-    const msgId = messages[idx]?.id
+    // D26: scroll only when the active match changes, not on every streaming tick.
+    const msgId = messagesRef.current[idx]?.id
     if (!msgId) return
     const el = document.querySelector(`[data-msg-id="${msgId}"]`)
     if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' })
     }
-  }, [searchMatchIdx, searchMatches, searchOpen, messages])
+  }, [searchMatchIdx, searchMatches.length, searchOpen])
 
   const searchNext = useCallback(() => {
     if (searchMatches.length === 0) return
@@ -2534,6 +2584,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         aria-live="polite"
         aria-atomic="false"
         onScroll={() => {
+          if (suppressNextScrollEventRef.current) {
+            suppressNextScrollEventRef.current = false
+            return
+          }
           if (programmaticScrollRef.current) {
             programmaticScrollRef.current = false
             return
@@ -2544,6 +2598,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           if (!nearBottom) {
             autoScrollByTabRef.current[activeTab] = false
             lastManualScrollAtByTabRef.current[activeTab] = Date.now()
+          } else {
+            autoScrollByTabRef.current[activeTab] = true
           }
           setShowScrollBtn(!nearBottom && messages.length > 3)
           if (!scrollSaveTimerRef.current) {
@@ -2596,12 +2652,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                       (msg.timestamp - prevMsg.timestamp) < 120000
                     const showTimestamp = msg.timestamp && !isContinuation
                     return <>
-                      {showTimestamp && (
-                        <span className="msg-timestamp" title={new Date(msg.timestamp).toLocaleString()}>
-                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      )}
-                      <div className={isContinuation ? 'message-row message-row--continuation' : 'message-row'} data-msg-id={msg.id}>
+                      <div className={[isContinuation ? 'message-row message-row--continuation' : 'message-row', msg.role === 'user' && msg.deliveryStatus ? 'msg-enter' : ''].filter(Boolean).join(' ')} data-msg-id={msg.id}>
+                        {showTimestamp && (
+                          <span className="msg-timestamp" title={new Date(msg.timestamp).toLocaleString()}>
+                            {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        )}
                         <MessageCard msg={msg} onRetry={handleRetrySend} onEdit={handleEditMessage} />
                       </div>
                     </>
@@ -2932,11 +2988,13 @@ function DateSeparator({ label }: { label: string }) {
 
 function WelcomeScreen({ onPick, workspace }: { onPick: (text: string) => void; workspace?: string }) {
   const { t } = useTranslation()
+  // Lucide icons instead of emoji: emoji render differently per platform and
+  // clashed with the rest of the icon set.
   const prompts = [
-    { icon: '🔍', text: t('chat.welcome.prompt.explain') },
-    { icon: '📝', text: t('chat.welcome.prompt.review') },
-    { icon: '🧪', text: t('chat.welcome.prompt.test') },
-    { icon: '🐛', text: t('chat.welcome.prompt.debug') },
+    { icon: <Search size={16} />, text: t('chat.welcome.prompt.explain') },
+    { icon: <FileDiff size={16} />, text: t('chat.welcome.prompt.review') },
+    { icon: <FlaskConical size={16} />, text: t('chat.welcome.prompt.test') },
+    { icon: <Bug size={16} />, text: t('chat.welcome.prompt.debug') },
   ]
 
   return (
@@ -2994,7 +3052,7 @@ function WelcomeScreen({ onPick, workspace }: { onPick: (text: string) => void; 
               fontSize: 13,
               textAlign: 'left',
               display: 'flex', alignItems: 'center', gap: 8,
-              transition: 'all 0.15s ease',
+              transition: 'border-color var(--motion-fast), background-color var(--motion-fast)',
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.borderColor = 'var(--color-primary)'
@@ -3005,7 +3063,7 @@ function WelcomeScreen({ onPick, workspace }: { onPick: (text: string) => void; 
               e.currentTarget.style.background = 'var(--color-card)'
             }}
           >
-            <span style={{ fontSize: 16 }}>{p.icon}</span>
+            <span style={{ display: 'flex', color: 'var(--text-secondary)' }}>{p.icon}</span>
             {p.text}
           </button>
         ))}
@@ -3399,15 +3457,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
         fontSize: 'var(--font-size-base)',
         textAlign: 'left',
       }}>
-        <MessageContent content={msg.content || '...'} />
-        {msg.streaming && (
-          <span style={{
-            display: 'inline-block', width: 2, height: 14,
-            background: 'var(--color-success)', marginLeft: 2,
-            animation: 'pulse 1s ease-in-out infinite',
-            verticalAlign: 'text-bottom',
-          }} />
-        )}
+        <MessageContent content={msg.content || '...'} streaming={!!msg.streaming} />
         {msg.timestamp && !msg.streaming && (
           <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2, marginLeft: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
             {formatTimestamp(msg.timestamp)}
