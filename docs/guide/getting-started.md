@@ -14,9 +14,24 @@ ggcode
 
 The onboarding wizard will:
 - Ask you to select a provider (Z.ai, OpenAI, Anthropic, etc.)
-- Prompt for your API key
+- Prompt for your API key - **required** for any provider that needs one (the step will not
+  advance on an empty field unless the provider's API key environment variable is already set)
 - Write the configuration to `~/.ggcode/ggcode.yaml`
-- Store the API key securely in `~/.ggcode/keys.env`
+- Store the API key securely in `~/.ggcode/keys.env` (the vendor file keeps only a `${VAR}` reference)
+
+If the wizard ever finishes without a usable key, it now says so instead of starting into a
+provider that answers 401 `API 密钥无效或未配置`:
+
+```
+Warning: onboarding finished without a usable API key for deepseek/api.
+  Fix it by re-running the wizard (`ggcode onboard`), or without it:
+    - export DEEPSEEK_API_KEY in your shell/profile, or
+    - add it to ~/.ggcode/keys.env as: export DEEPSEEK_API_KEY='<your key>'
+```
+
+Re-run the wizard at any time with `ggcode onboard` (to fix a key or switch provider). Onboarding
+does not re-open on its own once a config file exists; `GGCODE_SKIP_AUTOCONFIG` disables every
+automatic configuration decision, and a loopback base URL or `auth_type: none` endpoint needs no key.
 
 You can also manually create the config file. See [Configuration](./configuration.md) for details.
 

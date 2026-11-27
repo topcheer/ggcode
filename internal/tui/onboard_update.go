@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"os"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -131,6 +132,10 @@ func (m *onboardModel) updateEndpoint(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyPressMsg:
 			switch kp.String() {
 			case "enter":
+				if msg := m.validateAPIKey(); msg != "" {
+					m.err = msg
+					return m, nil
+				}
 				m.apiKeyInput.Blur()
 				m.err = ""
 				return m, m.startModelSelection()
@@ -183,6 +188,32 @@ func (m *onboardModel) updateEndpoint(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 	}
 	return m, nil
+}
+
+// validateAPIKey refuses to leave the API-key step with an empty key when the
+// chosen preset needs one. Without it the flow completed silently, the key
+// field was skipped at save time, and the first start after onboarding failed
+// with 401 "API 密钥无效或未配置" while onboarding itself reported success.
+//
+// An externally provided key still satisfies the step: the vendor's env ref
+// (DEEPSEEK_API_KEY, ZAI_API_KEY, ...) resolves from the environment, which is
+// how headless / systemd / CI installs supply it.
+func (m *onboardModel) validateAPIKey() string {
+	if m.selectedVendor.ID == "" { // custom provider: the key is optional
+		return ""
+	}
+	if !m.selectedVendor.NeedsAPIKey {
+		return ""
+	}
+	if strings.TrimSpace(m.apiKeyInput.Value()) != "" {
+		return ""
+	}
+	if hint := strings.TrimSpace(m.selectedVendor.APIKeyEnvHint); hint != "" {
+		if _, ok := os.LookupEnv(hint); ok {
+			return ""
+		}
+	}
+	return m.trf("err_apikey_required", m.selectedVendor.DisplayName)
 }
 
 func (m *onboardModel) startModelSelection() tea.Cmd {

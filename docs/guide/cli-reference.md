@@ -72,6 +72,19 @@ The daemon automatically loads the most recent unlocked session on startup. Use 
 ```bash
 ```
 
+### onboard
+
+Re-run the interactive setup wizard (provider, endpoint, API key, model, optional IM/A2A settings):
+
+```bash
+ggcode onboard                # fix a missing key, or switch provider
+ggcode onboard --config /path/to/ggcode.yaml
+```
+
+The key goes to `~/.ggcode/keys.env`; the vendor file keeps only a `${ENV}` reference. The wizard
+refuses to advance on an empty API key when the chosen provider needs one (a key already exported in
+the environment satisfies the step).
+
 ### mcp
 
 MCP (Model Context Protocol) server management:

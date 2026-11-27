@@ -266,6 +266,8 @@ func NewRootCmd() *cobra.Command {
 
 	cmd.AddCommand(newConfigCmd(&cfgFile))
 
+	cmd.AddCommand(newOnboardCmd(&cfgFile))
+
 	completionCmd := &cobra.Command{
 		Use:       "completion [shell]",
 		Short:     "Generate shell completion script",

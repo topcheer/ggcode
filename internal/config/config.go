@@ -349,14 +349,19 @@ type Config struct {
 	Memory              MemoryConfig               `yaml:"memory,omitempty" json:"memory,omitempty"`
 	Gates               GatesConfig                `yaml:"gates,omitempty" json:"gates,omitempty"`
 	FirstRun            bool                       `yaml:"-" json:"-"`
-	instanceDir         string                     `yaml:"-" json:"-"`
-	instancePath        string                     `yaml:"-" json:"-"`
-	instanceWS          string                     `yaml:"-" json:"-"`
-	saveScope           string                     `yaml:"-" json:"-"`
-	globalSnap          *Config                    `yaml:"-" json:"-"`
-	instanceFields      map[string]bool            `yaml:"-" json:"-"`
-	explicitKeys        map[string]bool            `yaml:"-" json:"-"`
-	diskStrSnap         map[string]string          `yaml:"-" json:"-"`
+	// OnboardIncomplete records that onboarding finished without a usable API
+	// key for the active endpoint. NeedsOnboard honours it even when the config
+	// file exists, so a failed onboarding stays recoverable instead of leaving
+	// every request to fail 401 ("API 密钥无效或未配置") with no way back.
+	OnboardIncomplete bool              `yaml:"onboard_incomplete,omitempty" json:"-"`
+	instanceDir       string            `yaml:"-" json:"-"`
+	instancePath      string            `yaml:"-" json:"-"`
+	instanceWS        string            `yaml:"-" json:"-"`
+	saveScope         string            `yaml:"-" json:"-"`
+	globalSnap        *Config           `yaml:"-" json:"-"`
+	instanceFields    map[string]bool   `yaml:"-" json:"-"`
+	explicitKeys      map[string]bool   `yaml:"-" json:"-"`
+	diskStrSnap       map[string]string `yaml:"-" json:"-"`
 }
 
 type ImpersonationConfig struct {
