@@ -186,4 +186,22 @@ func TestSandbox_ListMemoryCallableAndFriendlyErrors(t *testing.T) {
 	if !res.IsError || !strings.Contains(res.Content, "does not exist") {
 		t.Fatalf("unknown member must be reported as non-existent: %+v", res)
 	}
+
+	// The tools Proxy makes the message available INSIDE a try/catch as well -
+	// the exit-point rewrite above only ever covered uncaught errors, which is
+	// what the live session showed after the first fix: a caught
+	// `tools.edit_file` still surfaced goja's bare TypeError.
+	res, _ = ce.Execute(t.Context(), json.RawMessage(`{"code":"let m=''; try { await tools.edit_file({}); } catch(e) { m=String(e); } let u=''; try { await tools.definitely_not_a_tool({}); } catch(e) { u=String(e); } console.log(m); console.log(u); console.log(typeof tools.then, Object.keys(tools).includes('grep'), 'grep' in tools, 'edit_file' in tools);","description":"caught errors and object semantics"}`))
+	if res.IsError {
+		t.Fatalf("caught-error probe failed: %+v", res)
+	}
+	for _, want := range []string{"tools.edit_file is not callable inside code_execution", "tools.definitely_not_a_tool does not exist",
+		"undefined true true false"} {
+		if !strings.Contains(res.Content, want) {
+			t.Errorf("caught-error probe must contain %q, got: %s", want, res.Content)
+		}
+	}
+	if strings.Contains(res.Content, "Object has no member") {
+		t.Errorf("bare TypeError leaked through a caught error: %s", res.Content)
+	}
 }
