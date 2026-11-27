@@ -87,6 +87,92 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+Write-Host "Step 2a: Pinning every version-pinned repo URL to this release..."
+
+# wingetcreate update inherits every field it is not asked to change from the
+# previously published manifest, so any URL that embeds a release tag freezes at
+# the tag the package was FIRST created with. That is how the 1.3.296 desktop
+# manifest came to advertise https://github.com/topcheer/ggcode/blob/v1.3.52/LICENSE
+# (winget-pkgs #491070): ~200 releases of stale links, and the validator fetches
+# them, so one moved tag fails the submission.
+#
+# Rather than special-casing LicenseUrl (the field that happened to rot first),
+# rewrite every github.com/topcheer/ggcode/(blob|tree)/v<semver> URL in every
+# generated manifest to the release being published, then VERIFY that none is
+# left over - a future inherited field cannot silently ship a stale link.
+$releaseTag = "v$releaseVersion"
+# Metadata links (blob/tree/releases tag pages) are safe to re-point: they carry
+# no asset identity. Asset links (releases/download) are NOT rewritten - a tag
+# bump alone would name a file that does not exist at that version - so a stale
+# installer URL fails the run instead (the caller passed the wrong release URL).
+$metaShape = "(blob|tree|releases/tag)"
+$assetShape = "releases/download"
+# Two metadata families: the page URLs under github.com and the static-file
+# service used for LicenseUrl (raw.githubusercontent.com does not render HTML,
+# which is the path that answered 503 to the winget validator twice on
+# 2026-11-27 while the same tag was 200 everywhere else).
+$repoURLPattern = "(?i)(https://github\.com/topcheer/ggcode/($metaShape|$assetShape)/v\d+\.\d+\.\d+([-.\w]*)|https://raw\.githubusercontent\.com/topcheer/ggcode/v\d+\.\d+\.\d+([-.\w]*))"
+$rewritePattern = [regex]::new("(?i)(https://github\.com/topcheer/ggcode/$metaShape/v\d+\.\d+\.\d+|https://raw\.githubusercontent\.com/topcheer/ggcode/v\d+\.\d+\.\d+)")
+
+$manifestFiles = Get-ChildItem -Path $manifestDir -Filter "*.yaml" -Recurse
+if (-not $manifestFiles) {
+    Write-Warning "No manifests found in $manifestDir; nothing to pin."
+}
+foreach ($file in $manifestFiles) {
+    $content = Get-Content -Path $file.FullName -Raw
+    $matchesFound = [regex]::Matches($content, "(?i)(https://github\.com/topcheer/ggcode/$metaShape/v\d+\.\d+\.\d+([-.\w]*)|https://raw\.githubusercontent\.com/topcheer/ggcode/v\d+\.\d+\.\d+([-.\w]*))")
+    if (-not $matchesFound) { continue }
+    $rewritten = $content
+    foreach ($m in $matchesFound) {
+        $old = $m.Value
+        if ($old -like "*/$releaseTag*") { continue }
+        if ($old -like "https://raw.githubusercontent.com/*") {
+            $new = [regex]::Replace($old, "(?i)^(https://raw\.githubusercontent\.com/topcheer/ggcode/)v\d+\.\d+\.\d+", "`${1}$releaseTag")
+        } else {
+            $new = [regex]::Replace($old, "(?i)^(https://github\.com/topcheer/ggcode/(?:blob|tree|releases/tag)/)v\d+\.\d+\.\d+", "`${1}$releaseTag")
+        }
+        Write-Host "  $($file.Name): $old -> $new"
+        $rewritten = $rewritten.Replace($old, $new)
+    }
+    if ($rewritten -ne $content) {
+        Set-Content -Path $file.FullName -Value $rewritten -NoNewline
+    }
+}
+
+# Fail closed: a manifest must not reach the validator with a tag-pinned repo URL
+# that points at any release but this one.
+$stale = @()
+foreach ($file in (Get-ChildItem -Path $manifestDir -Filter "*.yaml" -Recurse)) {
+    foreach ($m in [regex]::Matches((Get-Content -Path $file.FullName -Raw), $repoURLPattern)) {
+        if ($m.Value -notlike "*/$releaseTag*") {
+            $stale += "$($file.Name): $($m.Value)"
+        }
+    }
+}
+if ($stale.Count -gt 0) {
+    foreach ($s in $stale) { Write-Host "::Error::stale tag-pinned URL in manifest - $s" }
+    Write-Host "::Error::$($stale.Count) manifest URL(s) still point at a release other than $releaseTag. Not submitting (stale installer/asset URLs are never rewritten - pass the current release URL)."
+    exit 1
+}
+Write-Host "  All version-pinned repo URLs point at $releaseTag"
+
+# LicenseUrl must also be present - winget rejects a locale manifest without it,
+# and a missing field is the other way this class of bug shows up.
+$localeFile = Get-ChildItem -Path $manifestDir -Filter "*.locale.en-US.yaml" -Recurse | Select-Object -First 1
+if ($localeFile) {
+    $locale = Get-Content -Path $localeFile.FullName -Raw
+    if ($locale -notmatch "(?m)^LicenseUrl:") {
+        $licenseUrl = "https://raw.githubusercontent.com/topcheer/ggcode/$releaseTag/LICENSE"
+        Write-Host "  LicenseUrl missing; inserting $licenseUrl"
+        if ($locale -match "(?m)^License:") {
+            $locale = [regex]::new("(?m)^License:.*$").Replace($locale, "`$0`nLicenseUrl: $licenseUrl", 1)
+        } else {
+            $locale = [regex]::new("(?m)^PackageLocale:.*$").Replace($locale, "`$0`nLicense: MIT`nLicenseUrl: $licenseUrl", 1)
+        }
+        Set-Content -Path $localeFile.FullName -Value $locale -NoNewline
+    }
+}
+
 Write-Host "Step 2: Patching installer YAML with top-level fields..."
 
 $installerFile = Get-ChildItem -Path $manifestDir -Filter "*.installer.yaml" -Recurse | Select-Object -First 1
@@ -187,7 +273,7 @@ if ($LASTEXITCODE -eq 0) {
     if ($LASTEXITCODE -eq 0) {
         Write-Host "Manifest submitted successfully on retry!"
     } else {
-        Write-Host "::Error::Manifest submission failed twice (last exit code $LASTEXITCODE). Winget PR NOT created - manual backfill (winget-backfill.yml) required."
+        Write-Host "::Error::Manifest submission failed twice (last exit code $LASTEXITCODE). Winget PR NOT created - re-run this job (gh run rerun --job <publish-winget job id>) or run scripts/release/publish-winget.ps1 locally with a token that can write topcheer/winget-pkgs."
         Write-Host "  Dumping patched YAML for debugging:"
         Write-Host "  ---"
         Get-Content $installerFile.FullName | ForEach-Object { Write-Host "  $_" }
