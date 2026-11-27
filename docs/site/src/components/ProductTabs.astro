@@ -1,0 +1,109 @@
+---
+import { t, withBase, type Locale } from '../i18n/utils';
+import Reveal from './Reveal.astro';
+import VideoLoop from './media/VideoLoop.astro';
+import { Picture } from 'astro:assets';
+import tuiShot from '../assets/screenshots/tui/tui-session.png';
+import desktopShot from '../assets/screenshots/desktop/desktop-main.png';
+import mobileShot from '../assets/screenshots/mobile/mobile-main.png';
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+const tabs = [
+  { id: 'tui', title: t(locale, 'product.tui.title'), points: [1, 2, 3].map((i) => t(locale, `product.tui.text.${i}`)), poster: withBase('/video/posters/tui.jpg'), mp4: withBase('/video/tui.mp4'), webm: withBase('/video/tui.webm'), shot: tuiShot, alt: 'ggcode TUI session' },
+  { id: 'desktop', title: t(locale, 'product.desktop.title'), points: [1, 2, 3].map((i) => t(locale, `product.desktop.text.${i}`)), poster: withBase('/video/posters/desktop.jpg'), mp4: withBase('/video/desktop.mp4'), webm: withBase('/video/desktop.webm'), shot: desktopShot, alt: 'ggcode Desktop app' },
+  { id: 'mobile', title: t(locale, 'product.mobile.title'), points: [1, 2, 3].map((i) => t(locale, `product.mobile.text.${i}`)), poster: withBase('/video/posters/mobile.jpg'), mp4: withBase('/video/mobile.mp4'), webm: withBase('/video/mobile.webm'), shot: mobileShot, alt: 'ggcode Mobile app' },
+];
+---
+
+<section class="section" id="product">
+  <div class="container">
+    <div class="section-head">
+      <span class="section-tag">{t(locale, 'product.tag')}</span>
+      <h2>{t(locale, 'product.title')}</h2>
+      <p class="sub">{t(locale, 'product.sub')}</p>
+    </div>
+
+    <div class="product" data-product>
+      <div class="product-tabs" role="tablist" aria-label={t(locale, 'product.tag')}>
+        {tabs.map((tb, i) => (
+          <button type="button" role="tab" id={`tab-${tb.id}`} aria-controls={`panel-${tb.id}`} aria-selected={i === 0 ? 'true' : 'false'} tabindex={i === 0 ? 0 : -1} class="product-tab" data-tab={tb.id}>
+            <span class="product-tab-dot" aria-hidden="true"></span>{tb.title}
+          </button>
+        ))}
+      </div>
+
+      <div class="product-panels">
+        {tabs.map((tb, i) => (
+          <div class="product-panel" role="tabpanel" id={`panel-${tb.id}`} aria-labelledby={`tab-${tb.id}`} hidden={i !== 0} data-panel={tb.id}>
+            <div class="product-media">
+              <Picture src={tb.shot} alt={tb.alt} widths={[480, 768, 960, 1280, 1920]} sizes="(max-width: 1024px) 100vw, 760px" formats={['avif', 'webp']} loading={i === 0 ? 'eager' : 'lazy'} class="product-shot" />
+              <VideoLoop id={tb.id} poster={tb.poster} mp4={tb.mp4} webm={tb.webm} alt={tb.alt} playLabel={t(locale, 'video.play')} active={i === 0} />
+            </div>
+            <div class="product-text">
+              <h3>{tb.title}</h3>
+              <ul>
+                {tb.points.map((p) => (<li><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>{p}</li>))}
+              </ul>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .product { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: var(--space-6); align-items: start; }
+  .product-tabs { display: flex; flex-direction: column; gap: 8px; position: sticky; top: calc(var(--nav-h) + 24px); }
+  .product-tab {
+    display: flex; align-items: center; gap: 12px; text-align: left; width: 100%;
+    padding: 14px 16px; border-radius: var(--radius); border: 1px solid var(--border); color: var(--text-muted); font-weight: 600;
+    background: var(--bg-card); transition: border-color var(--dur-2), color var(--dur-2), background var(--dur-2), transform var(--dur-2) var(--ease-out);
+  }
+  .product-tab:hover { color: var(--text); transform: translateX(2px); }
+  .product-tab[aria-selected="true"] { color: var(--text); border-color: var(--accent); background: linear-gradient(90deg, rgba(74, 157, 255, 0.12), rgba(74, 157, 255, 0.03)); }
+  .product-tab-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-bright); transition: background var(--dur-2), box-shadow var(--dur-2); }
+  .product-tab[aria-selected="true"] .product-tab-dot { background: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
+
+  .product-panel { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr); gap: var(--space-6); align-items: center; animation: panelIn 420ms var(--ease-out); }
+  .product-panel[hidden] { display: none; }
+  @keyframes panelIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  .product-media { position: relative; aspect-ratio: 16 / 9; border-radius: var(--radius-lg); overflow: hidden; border: 1px solid var(--border-bright); box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 0.9), 0 0 80px -30px var(--accent-glow); background: var(--bg-surface); }
+  .product-media :global(.video-loop) { position: absolute; inset: 0; aspect-ratio: auto; border-radius: 0; }
+  .product-media :global(picture) { position: absolute; inset: 0; }
+  .product-media :global(picture img) { width: 100%; height: 100%; object-fit: cover; }
+  .product-shot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .product-text h3 { font-size: var(--text-2xl); margin-bottom: var(--space-4); }
+  .product-text li { display: flex; gap: 10px; align-items: flex-start; color: var(--text-muted); margin-bottom: var(--space-3); }
+  .product-text li svg { color: var(--accent); flex: none; margin-top: 3px; }
+
+  @media (max-width: 1024px) {
+    .product { grid-template-columns: 1fr; }
+    .product-tabs { position: static; flex-direction: row; overflow-x: auto; }
+    .product-tab { white-space: nowrap; width: auto; }
+    .product-panel { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) { .product-panel { animation: none; } }
+</style>
+
+<script>
+  const root = document.querySelector('[data-product]');
+  if (root) {
+    const tabs = [...root.querySelectorAll<HTMLButtonElement>('[role=tab]')];
+    const panels = [...root.querySelectorAll<HTMLElement>('[role=tabpanel]')];
+    const select = (id: string, focus = false) => {
+      tabs.forEach((tb) => { const on = tb.dataset.tab === id; tb.setAttribute('aria-selected', String(on)); tb.tabIndex = on ? 0 : -1; if (on && focus) tb.focus(); });
+      panels.forEach((p) => { const on = p.dataset.panel === id; p.hidden = !on; p.querySelector('[data-video-loop]')?.classList.toggle('is-active', on); });
+    };
+    tabs.forEach((tb) => {
+      tb.addEventListener('click', () => select(tb.dataset.tab!));
+      tb.addEventListener('keydown', (e) => {
+        const i = tabs.indexOf(tb); let n = -1;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowRight') n = (i + 1) % tabs.length;
+        if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') n = (i - 1 + tabs.length) % tabs.length;
+        if (e.key === 'Home') n = 0; if (e.key === 'End') n = tabs.length - 1;
+        if (n >= 0) { e.preventDefault(); select(tabs[n].dataset.tab!, true); }
+      });
+    });
+  }
+</script>

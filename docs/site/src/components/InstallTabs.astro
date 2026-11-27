@@ -1,0 +1,108 @@
+---
+import { t, th, type Locale } from '../i18n/utils';
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+const copy = (s: string) => s;
+const tabs = [
+  { id: 'mac', label: t(locale, 'install.os.mac'), kind: 'cmd', cmd: copy('curl -fsSL https://ggcode.dev/install.sh | bash') },
+  { id: 'win', label: t(locale, 'install.os.win'), kind: 'cmd', cmd: copy('irm https://ggcode.dev/install.ps1 | iex') },
+  { id: 'brew', label: t(locale, 'install.os.brew'), kind: 'cmd', cmd: copy('brew install topcheer/homebrew-ggcode/ggcode') },
+];
+const native = [
+  { id: 'ios', label: t(locale, 'install.ios'), text: t(locale, 'install.ios.text'), cta: t(locale, 'install.ios.cta'), href: 'https://apps.apple.com/us/app/ggcode-mobile/id6770855612' },
+  { id: 'android', label: t(locale, 'install.android'), text: t(locale, 'install.android.text'), cta: t(locale, 'install.android.cta'), href: 'https://play.google.com/store/apps/details?id=gg.ai.ggcode.mobile' },
+];
+const copyLabel = t(locale, 'install.copy'), copiedLabel = t(locale, 'install.copied');
+---
+
+<section class="section" id="install">
+  <div class="container">
+    <div class="section-head">
+      <span class="section-tag">{t(locale, 'install.tag')}</span>
+      <h2 set:html={th(locale, 'install.title')} />
+    </div>
+
+    <div class="install" data-install>
+      <div class="install-cmds">
+        <div class="os-tabs" role="tablist" aria-label={t(locale, 'install.tag')}>
+          {tabs.map((tb, i) => (
+            <button type="button" role="tab" id={`os-${tb.id}`} aria-controls={`os-panel-${tb.id}`} aria-selected={i === 0 ? 'true' : 'false'} tabindex={i === 0 ? 0 : -1} data-os={tb.id}>{tb.label}</button>
+          ))}
+        </div>
+        {tabs.map((tb, i) => (
+          <div class="os-panel" role="tabpanel" id={`os-panel-${tb.id}`} aria-labelledby={`os-${tb.id}`} hidden={i !== 0} data-os-panel={tb.id}>
+            <div class="os-text">{t(locale, tb.id === 'win' ? 'install.win.text' : tb.id === 'brew' ? 'install.brew.text' : 'install.script.text')}</div>
+            <button type="button" class="os-cmd" data-copy={tb.cmd} data-copied-text={copiedLabel} aria-label={copyLabel}>
+              <code>{tb.cmd}</code>
+              <span class="os-copy" data-copy-label>{copyLabel}</span>
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div class="install-native card">
+        <h3>{t(locale, 'install.native.title')}</h3>
+        {native.map((n) => (
+          <div class="native-row">
+            <div>
+              <div class="native-name">{n.label}</div>
+              <p>{n.text}</p>
+            </div>
+            <a class="btn btn-ghost btn-sm" href={n.href} rel="noopener" target="_blank">{n.cta} →</a>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .install { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr); gap: var(--space-5); align-items: start; }
+  .install-cmds { padding: var(--space-5); }
+  .os-tabs { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--border); margin-bottom: var(--space-5); }
+  .os-tabs button { padding: 10px 14px; color: var(--text-muted); font-weight: 600; font-size: var(--text-sm); border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color var(--dur-2), border-color var(--dur-2); }
+  .os-tabs button:hover { color: var(--text); }
+  .os-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+  .os-text { color: var(--text-muted); margin-bottom: var(--space-4); max-width: 60ch; }
+  .os-cmd {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    font-family: var(--font-mono); font-size: 13.5px; color: var(--text); text-align: left;
+    background: rgba(10, 14, 26, 0.8); border: 1px solid var(--border-bright); border-radius: var(--radius); padding: 14px 16px;
+    transition: border-color var(--dur-2), transform var(--dur-2) var(--ease-out);
+  }
+  .os-cmd:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .os-cmd code { flex: 1; overflow-wrap: anywhere; }
+  .os-copy { color: var(--text-muted); font-size: var(--text-xs); padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; white-space: nowrap; transition: color var(--dur-2), border-color var(--dur-2); }
+  .os-cmd.is-copied .os-copy { color: var(--success); border-color: var(--success); }
+  .os-panel[hidden] { display: none; }
+  .install-native { padding: var(--space-5); }
+  .install-native h3 { font-size: var(--text-lg); margin-bottom: var(--space-4); }
+  .native-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) 0; border-top: 1px solid var(--border); }
+  .native-name { font-weight: 700; }
+  .native-row p { color: var(--text-muted); font-size: var(--text-sm); margin-top: 2px; }
+  @media (max-width: 1024px) { .install { grid-template-columns: 1fr; } }
+</style>
+
+<script>
+  // Preselect the tab matching the visitor's OS, then wire ARIA tabs.
+  const root = document.querySelector('[data-install]');
+  if (root) {
+    const tabs = [...root.querySelectorAll<HTMLButtonElement>('[data-os]')];
+    const panels = [...root.querySelectorAll<HTMLElement>('[data-os-panel]')];
+    const ua = (navigator as any).userAgentData?.platform ?? navigator.platform ?? '';
+    const guess = /win/i.test(ua) ? 'win' : /mac|linux/i.test(ua) ? 'mac' : 'mac';
+    const select = (id: string, focus = false) => {
+      tabs.forEach((tb) => { const on = tb.dataset.os === id; tb.setAttribute('aria-selected', String(on)); tb.tabIndex = on ? 0 : -1; if (on && focus) tb.focus(); });
+      panels.forEach((p) => { p.hidden = p.dataset.osPanel !== id; });
+    };
+    select(guess);
+    tabs.forEach((tb) => {
+      tb.addEventListener('click', () => select(tb.dataset.os!));
+      tb.addEventListener('keydown', (e) => {
+        const i = tabs.indexOf(tb); let n = -1;
+        if (e.key === 'ArrowRight') n = (i + 1) % tabs.length; if (e.key === 'ArrowLeft') n = (i - 1 + tabs.length) % tabs.length;
+        if (n >= 0) { e.preventDefault(); select(tabs[n].dataset.os!, true); }
+      });
+    });
+  }
+</script>

@@ -1,0 +1,193 @@
+---
+import '@fontsource/space-grotesk/latin-400.css';
+import '@fontsource/space-grotesk/latin-500.css';
+import '@fontsource/space-grotesk/latin-700.css';
+import '@fontsource/jetbrains-mono/latin-400.css';
+import '@fontsource/jetbrains-mono/latin-600.css';
+import '../styles/tokens.css';
+import '../styles/global.css';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import { t, localeHtmlLang, localeOgLocale, localeHreflang, localizedPath, withBase, DEFAULT_LOCALE, type Locale } from '../i18n/utils';
+
+interface Props {
+  locale: Locale;
+  /** i18n key for the <title>, or a literal title when titleIsLiteral */
+  titleKey?: string;
+  titleIsLiteral?: boolean;
+  descriptionKey?: string;
+  descriptionIsLiteral?: boolean;
+  /** Site-relative path of this page WITHOUT locale prefix, e.g. '' or 'privacy' */
+  path?: string;
+  noindex?: boolean;
+  /** Emit the Organization + WebSite + SoftwareApplication graph. Default: only the home page. */
+  softwareEntity?: boolean;
+}
+
+const {
+  locale,
+  titleKey = 'meta.title',
+  titleIsLiteral = false,
+  descriptionKey = 'meta.description',
+  descriptionIsLiteral = false,
+  path = '',
+  noindex = false,
+  softwareEntity,
+} = Astro.props;
+
+const title = titleIsLiteral ? titleKey : t(locale, titleKey);
+const description = descriptionIsLiteral ? descriptionKey : t(locale, descriptionKey);
+const site = Astro.site ?? new URL('https://ggcode.dev');
+const route = path ? `/${path}` : '/';
+const selfPath = locale === DEFAULT_LOCALE ? route : `/zh${route === '/' ? '/' : route}`;
+const canonical = new URL(selfPath, site).href;
+const enHref = new URL(localizedPath('en', selfPath), site).href;
+const zhHref = new URL(localizedPath('zh', selfPath), site).href;
+const ogImage = new URL(`/og/${locale}.jpg`, site).href;
+const isHome = softwareEntity ?? path === '';
+
+// Entity facts shared by the structured data and llms.txt (keep both in sync).
+const GITHUB_REPO = 'https://github.com/topcheer/ggcode';
+const GITHUB_ORG = 'https://github.com/topcheer';
+const APP_STORE = 'https://apps.apple.com/app/ggcode-mobile/id6770855612';
+const PLAY_STORE = 'https://play.google.com/store/apps/details?id=gg.ai.ggcode.mobile';
+const INSTALL_SCRIPT = new URL('/install.sh', site).href;
+// Optional: set PUBLIC_APP_VERSION at build time (e.g. the released tag) to
+// publish softwareVersion in the structured data.
+const appVersion = import.meta.env.PUBLIC_APP_VERSION || '';
+
+const orgId = `${site.href}#organization`;
+const websiteId = `${site.href}#website`;
+const keywords = [
+  'AI coding agent', 'terminal AI agent', 'CLI coding agent', 'open source coding agent',
+  'MCP client', 'Model Context Protocol', 'A2A protocol', 'multi-agent', 'Claude Code alternative',
+  'Codex CLI alternative', 'Gemini CLI alternative', 'Go', 'MIT',
+];
+
+// Home: Organization + WebSite + SoftwareApplication as one @graph so search and
+// AI engines can link the site, the GitHub repo and the store listings to one entity.
+// Every other page: a WebPage node that is part of the WebSite.
+const jsonLd = isHome
+  ? {
+      '@context': 'https://schema.org',
+      '@graph': [
+        {
+          '@type': 'Organization',
+          '@id': orgId,
+          name: 'topcheer',
+          url: GITHUB_ORG,
+          sameAs: [GITHUB_ORG],
+        },
+        {
+          '@type': 'WebSite',
+          '@id': websiteId,
+          url: site.href,
+          name: 'ggcode',
+          alternateName: 'GGCode',
+          inLanguage: ['en', 'zh'],
+          publisher: { '@id': orgId },
+        },
+        {
+          '@type': 'SoftwareApplication',
+          '@id': `${site.href}#software`,
+          name: 'ggcode',
+          alternateName: 'GGCode',
+          url: site.href,
+          description: t(locale, 'meta.description'),
+          applicationCategory: 'DeveloperApplication',
+          applicationSubCategory: 'Developer Tools',
+          operatingSystem: 'macOS, Linux, Windows, iOS, Android',
+          programmingLanguage: 'Go',
+          isAccessibleForFree: true,
+          license: 'https://spdx.org/licenses/MIT.html',
+          offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD', url: site.href },
+          downloadUrl: INSTALL_SCRIPT,
+          installUrl: INSTALL_SCRIPT,
+          codeRepository: GITHUB_REPO,
+          sameAs: [GITHUB_REPO, APP_STORE, PLAY_STORE],
+          screenshot: [ogImage],
+          featureList: [
+            t(locale, 'features.terminal.title'),
+            t(locale, 'features.mcp.title'),
+            t(locale, 'features.agent.title'),
+            t(locale, 'features.im.title'),
+            t(locale, 'features.lanchat.title'),
+            t(locale, 'features.modes.title'),
+            t(locale, 'features.worktrees.title'),
+            t(locale, 'features.mobile.title'),
+            t(locale, 'features.sessions.title'),
+          ],
+          keywords: keywords.join(', '),
+          inLanguage: ['en', 'zh'],
+          author: { '@id': orgId },
+          publisher: { '@id': orgId },
+          ...(appVersion ? { softwareVersion: appVersion } : {}),
+        },
+      ],
+    }
+  : {
+      '@context': 'https://schema.org',
+      '@type': 'WebPage',
+      name: title,
+      description,
+      url: canonical,
+      inLanguage: localeHtmlLang(locale),
+      isPartOf: {
+        '@type': 'WebSite',
+        name: 'ggcode',
+        url: site.href,
+        inLanguage: ['en', 'zh'],
+        publisher: { '@type': 'Organization', name: 'topcheer', url: GITHUB_ORG },
+      },
+    };
+---
+
+<!doctype html>
+<html lang={localeHtmlLang(locale)}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#0a0e1a" />
+    <link rel="icon" type="image/svg+xml" href={withBase('/favicon.svg')} />
+    <link rel="apple-touch-icon" sizes="180x180" href={withBase('/apple-touch-icon.png')} />
+    {noindex ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={canonical} />}
+    {!noindex && <link rel="alternate" hreflang={localeHreflang('en')} href={enHref} />}
+    {!noindex && <link rel="alternate" hreflang={localeHreflang('zh')} href={zhHref} />}
+    {!noindex && <link rel="alternate" hreflang="x-default" href={enHref} />}
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ggcode" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={title} />
+    <meta property="og:locale" content={localeOgLocale(locale)} />
+    <meta property="og:locale:alternate" content={locale === 'en' ? 'zh_CN' : 'en_US'} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+    <meta name="twitter:image:alt" content={title} />
+    <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+
+    <script>document.documentElement.classList.add('js');setTimeout(function(){document.documentElement.classList.add('reveal-timeout')},2500);</script>
+    <script async src="https://analytics.ggcode.dev/script.js" data-website-id="9750498f-aebd-462d-a46c-dda0e7d4d1a2"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">{t(locale, 'a11y.skip')}</a>
+    <Nav locale={locale} currentPath={selfPath} />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer locale={locale} />
+    <script>
+      import '../scripts/reveal';
+    </script>
+  </body>
+</html>

@@ -1,0 +1,135 @@
+---
+import { t, th, type Locale } from '../i18n/utils';
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+const steps = [1, 2, 3].map((i) => ({ n: String(i).padStart(2, '0'), title: t(locale, `how.s${i}.title`), text: t(locale, `how.s${i}.text`) }));
+---
+
+<section class="section how" id="how">
+  <div class="container">
+    <div class="section-head">
+      <span class="section-tag">{t(locale, 'how.tag')}</span>
+      <h2 set:html={th(locale, 'how.title')} />
+    </div>
+
+    <div class="how-wrap" data-how>
+      <div class="how-steps">
+        {steps.map((s, i) => (
+          <div class="how-step" data-step={i}>
+            <span class="how-n">{s.n}</span>
+            <h3>{s.title}</h3>
+            <p>{s.text}</p>
+          </div>
+        ))}
+        <div class="how-progress" aria-hidden="true"><span data-how-progress></span></div>
+      </div>
+
+      <div class="how-stage" aria-hidden="true">
+        <div class="stage" data-stage="0">
+          <div class="stage-term">
+            <div class="stage-bar"><i></i><i></i><i></i><span>~/my-project</span></div>
+            <pre>$ <b>cd my-project</b>
+$ <b>ggcode</b>
+▸ Loading project context...
+▸ 1,204 files · git · GGCODE.md
+● ready</pre>
+          </div>
+        </div>
+        <div class="stage" data-stage="1">
+          <div class="stage-tree">
+            <div class="node root">main</div>
+            <div class="branch"><span class="node wt">worktree/ggcode/fix-auth</span><span class="chip">+42 −7</span></div>
+            <div class="logs"><span>● go build ./... ✓</span><span>● go test ./... 312 passed ✓</span></div>
+          </div>
+        </div>
+        <div class="stage" data-stage="2">
+          <div class="stage-review">
+            <div class="diff"><span class="del">- return t.executeLegacy(ctx, args)</span><span class="add">+ return t.execute(ctx, args)</span></div>
+            <div class="approve"><span class="key">y</span> approve &amp; commit <span class="ok">✓ 1 commit · PR #5933 ready</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .how-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-7); align-items: start; }
+  .how-steps { position: relative; padding-left: var(--space-6); }
+  .how-progress { position: absolute; left: 10px; top: 12px; bottom: 12px; width: 2px; background: var(--border); }
+  .how-progress span { display: block; width: 100%; height: 0%; background: linear-gradient(var(--accent), var(--accent-soft)); box-shadow: 0 0 14px var(--accent-glow); }
+  .how-step { position: relative; padding: var(--space-5) 0; opacity: 0.45; transition: opacity var(--dur-3) var(--ease-out); }
+  .how-step.is-active { opacity: 1; }
+  .how-n { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--accent); letter-spacing: 0.1em; }
+  .how-step h3 { font-size: var(--text-xl); margin: var(--space-2) 0; }
+  .how-step p { color: var(--text-muted); max-width: 44ch; }
+  .how-step::before { content: ''; position: absolute; left: calc(-1 * var(--space-6) + 5px); top: 30px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg); border: 2px solid var(--border-bright); transition: border-color var(--dur-2), box-shadow var(--dur-2); }
+  .how-step.is-active::before { border-color: var(--accent); box-shadow: 0 0 16px var(--accent-glow); }
+
+  .how-stage { position: sticky; top: calc(var(--nav-h) + 40px); aspect-ratio: 16 / 10; border-radius: var(--radius-lg); border: 1px solid var(--border-bright); background: radial-gradient(ellipse at 60% 30%, rgba(74,157,255,0.12), transparent 60%), var(--bg-surface); overflow: hidden; box-shadow: 0 40px 90px -40px rgba(0,0,0,.9), 0 0 80px -30px var(--accent-glow); }
+  .stage { position: absolute; inset: 0; padding: var(--space-6); display: grid; place-items: center; opacity: 0; transform: translateY(12px) scale(0.98); transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out); }
+  .stage.is-active { opacity: 1; transform: none; }
+  .stage-term { width: 100%; max-width: 440px; font-family: var(--font-mono); font-size: 12.5px; background: rgba(10,14,26,.9); border: 1px solid var(--border-bright); border-radius: var(--radius); box-shadow: 0 20px 50px -20px #000; }
+  .stage-bar { display: flex; align-items: center; gap: 6px; padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--text-dim); font-size: 11px; }
+  .stage-bar i { width: 10px; height: 10px; border-radius: 50%; background: #ff5f57; } .stage-bar i:nth-child(2) { background: #febc2e } .stage-bar i:nth-child(3) { background: #28c840 } .stage-bar span { margin-left: 8px; }
+  .stage-term pre { margin: 0; padding: 14px 16px; color: var(--text-muted); line-height: 1.7; white-space: pre-wrap; } .stage-term b { color: var(--text); font-weight: 600; }
+  .stage-tree { width: 100%; max-width: 440px; font-family: var(--font-mono); font-size: 12px; }
+  .node { display: inline-block; padding: 6px 12px; border-radius: 8px; background: var(--bg-card); border: 1px solid var(--border-bright); color: var(--text); }
+  .node.root { border-color: var(--accent); }
+  .branch { margin: 14px 0 0 28px; padding-left: 16px; border-left: 2px solid var(--accent); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .node.wt { border-color: var(--accent-soft); } .chip { font-size: 11px; color: var(--accent-soft); }
+  .logs { margin: 14px 0 0 28px; display: flex; flex-direction: column; gap: 4px; color: var(--text-muted); } .logs span::first-letter { color: var(--success); }
+  .stage-review { width: 100%; max-width: 460px; font-family: var(--font-mono); font-size: 12.5px; }
+  .diff { display: flex; flex-direction: column; gap: 4px; background: var(--bg-card); border: 1px solid var(--border-bright); border-radius: var(--radius); padding: 14px 16px; }
+  .del { color: #ff8b8b; background: rgba(255, 80, 80, 0.08); } .add { color: #8bf0c0; background: rgba(52, 211, 153, 0.08); }
+  .approve { margin-top: 14px; display: flex; align-items: center; gap: 10px; color: var(--text-muted); }
+  .key { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--accent); color: var(--accent); box-shadow: 0 4px 0 var(--accent-deep); }
+  .ok { color: var(--success); }
+
+  @media (max-width: 1024px) {
+    .how-wrap { grid-template-columns: 1fr; }
+    .how-stage { position: static; display: none; }
+    .how-step { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) { .how-step { opacity: 1; } .how-progress span { height: 100%; } .stage { transition: none; } }
+</style>
+
+<script>
+  // Pinned scroll story on wide screens: as the section scrolls, the active
+  // step and stage advance. Below 1024px (or reduced motion) it is a static list.
+  const root = document.querySelector<HTMLElement>('[data-how]');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (root && !reduce) {
+    const steps = [...root.querySelectorAll<HTMLElement>('[data-step]')];
+    const stages = [...root.querySelectorAll<HTMLElement>('[data-stage]')];
+    const bar = root.querySelector<HTMLElement>('[data-how-progress]');
+    const setActive = (i: number) => {
+      steps.forEach((s, k) => s.classList.toggle('is-active', k === i));
+      stages.forEach((s, k) => s.classList.toggle('is-active', k === i));
+    };
+    setActive(0);
+    if (matchMedia('(min-width: 1024px)').matches) {
+      const mm = async () => {
+        const { gsap } = await import('gsap');
+        const { ScrollTrigger } = await import('gsap/ScrollTrigger');
+        gsap.registerPlugin(ScrollTrigger);
+        const wrap = root.querySelector('.how-wrap')!;
+        const tl = gsap.timeline({
+          scrollTrigger: { trigger: wrap, start: 'top 70%', end: '+=1200', pin: wrap, scrub: 0.6, anticipatePin: 1,
+            onUpdate: (self: any) => { if (bar) bar.style.height = `${self.progress * 100}%`; } },
+        });
+        steps.forEach((_, i) => { if (i) tl.to({}, { duration: 1, onStart: () => setActive(i) }); });
+        tl.to({}, { duration: 0.6 });
+        document.fonts?.ready.then(() => ScrollTrigger.refresh());
+      };
+      mm();
+    } else {
+      const io = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) setActive(Number((e.target as HTMLElement).dataset.step)); }, { rootMargin: '-40% 0px -50% 0px' });
+      steps.forEach((s) => io.observe(s));
+      if (bar) bar.style.height = '100%';
+    }
+  } else {
+    root?.querySelectorAll('[data-step]').forEach((s) => s.classList.add('is-active'));
+    root?.querySelector('[data-stage="0"]')?.classList.add('is-active');
+  }
+</script>

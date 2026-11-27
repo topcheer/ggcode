@@ -1,0 +1,8 @@
+---
+import Base from '../layouts/Base.astro';
+import body from '../legacy/privacy-body.html?raw';
+import '../styles/legal.css';
+---
+<Base locale="en" titleKey="privacy.title" titleIsLiteral={false} descriptionKey="privacy.description" path="privacy.html">
+  <article class="prose legal" set:html={body.replace(/<a href="\/"\s*>&larr; Back to ggcode\.dev<\/a>/, '<a href="/">&larr; Back to ggcode.dev</a>')} />
+</Base>

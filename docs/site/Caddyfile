@@ -1,0 +1,61 @@
+{
+	admin off
+	persist_config off
+	auto_https off
+}
+
+# Site served by Caddy — static files from /srv
+
+:{$PORT:80} {
+	respond /health 200
+
+	root * /srv
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "SAMEORIGIN"
+		-Server
+	}
+
+	@html {
+		path /
+		path *.html
+	}
+	header @html Cache-Control "public, max-age=0, must-revalidate"
+
+	@assets {
+		path *.css *.js *.png *.svg *.jpg *.jpeg *.webp *.gif *.ico
+	}
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+
+	# Error responses must not inherit the immutable asset header: a request for
+	# a not-yet-deployed asset would otherwise be cached as a 404 for a year at
+	# the edge (seen with apple-touch-icon.png). Short TTL + the branded page.
+	handle_errors {
+		header Cache-Control "public, max-age=60"
+		rewrite * /{err.status_code}.html
+		file_server
+	}
+
+	encode {
+		gzip
+		zstd
+	}
+
+	# The release-asset mirror that used to live under /downloads/latest/ is retired;
+	# keep old copies of the installers working by forwarding them to the Worker mirror
+	# (workers/download-mirror, docs/release-process.md §5.6).
+	# SEO: one URL per page. Directory routes are canonical; the .html and
+	# extension-less variants 301 to them, and the sitemap index answers at
+	# the conventional /sitemap.xml path as well.
+	redir /index.html / 301
+	redir /zh /zh/ 301
+	redir /zh/index.html /zh/ 301
+	redir /sitemap.xml /sitemap-index.xml 301
+	@old_mirror path_regexp old_mirror ^/downloads/latest(\/.*)?$
+	redir @old_mirror https://download.ggcode.dev/latest{re.old_mirror.1}{?query} 301
+
+	try_files {path} {path}.html {path}/index.html
+	file_server
+}

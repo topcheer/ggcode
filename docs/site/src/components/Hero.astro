@@ -1,0 +1,149 @@
+---
+import { t, th, withBase, type Locale } from '../i18n/utils';
+import Hero3D from './Hero3D.astro';
+import TerminalPlayer from './TerminalPlayer.astro';
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+const installCmd = 'curl -fsSL https://ggcode.dev/install.sh | bash';
+---
+
+<section class="hero" id="hero" data-hero>
+  <div class="hero-bg" aria-hidden="true">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+    <div class="grid-lines"></div>
+  </div>
+  <div class="container hero-inner">
+    <div class="hero-copy">
+      <div class="hero-badge" data-reveal>
+        <span class="dot"></span>
+        terminal-native · mcp-ready · multi-agent
+      </div>
+      <h1 data-reveal style="--i:1" set:html={th(locale, 'hero.title')} />
+      <p class="hero-sub sub" data-reveal style="--i:2">{t(locale, 'hero.sub')}</p>
+
+      <div class="hero-install" data-reveal style="--i:3">
+        <button type="button" class="install-cmd" data-copy={installCmd} data-copied-text={t(locale, 'install.copied')} aria-label={t(locale, 'install.copy')}>
+          <span class="install-prompt" aria-hidden="true">$</span>
+          <code>{installCmd}</code>
+          <span class="install-copy" data-copy-label>{t(locale, 'install.copy')}</span>
+        </button>
+      </div>
+
+      <div class="hero-actions" data-reveal style="--i:4">
+        <a class="btn btn-primary" href="#install">{t(locale, 'hero.cta')}
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/topcheer/ggcode" rel="noopener" target="_blank">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.02c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.21.08 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5 1 .11-.78.42-1.31.76-1.61-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.49 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.82.58C20.57 21.8 24 17.31 24 12c0-6.63-5.37-12-12-12z"/></svg>
+          {t(locale, 'cta.github')}
+        </a>
+      </div>
+    </div>
+
+    <div class="hero-visual">
+      <div class="hero-3d-slot">
+        <Hero3D poster={withBase('/og/hero-poster.webp')} alt=">_" />
+      </div>
+      <div class="terminal" data-parallax="0.12">
+        <TerminalPlayer locale={locale} />
+      </div>
+    </div>
+  </div>
+  <div class="hero-scroll" aria-hidden="true"><span></span></div>
+</section>
+
+<style>
+  .hero { position: relative; min-height: calc(100vh - var(--nav-h)); display: flex; align-items: center; overflow: hidden; padding-block: var(--space-8) var(--space-9); }
+  .hero-bg { position: absolute; inset: 0; pointer-events: none; }
+  .orb { position: absolute; border-radius: 50%; filter: blur(90px); opacity: 0.5; animation: float 22s ease-in-out infinite; }
+  .orb-1 { width: 520px; height: 520px; background: var(--accent-2); top: -160px; left: -120px; }
+  .orb-2 { width: 420px; height: 420px; background: #0b4a8f; bottom: -120px; right: -100px; animation-delay: -7s; }
+  .orb-3 { width: 300px; height: 300px; background: var(--accent-3); top: 40%; left: 50%; opacity: 0.14; animation-delay: -14s; }
+  @keyframes float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(40px, -30px) scale(1.05); }
+    66% { transform: translate(-30px, 20px) scale(0.95); }
+  }
+  .grid-lines {
+    position: absolute; inset: 0; opacity: 0.35;
+    background-image: linear-gradient(rgba(124, 196, 255, 0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(124, 196, 255, 0.06) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, #000 20%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, #000 20%, transparent 75%);
+  }
+  .hero-inner { position: relative; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: var(--space-7); align-items: center; }
+  .hero-copy { position: relative; z-index: 2; }
+  .hero-badge {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent-soft); border: 1px solid var(--border-bright); border-radius: 999px; padding: 6px 14px; margin-bottom: var(--space-5);
+    background: rgba(74, 157, 255, 0.06);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 12px var(--success); animation: pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  h1 { font-size: var(--text-hero); letter-spacing: -0.035em; }
+  .hero-sub { max-width: 52ch; }
+  .hero-install { margin-top: var(--space-6); }
+  .install-cmd {
+    display: flex; align-items: center; gap: 12px; width: 100%; max-width: 560px;
+    font-family: var(--font-mono); font-size: 13.5px; color: var(--text);
+    background: rgba(18, 26, 48, 0.8); border: 1px solid var(--border-bright); border-radius: var(--radius);
+    padding: 12px 14px; text-align: left; backdrop-filter: blur(10px);
+    transition: border-color var(--dur-2), transform var(--dur-2) var(--ease-out);
+  }
+  .install-cmd:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .install-cmd code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .install-prompt { color: var(--accent); }
+  .install-copy { color: var(--text-muted); font-size: var(--text-xs); padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; transition: color var(--dur-2), border-color var(--dur-2); }
+  .install-cmd.is-copied .install-copy { color: var(--success); border-color: var(--success); }
+  .hero-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-5); }
+  .hero-visual { position: relative; min-height: 520px; }
+  .hero-3d-slot { position: absolute; inset: -40px -40px 40px -40px; }
+  .terminal {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+    will-change: transform;
+  }
+  .hero-scroll { position: absolute; left: 50%; bottom: 22px; width: 22px; height: 36px; border: 1.5px solid var(--border-bright); border-radius: 12px; transform: translateX(-50%); }
+  .hero-scroll span { position: absolute; left: 50%; top: 7px; width: 4px; height: 8px; margin-left: -2px; border-radius: 2px; background: var(--accent); animation: wheel 1.8s ease-in-out infinite; }
+  @keyframes wheel { 0% { transform: translateY(0); opacity: 1; } 70% { transform: translateY(12px); opacity: 0; } 100% { opacity: 0; } }
+
+  @media (max-width: 1024px) {
+    .hero-inner { grid-template-columns: 1fr; gap: var(--space-6); }
+    .hero-visual { min-height: 420px; }
+    .hero-3d-slot { inset: -20px -20px 30px -20px; }
+  }
+  @media (max-width: 768px) {
+    .hero { min-height: auto; padding-top: var(--space-7); }
+    .hero-visual { min-height: 340px; }
+    .terminal { position: relative; }
+    .hero-scroll { display: none; }
+  }
+</style>
+
+<script>
+  // Copy-to-clipboard with a confirmation micro-animation.
+  document.querySelectorAll<HTMLElement>('[data-copy]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const text = btn.getAttribute('data-copy') || '';
+      try { await navigator.clipboard.writeText(text); } catch {
+        const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+      }
+      btn.classList.add('is-copied');
+      const label = btn.querySelector('[data-copy-label]');
+      const prev = label?.textContent; if (label) label.textContent = btn.dataset.copiedText || '✓';
+      setTimeout(() => { btn.classList.remove('is-copied'); if (label && prev) label.textContent = prev; }, 1600);
+    });
+  });
+
+  // Gentle hero parallax (desktop only, bounded, disabled for reduced motion).
+  const hero = document.querySelector<HTMLElement>('[data-hero]');
+  const layers = document.querySelectorAll<HTMLElement>('[data-parallax]');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (hero && layers.length && !reduce && matchMedia('(min-width: 768px)').matches) {
+    let raf = 0;
+    const apply = () => { raf = 0; const y = Math.min(window.scrollY, hero.offsetHeight); layers.forEach((l) => { l.style.transform = `translateY(${y * parseFloat(l.dataset.parallax || '0')}px)`; }); };
+    addEventListener('scroll', () => { if (!raf) raf = requestAnimationFrame(apply); }, { passive: true });
+  }
+</script>

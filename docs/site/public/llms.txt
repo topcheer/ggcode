@@ -1,0 +1,49 @@
+# ggcode
+
+> ggcode is an open-source (MIT) AI coding agent that runs in the terminal. It reads a codebase, edits files, runs commands and ships code — with a polished TUI, resumable sessions, multi-agent support, and native desktop (macOS, Windows, Linux) and mobile (iOS, Android) apps. Written in Go by topcheer. Website: https://ggcode.dev — Chinese: https://ggcode.dev/zh/ — Source: https://github.com/topcheer/ggcode
+
+## What it is
+
+- An AI coding agent for the terminal (CLI), plus a desktop app and a mobile companion app that share the same sessions, tools and project memory.
+- Model-agnostic: works with OpenAI, Anthropic, Gemini, DeepSeek, Kimi (Moonshot), GLM (Z.ai), GitHub Copilot and other OpenAI- / Anthropic-compatible endpoints; reasoning effort and tool choice are configurable per provider.
+- Speaks Model Context Protocol (MCP) as a client (Cloudflare, Playwright, databases, custom tools) and A2A (agent-to-agent) protocol for delegating to other agents.
+- Multi-agent: isolated sub-agents, persistent teammates on a shared task board, and LAN Chat — zero-config mDNS peer-to-peer messaging between ggcode instances on a local network.
+- IM bridging: drive the agent from QQ, Telegram, Discord, Slack, Feishu (Lark), DingTalk and more.
+- Permission modes from fully supervised to autopilot, with checkpoints and `/undo` to revert changes; tasks can run in isolated git worktrees.
+- License: MIT. Free and open source.
+
+## Install
+
+- macOS / Linux: `curl -fsSL https://ggcode.dev/install.sh | bash` (no sudo, installs to ~/.local/bin)
+- Windows PowerShell: `irm https://ggcode.dev/install.ps1 | iex` (no admin, installs to %LOCALAPPDATA%\ggcode\bin)
+- Homebrew: `brew install topcheer/ggcode/ggcode`
+- Desktop: https://ggcode.dev (macOS .dmg / .pkg, Windows .msi) — also on the Mac App Store and Microsoft Store
+- Mobile: iOS https://apps.apple.com/app/ggcode-mobile/id6770855612 · Android https://play.google.com/store/apps/details?id=gg.ai.ggcode.mobile
+
+## Documentation
+
+- README (full, English): https://ggcode.dev/llms-full.txt
+- README (Chinese): https://raw.githubusercontent.com/topcheer/ggcode/main/README_zh-CN.md
+- Getting started: https://github.com/topcheer/ggcode/blob/main/docs/guide/getting-started.md
+- Installation (all methods): https://github.com/topcheer/ggcode/blob/main/docs/guide/install.md
+- Providers / models: https://github.com/topcheer/ggcode/blob/main/docs/guide/providers.md
+- MCP setup: https://github.com/topcheer/ggcode/blob/main/docs/guide/mcp.md
+- A2A protocol (agent-to-agent): https://github.com/topcheer/ggcode/blob/main/docs/guide/a2a.md
+- LAN Chat: https://github.com/topcheer/ggcode/blob/main/docs/guide/lan-chat.md
+- IM integration: https://github.com/topcheer/ggcode/blob/main/docs/guide/im-integration.md
+- Multi-agent modes: https://github.com/topcheer/ggcode/blob/main/docs/guide/multi-agent-modes.md
+- Permission modes: https://github.com/topcheer/ggcode/blob/main/docs/guide/modes.md
+- Skills: https://github.com/topcheer/ggcode/blob/main/docs/guide/skills.md
+- Configuration reference: https://github.com/topcheer/ggcode/blob/main/docs/guide/configuration.md
+- Release notes (every version): https://github.com/topcheer/ggcode/tree/main/docs/releases
+- Full docs index: https://github.com/topcheer/ggcode/tree/main/docs
+
+## Releases
+
+- GitHub Releases (binaries, packages, checksums): https://github.com/topcheer/ggcode/releases
+- Download mirror: https://download.ggcode.dev/latest/manifest.json
+
+## Optional
+
+- Privacy policy: https://ggcode.dev/privacy.html
+- Terms of service: https://ggcode.dev/terms.html

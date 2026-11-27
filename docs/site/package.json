@@ -1,0 +1,31 @@
+{
+  "name": "ggcode-site",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build && node scripts/postbuild.mjs && node scripts/check-links.mjs",
+    "preview": "astro preview",
+    "check": "astro check",
+    "lint:links": "node scripts/check-links.mjs",
+    "lhci": "lhci autorun"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "^3.0.0",
+    "@fontsource/jetbrains-mono": "^5.0.0",
+    "@fontsource/space-grotesk": "^5.0.0",
+    "astro": "^7.4.13",
+    "gsap": "^3.13.0",
+    "three": "^0.182.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.12",
+    "@lhci/cli": "^0.16.1",
+    "@types/three": "^0.182.0",
+    "typescript": "^5.9.0"
+  }
+}

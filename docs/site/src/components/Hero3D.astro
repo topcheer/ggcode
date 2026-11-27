@@ -1,0 +1,181 @@
+---
+/**
+ * 3D hero island: a particle field that forms the ">_" glyph and morphs into a
+ * lattice cube as the visitor scrolls, tilting toward the pointer. three.js is
+ * imported lazily only when the hero is visible and the browser is capable;
+ * otherwise the pre-rendered poster is shown and three is never fetched.
+ */
+interface Props { poster: string; alt: string }
+const { poster, alt } = Astro.props;
+---
+
+<div class="hero3d" data-hero3d aria-label={alt} role="img">
+  <canvas class="hero3d-canvas" aria-hidden="true"></canvas>
+  <img class="hero3d-poster" src={poster} alt="" aria-hidden="true" decoding="async" fetchpriority="high" width="1600" height="900" />
+</div>
+
+<style>
+  .hero3d { position: absolute; inset: 0; pointer-events: none; }
+  .hero3d-canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 900ms var(--ease-out); }
+  .hero3d.is-live .hero3d-canvas { opacity: 1; }
+  .hero3d-poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.9; transition: opacity 900ms var(--ease-out); }
+  .hero3d.is-live .hero3d-poster { opacity: 0; }
+  @media (prefers-reduced-motion: reduce) { .hero3d-canvas { display: none; } }
+</style>
+
+<script>
+  const root = document.querySelector<HTMLElement>('[data-hero3d]');
+  if (root) {
+    const mq = (q: string) => matchMedia(q).matches;
+    const reduce = mq('(prefers-reduced-motion: reduce)');
+    const saveData = (navigator as any).connection?.saveData === true;
+    const lowMem = (navigator as any).deviceMemory !== undefined && (navigator as any).deviceMemory <= 2;
+    // Desktop-class only: on phones the particle scene costs seconds of main-thread
+    // time (Lighthouse mobile TBT ~3s) for a hero the poster already conveys.
+    const desktop = mq('(min-width: 768px)') && mq('(pointer: fine)');
+    const capable = desktop && !reduce && !saveData && !lowMem && (() => {
+      try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch { return false; }
+    })();
+
+    if (capable) {
+      const boot = async () => {
+        const THREE = await import('three');
+        const canvas = root.querySelector('canvas')!;
+        let renderer: any;
+        try {
+          renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
+        } catch { return; }
+        renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+        renderer.setClearColor(0x000000, 0);
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 40);
+        camera.position.set(0, 0.15, 5.2);
+
+        // --- sample ">_" glyph positions from an offscreen canvas text mask ---
+        const N = 6500;
+        const glyph = new Float32Array(N * 3);
+        const cube = new Float32Array(N * 3);
+        {
+          const c = document.createElement('canvas'); c.width = 320; c.height = 220;
+          const g = c.getContext('2d')!;
+          g.fillStyle = '#000'; g.fillRect(0, 0, 320, 220);
+          g.fillStyle = '#fff'; g.font = 'bold 180px Menlo, "SF Mono", Consolas, monospace'; g.textBaseline = 'alphabetic';
+          g.fillText('>_', 28, 190);
+          const data = g.getImageData(0, 0, 320, 220).data;
+          const pts: number[] = [];
+          for (let y = 0; y < 220; y += 2) for (let x = 0; x < 320; x += 2) if (data[(y * 320 + x) * 4] > 128) pts.push(x, y);
+          for (let i = 0; i < N; i++) {
+            const k = (Math.random() * pts.length / 2 | 0) * 2;
+            const x = pts[k], y = pts[k + 1];
+            glyph[i * 3] = (x / 320 - 0.5) * 3.6 + (Math.random() - 0.5) * 0.025;
+            glyph[i * 3 + 1] = -(y / 220 - 0.5) * 2.3 + 0.45 + (Math.random() - 0.5) * 0.025;
+            glyph[i * 3 + 2] = (Math.random() - 0.5) * 0.35;
+          }
+        }
+        {
+          // lattice cube: 12 edges + inner grid, points evenly distributed
+          const e = 1.05; const corners = [[-e,-e,-e],[e,-e,-e],[e,e,-e],[-e,e,-e],[-e,-e,e],[e,-e,e],[e,e,e],[-e,e,e]];
+          const edges = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+          for (let i = 0; i < N; i++) {
+            const ed = edges[(Math.random() * edges.length) | 0]; const t = Math.random();
+            const a = corners[ed[0]], b = corners[ed[1]];
+            let x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t, z = a[2] + (b[2] - a[2]) * t;
+            if (i % 3 === 0) { // every third point sits on an inner face grid for depth
+              x = (Math.random() - 0.5) * 2 * e; y = (Math.random() - 0.5) * 2 * e; z = (Math.random() < 0.5 ? -1 : 1) * e;
+            }
+            cube[i * 3] = x * 0.9 + (Math.random() - 0.5) * 0.02;
+            cube[i * 3 + 1] = y * 0.9 + (Math.random() - 0.5) * 0.02;
+            cube[i * 3 + 2] = z * 0.9 + (Math.random() - 0.5) * 0.02;
+          }
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(glyph, 3));
+        geo.setAttribute('aCube', new THREE.BufferAttribute(cube, 3));
+        const seed = new Float32Array(N); for (let i = 0; i < N; i++) seed[i] = Math.random();
+        geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+
+        const mat = new THREE.ShaderMaterial({
+          transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+          uniforms: {
+            uMorph: { value: 0 }, uTime: { value: 0 }, uPx: { value: renderer.getPixelRatio() },
+            uA: { value: new THREE.Color('#7cc4ff') }, uB: { value: new THREE.Color('#1854b0') }, uC: { value: new THREE.Color('#6ee7ff') },
+          },
+          vertexShader: `
+            attribute vec3 aCube; attribute float aSeed;
+            uniform float uMorph, uTime, uPx; varying float vT; varying float vSeed;
+            void main() {
+              float m = smoothstep(0.0, 1.0, clamp(uMorph + (aSeed - 0.5) * 0.25, 0.0, 1.0));
+              vec3 p = mix(position, aCube, m);
+              p.x += sin(uTime * 0.6 + aSeed * 6.2831) * 0.012;
+              p.y += cos(uTime * 0.5 + aSeed * 6.2831) * 0.012;
+              vec4 mv = modelViewMatrix * vec4(p, 1.0);
+              gl_Position = projectionMatrix * mv;
+              gl_PointSize = (1.6 + aSeed * 2.4) * uPx * (4.6 / -mv.z);
+              vT = clamp((p.y + 1.2) / 2.4, 0.0, 1.0); vSeed = aSeed;
+            }`,
+          fragmentShader: `
+            uniform vec3 uA, uB, uC; varying float vT; varying float vSeed;
+            void main() {
+              vec2 d = gl_PointCoord - 0.5; float r = length(d); if (r > 0.5) discard;
+              float a = smoothstep(0.5, 0.05, r);
+              vec3 col = vT < 0.5 ? mix(uB, uA, vT * 2.0) : mix(uA, uC, (vT - 0.5) * 2.0);
+              gl_FragColor = vec4(col, a * (0.55 + 0.45 * vSeed));
+            }`,
+        });
+        const points = new THREE.Points(geo, mat);
+        const group = new THREE.Group(); group.add(points); scene.add(group);
+
+        // --- interaction state ---
+        const state = { tiltX: 0, tiltY: 0, tx: 0, ty: 0, morph: 0, tm: 0, visible: true, running: false };
+        const hero = root.closest('section') ?? root;
+        addEventListener('pointermove', (e) => {
+          if (matchMedia('(pointer: coarse)').matches) return;
+          const r = hero.getBoundingClientRect();
+          state.tx = ((e.clientX - r.left) / r.width - 0.5) * 0.5;
+          state.ty = ((e.clientY - r.top) / r.height - 0.5) * 0.35;
+        }, { passive: true });
+        const onScroll = () => {
+          const r = hero.getBoundingClientRect();
+          state.tm = Math.min(1, Math.max(0, -r.top / (r.height * 0.85)));
+        };
+        addEventListener('scroll', onScroll, { passive: true }); onScroll();
+
+        const resize = () => {
+          const w = root.clientWidth || 1, h = root.clientHeight || 1;
+          renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+        };
+        new ResizeObserver(resize).observe(root); resize();
+
+        const clock = new THREE.Clock();
+        const tick = () => {
+          if (!state.running) return;
+          const t = clock.getElapsedTime();
+          state.tiltX += (state.ty - state.tiltX) * 0.05;
+          state.tiltY += (state.tx - state.tiltY) * 0.05;
+          state.morph += (state.tm - state.morph) * 0.06;
+          group.rotation.x = state.tiltX + Math.sin(t * 0.25) * 0.08 + state.morph * 0.6;
+          group.rotation.y = state.tiltY + t * 0.08 + state.morph * 0.9;
+          mat.uniforms.uMorph.value = state.morph;
+          mat.uniforms.uTime.value = t;
+          renderer.render(scene, camera);
+          requestAnimationFrame(tick);
+        };
+        const start = () => { if (!state.running) { state.running = true; clock.start(); tick(); } };
+        const stop = () => { state.running = false; };
+
+        new IntersectionObserver(([e]) => { e.isIntersecting ? start() : stop(); }, { threshold: 0 }).observe(root);
+        document.addEventListener('visibilitychange', () => { document.hidden ? stop() : (state.visible && start()); });
+        canvas.addEventListener('webglcontextlost', (ev) => { ev.preventDefault(); stop(); root.classList.remove('is-live'); });
+
+        root.classList.add('is-live');
+        start();
+      };
+      const idle = window.requestIdleCallback || ((f: () => void) => setTimeout(f, 200));
+      const io = new IntersectionObserver(([e]) => {
+        if (e.isIntersecting) { io.disconnect(); idle(() => { boot(); }); }
+      }, { rootMargin: '200px' });
+      io.observe(root);
+    }
+  }
+</script>
