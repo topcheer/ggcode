@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -15,49 +16,89 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-var readOnlyToolNames = map[string]bool{
+// sandboxToolGroups is the single source of truth for which built-in tools the
+// code_execution sandbox may call: it builds readOnlyToolNames (also the step
+// allowlist of define_tool / macro) AND the "Available tools" section of the
+// tool description, so the two can never drift apart again.
+//
+// Membership rule: a tool belongs here only if EVERY one of its actions is
+// read-only. Action-based tools whose write actions share the name with their
+// reads (config, intention, knowledge_graph, goal_graph, macro, define_tool,
+// merge_preflight, im, lanchat, a2a_*) are deliberately excluded; so are
+// browser / screenshot / desktop_control (side effects on the desktop) and
+// sleep (pointless under the 30 s run budget) and code_execution (recursion).
+//
+// History: the list was hand-maintained and had never been revisited, so a
+// `tools.list_memory(...)` call failed with a bare "TypeError: Object has no
+// member 'list_memory'" although list_memory is as read-only as grep.
+var sandboxToolGroups = []struct {
+	label string
+	names []string
+}{
+	{"files", []string{"read_file", "multi_file_read", "list_directory", "search_files", "grep", "glob", "code_search"}},
+	{"git", []string{"git_status", "git_diff", "git_log", "git_show", "git_blame", "git_branch_list", "git_remote", "git_stash_list", "pr_delta", "ci_status"}},
+	{"lsp", []string{
+		"lsp_hover", "lsp_definition", "lsp_references", "lsp_document_highlights", "lsp_implementation",
+		"lsp_symbols", "lsp_workspace_symbols", "lsp_diagnostics", "lsp_incoming_calls", "lsp_outgoing_calls", "lsp_prepare_call_hierarchy", "lsp_code_actions",
+	}},
+	{"code intelligence", []string{"symbols", "code_health", "dep_graph", "scan_todos", "review_changes", "why"}},
+	{"memory & recall", []string{"list_memory", "memory_recall", "recall_experience", "recall_toolflow", "recall_compacted", "session_recall"}},
+	{"background commands", []string{"list_commands", "read_command_output", "wait_command"}},
+	{"schedule & tasks", []string{"cron_list", "cron_get", "task_list", "task_get", "task_output"}},
+	{"agents & teams", []string{
+		"list_agents", "subagent_context", "list_namedagent", "list_worktree",
+		"team_list", "teammate_list", "teammate_results", "team_review_digest", "swarm_task_list",
+	}},
+	{"mcp", []string{"list_mcp_capabilities", "get_mcp_prompt", "read_mcp_resource"}},
+	{"runtime", []string{"runtime", "debug_log", "current_time"}},
+	{"web", []string{"web_search", "web_fetch"}},
+}
 
-	"read_file":       true,
-	"multi_file_read": true,
+var readOnlyToolNames = buildReadOnlyToolNames()
 
-	"search_files": true,
-	"grep":         true,
-	"glob":         true,
-	"code_search":  true,
+func buildReadOnlyToolNames() map[string]bool {
+	m := make(map[string]bool)
+	for _, g := range sandboxToolGroups {
+		for _, n := range g.names {
+			m[n] = true
+		}
+	}
+	return m
+}
 
-	"list_directory": true,
+// SandboxToolNames returns the built-in tools callable inside code_execution
+// (sorted). Tests and the self-check use it to assert the list against a real
+// registry; the model gets it at runtime through tools.names().
+func SandboxToolNames() []string {
+	names := make([]string, 0, len(readOnlyToolNames))
+	for n := range readOnlyToolNames {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
 
-	"git_status":      true,
-	"git_diff":        true,
-	"git_log":         true,
-	"git_show":        true,
-	"git_blame":       true,
-	"git_branch_list": true,
-	"git_remote":      true,
-	"git_stash_list":  true,
+// sandboxNoMemberPattern matches goja's error for `tools.X` when X was never
+// injected, e.g. "TypeError: Object has no member 'list_memory'".
+var sandboxNoMemberPattern = regexp.MustCompile(`Object has no member '([A-Za-z_$][A-Za-z0-9_$]*)'`)
 
-	"lsp_hover":                  true,
-	"lsp_definition":             true,
-	"lsp_references":             true,
-	"lsp_document_highlights":    true,
-	"lsp_implementation":         true,
-	"lsp_workspace_symbols":      true,
-	"lsp_diagnostics":            true,
-	"lsp_incoming_calls":         true,
-	"lsp_outgoing_calls":         true,
-	"lsp_prepare_call_hierarchy": true,
-	"lsp_code_actions":           true,
-
-	"runtime":               true,
-	"debug_log":             true,
-	"list_agents":           true,
-	"list_mcp_capabilities": true,
-	"read_mcp_resource":     true,
-	"task_list":             true,
-	"task_get":              true,
-
-	"web_search": true,
-	"web_fetch":  true,
+// friendlySandboxError turns goja's bare "Object has no member 'x'" into an
+// actionable message: whether x exists but is not read-only, and how to list
+// what IS callable here.
+func (c CodeExecution) friendlySandboxError(msg string) string {
+	m := sandboxNoMemberPattern.FindStringSubmatch(msg)
+	if m == nil {
+		return msg
+	}
+	name := m[1]
+	if c.Registry != nil {
+		if _, ok := c.Registry.Get(name); ok {
+			return fmt.Sprintf("tools.%s is not callable inside code_execution: it is not a read-only tool. "+
+				"Call it directly as a tool call after this sandbox run. Callable here: tools.names()", name)
+		}
+	}
+	return fmt.Sprintf("tools.%s does not exist - no tool with that name is registered. "+
+		"Callable here: tools.names()", name)
 }
 
 type CodeExecution struct {
@@ -67,29 +108,38 @@ type CodeExecution struct {
 func (CodeExecution) Name() string { return "code_execution" }
 
 func (CodeExecution) Description() string {
-	return `Execute JavaScript code in a sandbox to batch-call read-only tools, reducing context usage for multi-step analysis.
+	var b strings.Builder
+	b.WriteString(`Execute JavaScript code in a sandbox to batch-call read-only tools, reducing context usage for multi-step analysis.
 
-Available tools (call via await tools.NAME(args)):
-  read_file, multi_file_read, search_files, grep, glob, code_search, list_directory
-  git_status, git_diff, git_log, git_show, git_blame, git_branch_list, git_remote, git_stash_list
-  lsp_hover, lsp_definition, lsp_references, lsp_diagnostics, lsp_workspace_symbols, lsp_implementation, lsp_document_highlights, lsp_code_actions, lsp_incoming_calls, lsp_outgoing_calls, lsp_prepare_call_hierarchy
-  web_search, web_fetch, runtime, debug_log, list_agents, list_mcp_capabilities, read_mcp_resource, task_list, task_get
+Available tools (call via await tools.NAME(args)), generated from the sandbox allowlist:
+`)
+	for _, g := range sandboxToolGroups {
+		b.WriteString("  ")
+		b.WriteString(g.label)
+		b.WriteString(": ")
+		b.WriteString(strings.Join(g.names, ", "))
+		b.WriteString("\n")
+	}
+	b.WriteString(`
+Discover at runtime: JSON.parse(await tools.names()) -> sorted names; await tools.describe('grep') -> {name, description, parameters}.
+A tool missing from the list fails with "not callable inside code_execution" - call it as a direct tool call after the run.
 
 MCP tools: tools from read_only MCP servers are bridged into this sandbox:
   await tools['mcp__server__tool']({...})
-Discover them with JSON.parse(await tools.mcpList()) → [{name, description, sandbox}] (sandbox:true = callable here).
-Fetch one schema on demand: await tools.mcpDescribe('mcp__server__tool') → {name, description, parameters}.
-Large MCP results stay inside the sandbox — filter/map/reduce them in JS and console.log only summaries.
+Discover them with JSON.parse(await tools.mcpList()) -> [{name, description, sandbox}] (sandbox:true = callable here).
+Fetch one schema on demand: await tools.mcpDescribe('mcp__server__tool') -> {name, description, parameters}.
+Large MCP results stay inside the sandbox - filter/map/reduce them in JS and console.log only summaries.
 Budget: at most 30 MCP tool calls per run.
 
-Tool results are strings — use JSON.parse() if needed. async/await supported.
+Tool results are strings - use JSON.parse() if needed. async/await supported.
 console.log(...) output is returned to you.
 
 Example:
   const r = await tools.grep({pattern: "TODO", path: "/workspace"});
   console.log(r.split("\\n").length + " matches");
 
-Rules: Only read-only tools (MCP tools only from read_only servers). Execution timeout: 30 seconds.`
+Rules: Only read-only tools (MCP tools only from read_only servers). Execution timeout: 30 seconds (tools that wait, e.g. wait_command, share that budget).`)
+	return b.String()
 }
 
 func (CodeExecution) Parameters() json.RawMessage {
@@ -301,13 +351,47 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 		})
 	}
 
+	var callableNames []string
 	for toolName := range readOnlyToolNames {
 		t, ok := c.Registry.Get(toolName)
 		if !ok {
 			continue
 		}
 		injectSandboxTool(toolName, t, nil)
+		callableNames = append(callableNames, toolName)
 	}
+	sort.Strings(callableNames)
+
+	// Discovery helpers, so a missing member is a query away instead of a
+	// bare TypeError. describe() is limited to callable tools: a write tool's
+	// schema is not this sandbox's business.
+	toolsObj.Set("names", func(call goja.FunctionCall) goja.Value {
+		b, err := json.Marshal(callableNames)
+		if err != nil {
+			return rejectPromise(vm, fmt.Errorf("names failed: %v", err))
+		}
+		return resolvePromise(vm, string(b))
+	})
+	toolsObj.Set("describe", func(call goja.FunctionCall) goja.Value {
+		name := ""
+		if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) {
+			name = call.Arguments[0].ToString().String()
+		}
+		t, ok := c.Registry.Get(name)
+		if !ok || !readOnlyToolNames[name] {
+			return rejectPromise(vm, fmt.Errorf("%s is not callable inside code_execution (see tools.names())", name))
+		}
+		type toolDesc struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Parameters  json.RawMessage `json:"parameters"`
+		}
+		b, err := json.Marshal(toolDesc{Name: name, Description: t.Description(), Parameters: t.Parameters()})
+		if err != nil {
+			return rejectPromise(vm, fmt.Errorf("describe failed: %v", err))
+		}
+		return resolvePromise(vm, string(b))
+	})
 
 	mcpCalls := 0
 	for _, toolName := range c.Registry.ToolNames() {
@@ -432,20 +516,20 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 		return &execResult{
 			stdout:    stdout.String(),
 			toolCalls: toolCalls,
-		}, fmt.Errorf("%s", err.Error())
+		}, fmt.Errorf("%s", c.friendlySandboxError(err.Error()))
 	}
 
 	if asyncErr != "" {
 		return &execResult{
 			stdout:    stdout.String(),
 			toolCalls: toolCalls,
-		}, fmt.Errorf("%s", asyncErr)
+		}, fmt.Errorf("%s", c.friendlySandboxError(asyncErr))
 	}
 
 	if len(unhandledRejections) > 0 {
 		msgs := make([]string, 0, len(unhandledRejections))
 		for _, m := range unhandledRejections {
-			msgs = append(msgs, m)
+			msgs = append(msgs, c.friendlySandboxError(m))
 		}
 		sort.Strings(msgs)
 		return &execResult{
