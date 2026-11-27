@@ -10,6 +10,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type UseNamedAgentTool struct {
@@ -196,6 +197,7 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 			AllTools:            allToolInfo,
 			Task:                task,
 			AllowedTools:        allowedTools,
+			RootSessionID:       util.SessionIDFromContext(ctx),
 			Manager:             t.Manager,
 			SubAgentID:          id,
 			AgentFactory:        t.AgentFactory,

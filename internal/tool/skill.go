@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type SkillLookup interface {
@@ -250,6 +251,7 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 			Task:                task,
 			AllowedTools:        cmd.AllowedTools,
 			Manager:             mgr,
+			RootSessionID:       util.SessionIDFromContext(ctx),
 			SubAgentID:          id,
 			AgentFactory:        t.AgentFactory,
 			WorkingDir:          t.WorkingDir,

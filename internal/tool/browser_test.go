@@ -30,11 +30,19 @@ func TestBrowserToolInterface(t *testing.T) {
 		t.Fatal("schema missing properties")
 	}
 
-	requiredProps := []string{"action", "url", "profile", "session", "selector", "text", "expression", "wait_for", "headless", "description"}
+	requiredProps := []string{"action", "url", "session", "selector", "text", "expression", "wait_for", "headless", "description"}
 	for _, prop := range requiredProps {
 		if _, ok := props[prop]; !ok {
 			t.Errorf("schema missing property %q", prop)
 		}
+	}
+	// The Chrome profile is fixed per ggcode session (context-derived), not a
+	// tool argument; only the explicit shared-profile opt-in remains.
+	if _, ok := props["profile"]; ok {
+		t.Error(`schema must not expose a "profile" property`)
+	}
+	if _, ok := props["shared_profile"]; !ok {
+		t.Error(`schema missing property "shared_profile"`)
 	}
 
 	required, ok := schema["required"].([]interface{})
@@ -173,7 +181,7 @@ func TestRegistryCloseAll(t *testing.T) {
 	}
 }
 
-func TestBrowserSchemaHasProfileAndSession(t *testing.T) {
+func TestBrowserSchemaHasSharedProfileAndSession(t *testing.T) {
 	b := NewBrowser()
 	var schema map[string]interface{}
 	if err := json.Unmarshal(b.Parameters(), &schema); err != nil {
@@ -181,13 +189,16 @@ func TestBrowserSchemaHasProfileAndSession(t *testing.T) {
 	}
 	props := schema["properties"].(map[string]interface{})
 
-	profileDesc, _ := props["profile"].(map[string]interface{})
-	if profileDesc == nil {
-		t.Fatal("missing 'profile' property")
+	if _, ok := props["profile"]; ok {
+		t.Fatal(`schema must not expose a "profile" property - the profile is fixed per session`)
 	}
-	descStr, _ := profileDesc["description"].(string)
-	if !strings.Contains(strings.ToLower(descStr), "profile") {
-		t.Errorf("profile description should mention profiles, got: %s", descStr)
+	sharedDesc, _ := props["shared_profile"].(map[string]interface{})
+	if sharedDesc == nil {
+		t.Fatal("missing 'shared_profile' property")
+	}
+	descStr, _ := sharedDesc["description"].(string)
+	if !strings.Contains(strings.ToLower(descStr), "profile") || !strings.Contains(strings.ToLower(descStr), "session") {
+		t.Errorf("shared_profile description should explain the per-session profile, got: %s", descStr)
 	}
 
 	if _, ok := props["session"]; !ok {

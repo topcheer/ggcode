@@ -22,6 +22,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type DiffConfirmFunc func(ctx context.Context, filePath, diffText string) bool
@@ -1233,6 +1234,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.mu.RLock()
 	sid := a.sessionID
 	a.mu.RUnlock()
+	// Carry the session id on the run context so per-session resources
+	// resolve from the call (the browser profile, internal/tool/browser.go).
+	// Ensure, not Set: a sub-agent's run inherits the spawning session's id
+	// through its context and must keep it - otherwise every spawn would get
+	// its own profile directory.
+	ctx = util.EnsureSessionID(ctx, sid)
 	MarkRunning(sid, userPromptForStatsSafe(content), os.Getpid())
 
 	defer maybePersistSpecPatterns(a.speculator)
