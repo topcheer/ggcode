@@ -11,7 +11,7 @@ The repository uses a **tag-driven release flow**:
 3. Create and push a tag named `vX.Y.Z`.
 4. GitHub Actions publishes binaries, OS packages, and the static download mirror.
 
-The main release workflow is `.github/workflows/release.yml`. It triggers on:
+The main release workflow is `.github/workflows/release-mas.yml` ("Release MAS"; there is no `release.yml`). It triggers on:
 
 - `push.tags: ["v*"]` for real releases
 - `workflow_dispatch` for manual packaging / dry-run style jobs
@@ -24,7 +24,7 @@ At a minimum, check these files before tagging:
 | --- | --- |
 | GitHub release notes body | `docs/releases/vX.Y.Z.md` |
 | Release notes index pointer | `docs/releases/README.md` |
-| Project quick reference pointer | `GGCODE.md` |
+| Project quick reference pointer | `AGENTS.md` (`| Current release | vX.Y.Z |` row; `GGCODE.md` carries no release pointer) |
 
 Notes:
 
@@ -60,7 +60,7 @@ https://github.com/topcheer/ggcode/compare/vPREV...vNEXT
 
 For a normal release, bump these version references together:
 
-1. `GGCODE.md` → latest documented release pointer
+1. `AGENTS.md` → the `| Current release | vX.Y.Z |` row
 2. `docs/releases/README.md` → current release notes pointer
 
 ### 3.3 Sync the model capability table
@@ -201,9 +201,42 @@ Why this order matters:
 2. The tag is what triggers the release workflow.
 3. Pushing the tag before the release commit is on `main` is easy to avoid and makes the history harder to reason about.
 
+**`main` is a protected branch.** A direct `git push origin main` is only accepted from an
+identity that holds the bypass (the repository admin); any other identity gets
+
+```
+remote: error: GH006: Protected branch update failed for refs/heads/main.
+remote: - Changes must be made through a pull request.
+```
+
+while the tag push in the next step succeeds from either identity - the result is a tag whose
+release commit is not on `main`. So either push `main` with the admin identity (as the
+v1.3.294 and v1.3.295 releases did), or open a PR for the release commit and merge it before
+tagging. Before tagging, confirm the commit landed:
+
+```bash
+git ls-remote origin refs/heads/main   # must print the release commit
+```
+
+### 4.1 Mac App Store review slot
+
+A `v*` tag also runs `deploy-mas.yml`, which uploads GGCode Desktop to App Store Connect and
+submits it through `scripts/release/mas-submit-review.sh`. ASC allows one version of an app
+in the review slot at a time, and the script handles that slot itself:
+
+- a **`WAITING_FOR_REVIEW`** version of the same app is developer-rejected and replaced by the
+  new build (v1.3.295 took over the slot v1.3.294 was waiting in), so a desktop version waiting
+  for review does **not** block cutting a tag;
+- an **`IN_REVIEW`** version cannot be developer-rejected - the script fails fast
+  (`version X is IN_REVIEW ... wait for the review to complete, then re-run`). Do not tag while
+  GGCode Desktop is actively being reviewed; wait for that review to finish first.
+
+Do not build "wait for approval, then release" automation around the desktop review state.
+
+
 ## 5. What the release workflow does
 
-The main workflow is `.github/workflows/release.yml`.
+The main workflow is `.github/workflows/release-mas.yml` ("Release MAS").
 
 ### 5.1 `verify`
 
@@ -391,7 +424,7 @@ Use this checklist for every real release:
 
 1. Finish code changes.
 2. Create `docs/releases/vX.Y.Z.md`.
-3. Update `GGCODE.md` release pointer.
+3. Update the `AGENTS.md` `Current release` pointer.
 4. Update `docs/releases/README.md` current pointer.
 5. **Every release** (every tag builds and ships mobile): `cd mobile/flutter && bash scripts/version_sync.sh X.Y.Z` then stage the four updated files.
 6. Run `make sync-model-caps` and stage any diff in `internal/config/` (see §3.3).
@@ -400,11 +433,13 @@ Use this checklist for every real release:
 9. Commit `release: vX.Y.Z`.
 10. Push `main`.
 11. Create and push tag `vX.Y.Z`.
-12. Monitor GitHub Actions — **all workflows must reach `completed` / `success` before the release is considered done**:
-    - `Release` (verify → release → smoke tests → macos-pkg → windows-msi → publish-site-release-branch)
-    - `CI` (build → vet → test)
-    - `CodeQL` (security scan)
+12. Monitor GitHub Actions — **all workflows must reach `completed` / `success` before the release is considered done**. A `v*` tag fans out to (check with `gh run list --branch vX.Y.Z`):
+    - `Release MAS` (verify → GoReleaser → smoke tests → macos-pkg → windows-msi → desktop builds → Homebrew Cask / winget → publish-site-release-branch)
     - `Mobile Release` (verify → build & deploy Android / iOS; runs on every `v*` tag)
+    - `Deploy Mac App Store` (GGCode Desktop: build, sign, upload, submit for review - see §4.1)
+    - `docker-release` (container images)
+    - `store-submission` (Microsoft Store)
+    - on `main`: `CI` (build → vet → test) and `CodeQL` (security scan)
 13. If any workflow fails:
     - `gh run view <run-id> --log-failed` to identify root cause
     - Fix the issue locally, commit, push to `main`
@@ -557,9 +592,11 @@ In manual mode:
 
 If this document and the automation disagree, trust the code in:
 
-1. `.github/workflows/release.yml`
+1. `.github/workflows/release-mas.yml`
 2. `.github/workflows/site-release.yml`
-3. `.goreleaser.yaml`
-4. `scripts/dev/verify-ci.sh`
-5. `scripts/release/render-notes.sh`
-6. `scripts/release/publish-site-branch.sh`
+3. `.github/workflows/deploy-mas.yml` and `scripts/release/mas-submit-review.sh` (Mac App Store upload + review slot)
+4. `.github/workflows/mobile-release.yml`
+5. `.goreleaser.yaml`
+6. `scripts/dev/verify-ci.sh`
+7. `scripts/release/render-notes.sh`
+8. `scripts/release/publish-site-branch.sh`
