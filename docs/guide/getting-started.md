@@ -29,6 +29,16 @@ Warning: onboarding finished without a usable API key for deepseek/api.
     - add it to ~/.ggcode/keys.env as: export DEEPSEEK_API_KEY='<your key>'
 ```
 
+A headless start (`--plain`, `TERM=dumb`, or no TTY) prints the same remediation **before** the
+first message instead of letting it fail with 401:
+
+```
+[notice] no usable API key for deepseek/api - the first message will fail with 401.
+  Fix it with `ggcode onboard`, or without the wizard:
+    - export DEEPSEEK_API_KEY='<your key>', or
+    - add it to ~/.ggcode/keys.env as: export DEEPSEEK_API_KEY='<your key>'
+```
+
 Re-run the wizard at any time with `ggcode onboard` (to fix a key or switch provider). Onboarding
 does not re-open on its own once a config file exists; `GGCODE_SKIP_AUTOCONFIG` disables every
 automatic configuration decision, and a loopback base URL or `auth_type: none` endpoint needs no key.

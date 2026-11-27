@@ -1000,6 +1000,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 
 	if plain || isDumbTerminal() {
 		trace.Mark("linear frontend fork")
+		// stdout, not stderr: the linear frontend's channel is stdout and stderr
+		// is discarded in this mode (verified: a Fprintln to os.Stderr in
+		// RunLinearREPL never reaches the terminal), so a stderr warning would be
+		// invisible exactly where it is needed.
+		warnPlainFrontendMissingKey(os.Stdout, cfg)
 		code := RunLinearREPL(ag, registry, cfg, cfgFile, startupNotices)
 		if code != 0 {
 			debug.Close()
