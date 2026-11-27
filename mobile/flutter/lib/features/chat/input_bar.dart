@@ -1,4 +1,5 @@
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // Iteration 17: HapticFeedback
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -29,6 +30,15 @@ class _InputBarState extends ConsumerState<InputBar>
   late final AnimationController _busyPulseController;
   final List<_PendingImage> _pendingImages = [];
   final ImagePicker _imagePicker = ImagePicker();
+
+  // M9: pending thumbnails were base64Decode'd inside build on every rebuild
+  // (every keystroke). Decode once when the image is picked.
+  final Map<String, Uint8List> _decodedThumbnails = <String, Uint8List>{};
+
+  Uint8List _thumbnailBytes(_PendingImage img) =>
+      _decodedThumbnails[img.base64Data] ??= base64Decode(img.base64Data);
+
+  bool _wasEmpty = true;
 
   @override
   void initState() {
@@ -68,11 +78,9 @@ class _InputBarState extends ConsumerState<InputBar>
       if (ext == 'gif') mime = 'image/gif';
       if (ext == 'webp') mime = 'image/webp';
       setState(() {
-        _pendingImages.add(_PendingImage(
-          mime: mime,
-          base64Data: base64Data,
-          name: picked.name,
-        ));
+        _pendingImages.add(
+          _PendingImage(mime: mime, base64Data: base64Data, name: picked.name),
+        );
       });
     } catch (e) {
       // Silently ignore picker errors (user cancelled, permission denied, etc.)
@@ -87,7 +95,9 @@ class _InputBarState extends ConsumerState<InputBar>
 
   @override
   Widget build(BuildContext context) {
-    watchAppTheme(ref); // re-run on theme switch: AppColors is static/non-reactive
+    watchAppTheme(
+      ref,
+    ); // re-run on theme switch: AppColors is static/non-reactive
     final status = ref.watch(displayedAgentStatusProvider);
     final isRunning = status == 'busy';
     final canSend = ref.watch(canSendMessagesProvider);
@@ -96,7 +106,8 @@ class _InputBarState extends ConsumerState<InputBar>
     final inputEnabled = canSend;
     if (isRunning) {
       if (!_busyPulseController.isAnimating) {
-        _busyPulseController.repeat(reverse: true);
+        if (!AppMotion.reduceMotion(context))
+          _busyPulseController.repeat(reverse: true);
       }
     } else if (_busyPulseController.isAnimating) {
       _busyPulseController.stop();
@@ -114,13 +125,13 @@ class _InputBarState extends ConsumerState<InputBar>
     }
 
     final hasImages = _pendingImages.isNotEmpty;
-    final canSubmit = inputEnabled && (widget.controller.text.trim().isNotEmpty || hasImages);
+    final canSubmit =
+        inputEnabled && (widget.controller.text.trim().isNotEmpty || hasImages);
+    _wasEmpty = widget.controller.text.trim().isEmpty;
 
     return Container(
       padding: EdgeInsets.fromLTRB(12, 8, 12, 14),
-      decoration: BoxDecoration(
-        color: AppColors.background,
-      ),
+      decoration: BoxDecoration(color: AppColors.background),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -140,9 +151,11 @@ class _InputBarState extends ConsumerState<InputBar>
                       ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: Image.memory(
-                          base64Decode(img.base64Data),
+                          _thumbnailBytes(img),
                           width: 64,
                           height: 64,
+                          cacheWidth: 128,
+                          gaplessPlayback: true,
                           fit: BoxFit.cover,
                         ),
                       ),
@@ -151,13 +164,20 @@ class _InputBarState extends ConsumerState<InputBar>
                         right: 2,
                         child: GestureDetector(
                           onTap: () => _removeImage(index),
+                          behavior: HitTestBehavior.opaque,
                           child: Container(
-                            padding: const EdgeInsets.all(2),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.6),
+                            width: 32,
+                            height: 32,
+                            alignment: Alignment.center,
+                            decoration: const BoxDecoration(
+                              color: Colors.black54,
                               shape: BoxShape.circle,
                             ),
-                            child: Icon(Icons.close, size: 14, color: Colors.white),
+                            child: const Icon(
+                              Icons.close,
+                              size: 16,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                       ),
@@ -174,7 +194,7 @@ class _InputBarState extends ConsumerState<InputBar>
                 icon: Icons.add_photo_alternate,
                 color: inputEnabled ? AppColors.accent : AppColors.textMuted,
                 onPressed: inputEnabled ? () => _showImageSourceDialog() : null,
-                tooltip: 'Attach Image',
+                tooltip: t('chat.attach_image'),
               ),
               SizedBox(width: 10),
               Expanded(
@@ -183,10 +203,13 @@ class _InputBarState extends ConsumerState<InputBar>
                   builder: (context, child) {
                     final pulse = _busyPulseController.value;
                     final borderColor = isRunning
-                        ? AppColors.accent.withValues(alpha: 0.60 + pulse * 0.20)
+                        ? AppColors.accent.withValues(
+                            alpha: 0.60 + pulse * 0.20,
+                          )
                         : AppColors.border;
-                    final shadowColor = AppColors.accent
-                        .withValues(alpha: isRunning ? 0.10 + pulse * 0.18 : 0);
+                    final shadowColor = AppColors.accent.withValues(
+                      alpha: isRunning ? 0.10 + pulse * 0.18 : 0,
+                    );
                     return DecoratedBox(
                       decoration: BoxDecoration(
                         color: AppColors.surface,
@@ -207,7 +230,10 @@ class _InputBarState extends ConsumerState<InputBar>
                   },
                   child: TextField(
                     controller: widget.controller,
-                    style: TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                    style: TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 14,
+                    ),
                     decoration: InputDecoration(
                       hintText: hintText,
                       hintStyle: TextStyle(color: AppColors.textMuted),
@@ -228,30 +254,59 @@ class _InputBarState extends ConsumerState<InputBar>
                       contentPadding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
                     ),
                     enabled: inputEnabled,
-                    onChanged: (_) => setState(() {}),
-                    onSubmitted: (_) => _send(),
+                    // M7: multi-line composer (was single-line with
+                    // onSubmitted: _send, so multi-line prompts were impossible).
+                    minLines: 1,
+                    maxLines: 6,
+                    keyboardType: TextInputType.multiline,
+                    textInputAction: TextInputAction.newline,
+                    // M10: rebuild only when the empty/non-empty state flips,
+                    // not on every keystroke.
+                    onChanged: (v) {
+                      final empty = v.trim().isEmpty;
+                      if (empty != _wasEmpty) {
+                        setState(() => _wasEmpty = empty);
+                      }
+                    },
                   ),
                 ),
               ),
               SizedBox(width: 10),
-              if (isRunning && canSend)
-                _ActionButton(
-                  icon: Icons.stop_circle,
-                  color: AppColors.danger,
-                  onPressed: () {
-                    ref.read(connectionProvider.notifier).send({
-                      'type': 'interrupt',
-                      'data': {},
-                    });
-                  },
-                  tooltip: 'Interrupt',
-                )
-              else if (canSend)
-                _ActionButton(
-                  icon: Icons.send,
-                  color: canSubmit ? AppColors.accent : AppColors.textMuted,
-                  onPressed: canSubmit ? _send : null,
-                  tooltip: 'Send',
+              if (canSend)
+                AnimatedSwitcher(
+                  duration: AppMotion.duration(context, AppMotion.micro),
+                  switchInCurve: AppMotion.standard,
+                  switchOutCurve: AppMotion.accelerate,
+                  transitionBuilder: (child, anim) => FadeTransition(
+                    opacity: anim,
+                    child: ScaleTransition(
+                      scale: Tween(begin: 0.85, end: 1.0).animate(anim),
+                      child: child,
+                    ),
+                  ),
+                  child: isRunning
+                      ? _ActionButton(
+                          key: const ValueKey('stop'),
+                          icon: Icons.stop_circle,
+                          color: AppColors.danger,
+                          onPressed: () {
+                            HapticFeedback.mediumImpact();
+                            ref.read(connectionProvider.notifier).send({
+                              'type': 'interrupt',
+                              'data': {},
+                            });
+                          },
+                          tooltip: t('chat.interrupt'),
+                        )
+                      : _ActionButton(
+                          key: const ValueKey('send'),
+                          icon: Icons.send,
+                          color: canSubmit
+                              ? AppColors.accent
+                              : AppColors.textMuted,
+                          onPressed: canSubmit ? _send : null,
+                          tooltip: t('chat.send'),
+                        ),
                 ),
             ],
           ),
@@ -299,11 +354,13 @@ class _InputBarState extends ConsumerState<InputBar>
 
     // Convert pending images to proto format
     final images = _pendingImages
-        .map((img) => proto.MessageImage(
-              mime: img.mime,
-              data: img.base64Data,
-              name: img.name,
-            ))
+        .map(
+          (img) => proto.MessageImage(
+            mime: img.mime,
+            data: img.base64Data,
+            name: img.name,
+          ),
+        )
         .toList();
     // #2847: wrap the clear in setState — controller.clear() is a
     // programmatic change that does NOT fire TextField.onChanged, so
@@ -325,6 +382,7 @@ class _ActionButton extends StatelessWidget {
   final String tooltip;
 
   const _ActionButton({
+    super.key,
     required this.icon,
     required this.color,
     required this.onPressed,

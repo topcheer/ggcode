@@ -23,6 +23,16 @@ class _Palette {
   final Color warning;
   final Color danger;
 
+  /// Text colour that passes WCAG AA on [accent]. Light-blue accents
+  /// (luminance > 0.3) need dark text; saturated/dark accents need white.
+  /// The user bubble used to paint textPrimary on the gradient, which was
+  /// 2.25:1 on Midnight and 2.85:1 on Light (review M4).
+  Color get onAccent => accent.computeLuminance() > 0.3
+      ? const Color(0xFF0A1432)
+      : const Color(0xFFFFFFFF);
+
+  bool get isLight => background.computeLuminance() > 0.5;
+
   const _Palette({
     required this.background,
     required this.backgroundElevated,
@@ -185,6 +195,8 @@ class AppColors {
   static Color get textMuted => _current.textMuted;
   static Color get accent => _current.accent;
   static Color get accentSoft => _current.accentSoft;
+  static Color get onAccent => _current.onAccent;
+  static bool get isLight => _current.isLight;
   static Color get success => _current.success;
   static Color get warning => _current.warning;
   static Color get danger => _current.danger;
@@ -241,14 +253,59 @@ class AppRadii {
   static const double lg = 24;
 }
 
-class AppShadows {
-  static const panel = [
-    BoxShadow(
-      color: Color(0x26000000),
-      blurRadius: 24,
-      offset: Offset(0, 10),
-    ),
+/// Monospace stack. iOS has no family literally called "monospace", so code
+/// blocks silently fell back to the proportional default there (review M14).
+class AppFonts {
+  static const String mono = 'monospace';
+  static const List<String> monoFallback = [
+    'Roboto Mono',
+    'Menlo',
+    'Consolas',
+    'Courier New',
   ];
+}
+
+class AppShadows {
+  static const _lightPanel = [
+    BoxShadow(color: Color(0x1A000000), blurRadius: 12, offset: Offset(0, 4)),
+  ];
+
+  /// Elevation for cards/bubbles. On dark palettes a 15% black blur is
+  /// invisible but every row still paid for the blur layer, so dark themes
+  /// render no shadow at all (review M15).
+  static List<BoxShadow> get panel => _current.isLight ? _lightPanel : const [];
+}
+
+/// Motion spec shared by every animated widget (review §4). Durations are
+/// tiered; [duration] collapses them to zero under the platform's
+/// "reduce motion" setting.
+abstract final class AppMotion {
+  static const Duration micro = Duration(
+    milliseconds: 110,
+  ); // send<->stop, copy, ripples
+  static const Duration base = Duration(
+    milliseconds: 160,
+  ); // most state changes
+  static const Duration enter = Duration(
+    milliseconds: 220,
+  ); // sheets, banners, FAB, overlays
+  static const Duration exit = Duration(
+    milliseconds: 150,
+  ); // always shorter than enter
+  static const Duration emphasis = Duration(
+    milliseconds: 300,
+  ); // page-level transitions
+
+  static const Curve standard = Curves.easeOutCubic;
+  static const Curve decelerate = Cubic(0.16, 1, 0.3, 1);
+  static const Curve accelerate = Cubic(0.4, 0, 1, 1);
+
+  static bool reduceMotion(BuildContext context) =>
+      MediaQuery.disableAnimationsOf(context) ||
+      MediaQuery.of(context).accessibleNavigation;
+
+  static Duration duration(BuildContext context, Duration d) =>
+      reduceMotion(context) ? Duration.zero : d;
 }
 
 // ─── Build ThemeData from current palette ────────────
@@ -257,21 +314,41 @@ ThemeData buildAppTheme() {
   final p = _current;
   final isLight = p.background.computeLuminance() > 0.5;
 
-  final colorScheme = ColorScheme(
-    brightness: isLight ? Brightness.light : Brightness.dark,
-    primary: p.accent,
-    onPrimary: isLight ? const Color(0xFFFFFFFF) : const Color(0xFF0A1432),
-    secondary: p.accentSoft,
-    onSecondary: p.textPrimary,
-    surface: p.surface,
-    onSurface: p.textPrimary,
-    error: p.danger,
-    onError: p.textPrimary,
-  );
+  // M13: a raw ColorScheme with 8 roles left surfaceContainer*, onSurfaceVariant
+  // and outline to fall back to surface/onSurface/onBackground, so Cards had no
+  // tonal depth and outlines rendered as strong as body text. Seeding from the
+  // accent fills every role, then the palette overrides the brand roles.
+  final brightness = isLight ? Brightness.light : Brightness.dark;
+  final colorScheme =
+      ColorScheme.fromSeed(
+        seedColor: p.accent,
+        brightness: brightness,
+      ).copyWith(
+        primary: p.accent,
+        onPrimary: p.onAccent,
+        secondary: p.accentSoft,
+        onSecondary: p.onAccent,
+        surface: p.surface,
+        onSurface: p.textPrimary,
+        onSurfaceVariant: p.textSecondary,
+        onBackground: p.textPrimary,
+        outline: p.borderStrong,
+        outlineVariant: p.border,
+        error: p.danger,
+        onError: p.onAccent == const Color(0xFFFFFFFF)
+            ? const Color(0xFFFFFFFF)
+            : const Color(0xFF1A0000),
+        surfaceContainerLowest: p.background,
+        surfaceContainerLow: p.backgroundElevated,
+        surfaceContainer: p.surface,
+        surfaceContainerHigh: p.surfaceElevated,
+        surfaceContainerHighest: p.surfaceMuted,
+      );
 
   return ThemeData(
     useMaterial3: true,
     colorScheme: colorScheme,
+    visualDensity: VisualDensity.standard,
     scaffoldBackgroundColor: p.background,
     dividerColor: p.border,
     dialogTheme: DialogThemeData(
@@ -308,15 +385,8 @@ ThemeData buildAppTheme() {
       ),
     ),
     textTheme: TextTheme(
-      bodyMedium: TextStyle(
-        color: p.textPrimary,
-        fontSize: 14,
-        height: 1.45,
-      ),
-      bodySmall: TextStyle(
-        color: p.textSecondary,
-        fontSize: 12,
-      ),
+      bodyMedium: TextStyle(color: p.textPrimary, fontSize: 14, height: 1.45),
+      bodySmall: TextStyle(color: p.textSecondary, fontSize: 12),
       titleMedium: TextStyle(
         color: p.textPrimary,
         fontSize: 16,

@@ -13,8 +13,12 @@ import '../../core/theme/app_theme.dart';
 enum WindowSizeClass { compact, expanded }
 
 WindowSizeClass windowSizeClassOf(BuildContext context) {
-  final width = MediaQuery.sizeOf(context).width;
-  return width >= 600 ? WindowSizeClass.expanded : WindowSizeClass.compact;
+  final size = MediaQuery.sizeOf(context);
+  // M16: width-only made a phone in landscape (e.g. 844x390) get the 300px
+  // rail and left ~190px for messages. Require both dimensions.
+  return size.width >= 600 && size.height >= 600
+      ? WindowSizeClass.expanded
+      : WindowSizeClass.compact;
 }
 
 /// Persistent master list for expanded widths (#4585): workspaces with
@@ -107,10 +111,12 @@ class WorkspaceGroupState extends State<WorkspaceGroup> {
 
   @override
   Widget build(BuildContext context) {
-    final hasLiveSession =
-        widget.sessions.any((s) => s.sessionId == widget.liveSessionId);
-    final hasBackgroundLive =
-        widget.sessions.any((s) => widget.liveSessionIds.contains(s.sessionId));
+    final hasLiveSession = widget.sessions.any(
+      (s) => s.sessionId == widget.liveSessionId,
+    );
+    final hasBackgroundLive = widget.sessions.any(
+      (s) => widget.liveSessionIds.contains(s.sessionId),
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -128,7 +134,7 @@ class WorkspaceGroupState extends State<WorkspaceGroup> {
               Icon(
                 _expanded ? Icons.folder_open : Icons.folder,
                 color: widget.isActiveWorkspace
-                    ? Colors.blueAccent
+                    ? AppColors.accent
                     : AppColors.textSecondary,
                 size: 20,
               ),
@@ -138,7 +144,7 @@ class WorkspaceGroupState extends State<WorkspaceGroup> {
                   width: 6,
                   height: 6,
                   decoration: BoxDecoration(
-                    color: Colors.greenAccent,
+                    color: AppColors.success,
                     shape: BoxShape.circle,
                   ),
                 ),
@@ -148,7 +154,7 @@ class WorkspaceGroupState extends State<WorkspaceGroup> {
                   width: 6,
                   height: 6,
                   decoration: BoxDecoration(
-                    color: Colors.orangeAccent,
+                    color: AppColors.warning,
                     shape: BoxShape.circle,
                   ),
                 ),
@@ -172,10 +178,7 @@ class WorkspaceGroupState extends State<WorkspaceGroup> {
                   widget.workspace.parentPath!.isNotEmpty)
                 Text(
                   widget.workspace.parentPath!,
-                  style: TextStyle(
-                    color: AppColors.textMuted,
-                    fontSize: 11,
-                  ),
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 11),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -188,8 +191,7 @@ class WorkspaceGroupState extends State<WorkspaceGroup> {
               if (widget.isActiveWorkspace)
                 Padding(
                   padding: EdgeInsets.only(right: 4),
-                  child: const Icon(Icons.check,
-                      color: Colors.blueAccent, size: 18),
+                  child: Icon(Icons.check, color: AppColors.accent, size: 18),
                 ),
               Icon(
                 _expanded ? Icons.expand_less : Icons.expand_more,
@@ -200,102 +202,126 @@ class WorkspaceGroupState extends State<WorkspaceGroup> {
           ),
           onTap: () => setState(() => _expanded = !_expanded),
         ),
-        // Sessions underneath
-        if (_expanded && widget.sessions.isNotEmpty)
-          Padding(
-            padding: EdgeInsets.only(left: 16),
-            child: Column(
-              children: [
-                for (final session in widget.sessions)
-                  ListTile(
-                    dense: true,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    tileColor:
-                        AppColors.backgroundElevated.withValues(alpha: 0.25),
-                    contentPadding: EdgeInsets.only(left: 8, right: 8),
-                    leading: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          session.sessionId == widget.liveSessionId
-                              ? Icons.bolt
-                              : Icons.chat_bubble_outline,
-                          color: session.sessionId == widget.liveSessionId
-                              ? Colors.greenAccent
-                              : (widget.liveSessionIds
-                                      .contains(session.sessionId)
-                                  ? Colors.orangeAccent
-                                  : AppColors.textMuted),
-                          size: 16,
-                        ),
-                        if (session.sessionId == widget.liveSessionId ||
-                            widget.liveSessionIds.contains(session.sessionId))
-                          Container(
-                            margin: EdgeInsets.only(left: 2),
-                            width: 5,
-                            height: 5,
-                            decoration: BoxDecoration(
-                              color: session.sessionId == widget.liveSessionId
-                                  ? Colors.greenAccent
-                                  : Colors.orangeAccent,
-                              shape: BoxShape.circle,
+        // Sessions underneath (M5: animated expand/collapse)
+        AnimatedSize(
+          duration: AppMotion.duration(context, AppMotion.base),
+          curve: AppMotion.standard,
+          alignment: Alignment.topCenter,
+          child: _expanded && widget.sessions.isNotEmpty
+              ? Padding(
+                  padding: EdgeInsets.only(left: 16),
+                  child: Column(
+                    children: [
+                      for (final session in widget.sessions)
+                        ListTile(
+                          dense: true,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          tileColor: AppColors.backgroundElevated.withValues(
+                            alpha: 0.25,
+                          ),
+                          contentPadding: EdgeInsets.only(left: 8, right: 8),
+                          leading: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                session.sessionId == widget.liveSessionId
+                                    ? Icons.bolt
+                                    : Icons.chat_bubble_outline,
+                                color: session.sessionId == widget.liveSessionId
+                                    ? AppColors.success
+                                    : (widget.liveSessionIds.contains(
+                                            session.sessionId,
+                                          )
+                                          ? AppColors.warning
+                                          : AppColors.textMuted),
+                                size: 16,
+                              ),
+                              if (session.sessionId == widget.liveSessionId ||
+                                  widget.liveSessionIds.contains(
+                                    session.sessionId,
+                                  ))
+                                Container(
+                                  margin: EdgeInsets.only(left: 2),
+                                  width: 5,
+                                  height: 5,
+                                  decoration: BoxDecoration(
+                                    color:
+                                        session.sessionId ==
+                                            widget.liveSessionId
+                                        ? AppColors.success
+                                        : AppColors.warning,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                            ],
+                          ),
+                          title: Text(
+                            () {
+                              // Prefer host-provided session title
+                              if (session.title.isNotEmpty) {
+                                return session.title;
+                              }
+                              // Fallback: workspace name + date
+                              final wsName = _displayNameFromKeyForSession(
+                                widget.workspace.key,
+                                widget.workspace.displayName,
+                              );
+                              final date = session.sessionId.length >= 8
+                                  ? session.sessionId.substring(0, 8)
+                                  : session.sessionId;
+                              return '$wsName · $date';
+                            }(),
+                            style: TextStyle(
+                              color: AppColors.textPrimary,
+                              fontSize: 13,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            session.model.isNotEmpty
+                                ? '${session.provider} / ${session.model}'
+                                : session.provider,
+                            style: TextStyle(
+                              color: AppColors.textMuted,
+                              fontSize: 11,
                             ),
                           ),
-                      ],
-                    ),
-                    title: Text(
-                      () {
-                        // Prefer host-provided session title
-                        if (session.title.isNotEmpty) {
-                          return session.title;
-                        }
-                        // Fallback: workspace name + date
-                        final wsName = _displayNameFromKeyForSession(
-                            widget.workspace.key, widget.workspace.displayName);
-                        final date = session.sessionId.length >= 8
-                            ? session.sessionId.substring(0, 8)
-                            : session.sessionId;
-                        return '$wsName · $date';
-                      }(),
-                      style: TextStyle(
-                        color: AppColors.textPrimary,
-                        fontSize: 13,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(
-                      session.model.isNotEmpty
-                          ? '${session.provider} / ${session.model}'
-                          : session.provider,
-                      style:
-                          TextStyle(color: AppColors.textMuted, fontSize: 11),
-                    ),
-                    trailing: session.sessionId == widget.liveSessionId
-                        ? Text(t('chat.live'),
-                            style: TextStyle(
-                              color: Colors.greenAccent,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                            ))
-                        : (widget.liveSessionIds.contains(session.sessionId)
-                            ? Text('online',
-                                style: TextStyle(
-                                  color: Colors.orangeAccent,
-                                  fontSize: 10,
-                                ))
-                            : Text(_formatTimeAgo(session.lastUpdatedAt),
-                                style: TextStyle(
-                                  color: AppColors.textMuted,
-                                  fontSize: 10,
-                                ))),
-                    onTap: () => widget.onSessionTap(session),
+                          trailing: session.sessionId == widget.liveSessionId
+                              ? Text(
+                                  t('chat.live'),
+                                  style: TextStyle(
+                                    color: AppColors.success,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                )
+                              : (widget.liveSessionIds.contains(
+                                      session.sessionId,
+                                    )
+                                    ? Text(
+                                        'online',
+                                        style: TextStyle(
+                                          color: AppColors.warning,
+                                          fontSize: 10,
+                                        ),
+                                      )
+                                    : Text(
+                                        _formatTimeAgo(session.lastUpdatedAt),
+                                        style: TextStyle(
+                                          color: AppColors.textMuted,
+                                          fontSize: 10,
+                                        ),
+                                      )),
+                          onTap: () => widget.onSessionTap(session),
+                        ),
+                    ],
                   ),
-              ],
-            ),
-          ),
+                )
+              : const SizedBox.shrink(),
+        ),
       ],
     );
   }

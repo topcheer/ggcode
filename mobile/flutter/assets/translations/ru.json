@@ -69,5 +69,9 @@
   "chat.copied": "Скопировано",
   "chat.select_all": "Выбрать всё",
   "codeblock.show_more": "Показать ещё ({count} строк)",
-  "codeblock.show_less": "Свернуть"
+  "codeblock.show_less": "Свернуть",
+  "chat.send": "Отправить",
+  "chat.interrupt": "Прервать",
+  "chat.attach_image": "Прикрепить изображение",
+  "chat.close_tab": "Закрыть вкладку"
 }

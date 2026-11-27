@@ -95,3 +95,11 @@ Desktop-specific shortcuts:
 | `⌘+` / `⌘-` / `⌘0` | Zoom in / out / reset |
 | `⌘1`-`⌘7` | Switch view (chat, files, IM, MCP, settings, debug, LAN chat) |
 | `?` | Show keyboard shortcuts |
+
+Behavior notes (v1.3.297):
+
+- `⌘+` / `⌘-` / `⌘0` scale the whole interface (CSS zoom); the setting is persisted per install.
+- `⌘7` opens LAN Chat and `⌘8` opens Scheduled Tasks (the nav rail labels follow the platform modifier: `⌘` on macOS, `Ctrl+` elsewhere).
+- While an IME composition is active (for example Pinyin candidate selection), `Enter` and `Escape` keep their IME meaning - they never send the message or cancel the run.
+- The tool-approval dialog takes keyboard focus when it opens: `Enter` = allow, `Shift+Enter` = always allow, `Esc` = deny, but only while focus is inside the dialog and never during the first 400 ms. Typing in the composer when an approval appears can no longer approve it.
+- Fonts are bundled with the app (no network needed on first launch); Chinese text falls back to PingFang / Microsoft YaHei / Noto Sans CJK.

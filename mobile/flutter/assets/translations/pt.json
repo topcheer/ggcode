@@ -69,5 +69,9 @@
   "chat.copied": "Copiado",
   "chat.select_all": "Selecionar tudo",
   "codeblock.show_more": "Mostrar mais ({count} linhas)",
-  "codeblock.show_less": "Mostrar menos"
+  "codeblock.show_less": "Mostrar menos",
+  "chat.send": "Enviar",
+  "chat.interrupt": "Interromper",
+  "chat.attach_image": "Anexar imagem",
+  "chat.close_tab": "Fechar aba"
 }

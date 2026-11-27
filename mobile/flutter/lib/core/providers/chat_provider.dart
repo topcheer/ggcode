@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -87,93 +88,93 @@ class ChatMessage {
     bool? isToolError,
     bool? reasoningCollapsed,
     MessageStatus? status,
-  }) =>
-      ChatMessage(
-        id: id ?? this.id,
-        sourceId: sourceId,
-        sourceName: sourceName,
-        sourceColor: sourceColor,
-        kind: kind ?? this.kind,
-        isUser: isUser,
-        text: text ?? this.text,
-        imageThumbnails: imageThumbnails ?? this.imageThumbnails,
-        streaming: streaming ?? this.streaming,
-        toolId: toolId,
-        toolName: toolName,
-        toolDisplayName: toolDisplayName,
-        toolDetail: toolDetail,
-        toolResult: toolResult ?? this.toolResult,
-        toolPayload: toolPayload ?? this.toolPayload,
-        toolPayloadMode: toolPayloadMode ?? this.toolPayloadMode,
-        toolCompleted: toolCompleted ?? this.toolCompleted,
-        isToolError: isToolError ?? this.isToolError,
-        reasoningCollapsed: reasoningCollapsed ?? this.reasoningCollapsed,
-        time: time,
-        status: status ?? this.status,
-      );
+  }) => ChatMessage(
+    id: id ?? this.id,
+    sourceId: sourceId,
+    sourceName: sourceName,
+    sourceColor: sourceColor,
+    kind: kind ?? this.kind,
+    isUser: isUser,
+    text: text ?? this.text,
+    imageThumbnails: imageThumbnails ?? this.imageThumbnails,
+    streaming: streaming ?? this.streaming,
+    toolId: toolId,
+    toolName: toolName,
+    toolDisplayName: toolDisplayName,
+    toolDetail: toolDetail,
+    toolResult: toolResult ?? this.toolResult,
+    toolPayload: toolPayload ?? this.toolPayload,
+    toolPayloadMode: toolPayloadMode ?? this.toolPayloadMode,
+    toolCompleted: toolCompleted ?? this.toolCompleted,
+    isToolError: isToolError ?? this.isToolError,
+    reasoningCollapsed: reasoningCollapsed ?? this.reasoningCollapsed,
+    time: time,
+    status: status ?? this.status,
+  );
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'source_id': sourceId,
-        'source_name': sourceName,
-        'source_color': sourceColor,
-        'kind': kind,
-        'is_user': isUser,
-        'text': text,
-        'streaming': streaming,
-        'tool_id': toolId,
-        'tool_name': toolName,
-        'tool_display_name': toolDisplayName,
-        'tool_detail': toolDetail,
-        'tool_result': toolResult,
-        'tool_payload': toolPayload,
-        'tool_payload_mode': toolPayloadMode,
-        'tool_completed': toolCompleted,
-        'is_tool_error': isToolError,
-        'reasoning_collapsed': reasoningCollapsed,
-        'time': time.toIso8601String(),
-        // #3447: persist delivery status so failed/unconfirmed user
-        // messages survive the snapshot-restore loop. Without this,
-        // fromJson fell back to the constructor default (acknowledged)
-        // and silently masked send failures as success after restart.
-        'status': status.name,
-      };
+    'id': id,
+    'source_id': sourceId,
+    'source_name': sourceName,
+    'source_color': sourceColor,
+    'kind': kind,
+    'is_user': isUser,
+    'text': text,
+    'streaming': streaming,
+    'tool_id': toolId,
+    'tool_name': toolName,
+    'tool_display_name': toolDisplayName,
+    'tool_detail': toolDetail,
+    'tool_result': toolResult,
+    'tool_payload': toolPayload,
+    'tool_payload_mode': toolPayloadMode,
+    'tool_completed': toolCompleted,
+    'is_tool_error': isToolError,
+    'reasoning_collapsed': reasoningCollapsed,
+    'time': time.toIso8601String(),
+    // #3447: persist delivery status so failed/unconfirmed user
+    // messages survive the snapshot-restore loop. Without this,
+    // fromJson fell back to the constructor default (acknowledged)
+    // and silently masked send failures as success after restart.
+    'status': status.name,
+  };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
-        id: json['id'] as String? ?? '',
-        sourceId: json['source_id'] as String?,
-        sourceName: json['source_name'] as String?,
-        sourceColor: json['source_color'] as String?,
-        kind: json['kind'] as String? ?? '',
-        isUser: json['is_user'] as bool? ?? false,
-        text: json['text'] as String? ?? '',
-        streaming: json['streaming'] as bool? ?? false,
-        toolId: json['tool_id'] as String?,
-        toolName: json['tool_name'] as String?,
-        toolDisplayName: json['tool_display_name'] as String?,
-        toolDetail: json['tool_detail'] as String?,
-        toolResult: json['tool_result'] as String?,
-        toolPayload: json['tool_payload'] as String?,
-        toolPayloadMode: json['tool_payload_mode'] as String?,
-        toolCompleted: json['tool_completed'] as bool? ?? false,
-        isToolError: json['is_tool_error'] as bool? ?? false,
-        reasoningCollapsed: json['reasoning_collapsed'] as bool? ?? false,
-        time:
-            DateTime.tryParse(json['time'] as String? ?? '') ?? DateTime.now(),
-        // #3447: restore the persisted delivery status; legacy snapshots
-        // without the field keep the acknowledged default. A snapshot that
-        // caught a message mid-'sending' means the relay never acked it
-        // before the app went down - degrade to 'unconfirmed' (honest
-        // retryable-until-acked) instead of resurrecting a live 'sending'
-        // state that no timer is driving anymore.
-        status: _statusFromPersisted(json['status'] as String?),
-      );
+    id: json['id'] as String? ?? '',
+    sourceId: json['source_id'] as String?,
+    sourceName: json['source_name'] as String?,
+    sourceColor: json['source_color'] as String?,
+    kind: json['kind'] as String? ?? '',
+    isUser: json['is_user'] as bool? ?? false,
+    text: json['text'] as String? ?? '',
+    streaming: json['streaming'] as bool? ?? false,
+    toolId: json['tool_id'] as String?,
+    toolName: json['tool_name'] as String?,
+    toolDisplayName: json['tool_display_name'] as String?,
+    toolDetail: json['tool_detail'] as String?,
+    toolResult: json['tool_result'] as String?,
+    toolPayload: json['tool_payload'] as String?,
+    toolPayloadMode: json['tool_payload_mode'] as String?,
+    toolCompleted: json['tool_completed'] as bool? ?? false,
+    isToolError: json['is_tool_error'] as bool? ?? false,
+    reasoningCollapsed: json['reasoning_collapsed'] as bool? ?? false,
+    time: DateTime.tryParse(json['time'] as String? ?? '') ?? DateTime.now(),
+    // #3447: restore the persisted delivery status; legacy snapshots
+    // without the field keep the acknowledged default. A snapshot that
+    // caught a message mid-'sending' means the relay never acked it
+    // before the app went down - degrade to 'unconfirmed' (honest
+    // retryable-until-acked) instead of resurrecting a live 'sending'
+    // state that no timer is driving anymore.
+    status: _statusFromPersisted(json['status'] as String?),
+  );
 
   static MessageStatus _statusFromPersisted(String? name) {
     if (name == null) return MessageStatus.acknowledged;
     if (name == MessageStatus.sending.name) return MessageStatus.unconfirmed;
-    return MessageStatus.values
-        .firstWhere((s) => s.name == name, orElse: () => MessageStatus.acknowledged);
+    return MessageStatus.values.firstWhere(
+      (s) => s.name == name,
+      orElse: () => MessageStatus.acknowledged,
+    );
   }
 }
 
@@ -189,26 +190,67 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   // misses.
   final Map<String, String> _ackIdAlias = {};
 
+  // M3: streaming text used to write state once per network chunk (plus a
+  // finalizePendingReasoning scan), which rebuilt the whole chat list twice
+  // per chunk once the live-projection listener ran. Chunks are now coalesced
+  // per message for one frame (~16ms) and applied in a single state write.
+  // The message row itself is created on the first chunk so ordering relative
+  // to tool-call rows is preserved.
+  static const _chunkCoalesce = Duration(milliseconds: 16);
+  final Map<String, StringBuffer> _pendingText = <String, StringBuffer>{};
+  Timer? _textFlushTimer;
+
   @override
-  List<ChatMessage> build() => [];
+  List<ChatMessage> build() {
+    ref.onDispose(() {
+      _textFlushTimer?.cancel();
+      _textFlushTimer = null;
+      _pendingText.clear();
+    });
+    return [];
+  }
+
+  void _flushTextChunks() {
+    _textFlushTimer = null;
+    if (_pendingText.isEmpty) return;
+    final pending = Map<String, StringBuffer>.from(_pendingText);
+    _pendingText.clear();
+    finalizePendingReasoning(sourceId: null, collapse: true);
+    state = [
+      for (final m in state)
+        if (_pendingText.containsKey(m.id) || pending.containsKey(m.id))
+          m.copyWith(
+            text: m.text + (pending[m.id]?.toString() ?? ''),
+            streaming: true,
+          )
+        else
+          m,
+    ];
+  }
 
   /// Replace all messages with cached messages from a session snapshot.
   /// Called when switching to a session that has cached data.
   void loadCachedMessages(List<ChatMessage> cached) {
+    _textFlushTimer?.cancel();
+    _textFlushTimer = null;
+    _pendingText.clear();
     state = List.from(cached);
   }
 
   /// Send a user message with ack tracking.
   /// Generates a message_id, adds the message in 'sending' status,
   /// and sets a 5s timeout to mark as failed if no relay_ack arrives.
-  void addUserMessage(String text,
-      {List<proto.MessageImage> images = const []}) {
+  void addUserMessage(
+    String text, {
+    List<proto.MessageImage> images = const [],
+  }) {
     final messageId =
         'user-${_msgCounter++}-${DateTime.now().millisecondsSinceEpoch}';
 
     // Build thumbnail data URLs for display in the bubble.
-    final thumbnails =
-        images.map((img) => 'data:${img.mime};base64,${img.data}').toList();
+    final thumbnails = images
+        .map((img) => 'data:${img.mime};base64,${img.data}')
+        .toList();
 
     final msg = ChatMessage(
       id: messageId,
@@ -288,7 +330,8 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     // the HIGHEST rank, so a late relay_ack(delivered)/server_ack
     // (acknowledged) was rank-<= and dropped forever, leaving the message
     // stuck. A real ack arriving clears unconfirmed.
-    final lateAckClearsUnconfirmed = current == MessageStatus.unconfirmed &&
+    final lateAckClearsUnconfirmed =
+        current == MessageStatus.unconfirmed &&
         (status == MessageStatus.delivered ||
             status == MessageStatus.acknowledged);
     if (!lateAckClearsUnconfirmed &&
@@ -302,8 +345,11 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     ];
   }
 
-  void addRemoteUserMessage(String text,
-      {String? messageId, String kind = ''}) {
+  void addRemoteUserMessage(
+    String text, {
+    String? messageId,
+    String kind = '',
+  }) {
     state = [
       ...state,
       ChatMessage(
@@ -316,8 +362,11 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     ];
   }
 
-  void addRemoteSystemMessage(String text,
-      {String? messageId, String kind = ''}) {
+  void addRemoteSystemMessage(
+    String text, {
+    String? messageId,
+    String kind = '',
+  }) {
     finalizePendingReasoning(sourceId: null, collapse: true);
     state = [
       ...state,
@@ -387,26 +436,37 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   }
 
   void clearMessages() {
+    _textFlushTimer?.cancel();
+    _textFlushTimer = null;
+    _pendingText.clear();
     state = [];
     _ackIdAlias.clear();
   }
 
   void handleTextChunk(proto.TextData data) {
-    finalizePendingReasoning(sourceId: null, collapse: true);
     final idx = state.indexWhere((m) => m.id == data.id);
     if (idx >= 0) {
-      final msg = state[idx];
-      state = [
-        for (int i = 0; i < state.length; i++)
-          if (i == idx)
-            msg.copyWith(
-              text: msg.text + data.chunk,
-              kind: data.kind.isNotEmpty ? data.kind : null,
-              streaming: !data.done,
-            )
-          else
-            state[i],
-      ];
+      // A done frame (empty chunk) closes the stream immediately; otherwise
+      // coalesce the text and apply it once per frame.
+      if (data.done) {
+        // Keep any text still sitting in the coalescing buffer before closing.
+        final tail = _pendingText.remove(data.id)?.toString() ?? '';
+        final msg = state[idx];
+        state = [
+          for (int i = 0; i < state.length; i++)
+            if (i == idx)
+              msg.copyWith(
+                text: msg.text + tail,
+                streaming: false,
+                kind: data.kind.isNotEmpty ? data.kind : null,
+              )
+            else
+              state[i],
+        ];
+        return;
+      }
+      (_pendingText[data.id] ??= StringBuffer()).write(data.chunk);
+      _textFlushTimer ??= Timer(_chunkCoalesce, _flushTextChunks);
     } else {
       // Session switch replays the recorded projection; some recorded text
       // frames carry an EMPTY chunk (done-only / heartbeat frames). With no
@@ -416,6 +476,11 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       if (data.chunk.isEmpty) {
         return;
       }
+      // First chunk creates the row immediately (so ordering relative to
+      // tool-call rows is preserved and the first token shows at once);
+      // subsequent chunks of this message are coalesced. Pending reasoning
+      // still collapses synchronously on that first chunk.
+      finalizePendingReasoning(sourceId: null, collapse: true);
       state = [
         ...state,
         ChatMessage(
@@ -472,7 +537,8 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     required String sourceColor,
   }) {
     finalizePendingReasoning(sourceId: agentId, collapse: true);
-    final msgId = messageId ??
+    final msgId =
+        messageId ??
         '$agentId-tool-${toolId.isNotEmpty ? toolId : _msgCounter++}';
     state = [
       ...state,
@@ -528,8 +594,12 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         for (int i = 0; i < state.length; i++)
           if (i == idx)
             msg.copyWith(
-              toolResult:
-                  _resolvedToolSummary(toolName, result, summary, isError),
+              toolResult: _resolvedToolSummary(
+                toolName,
+                result,
+                summary,
+                isError,
+              ),
               toolPayload: _resolvedToolPayload(
                 toolName,
                 result,
@@ -560,8 +630,12 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
           toolDetail: detail,
           text: resolvedName,
           toolResult: _resolvedToolSummary(toolName, result, summary, isError),
-          toolPayload:
-              _resolvedToolPayload(toolName, result, payload, payloadMode),
+          toolPayload: _resolvedToolPayload(
+            toolName,
+            result,
+            payload,
+            payloadMode,
+          ),
           toolPayloadMode: payloadMode,
           toolCompleted: true,
           isToolError: isError,
@@ -583,7 +657,8 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     state = [
       ...state,
       ChatMessage(
-        id: messageId ??
+        id:
+            messageId ??
             'tool-${data.toolId.isNotEmpty ? data.toolId : _msgCounter++}',
         toolId: data.toolId,
         toolName: data.toolName,
@@ -601,13 +676,16 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     int idx = -1;
     if (data.toolId.isNotEmpty) {
       idx = state.lastIndexWhere(
-          (m) => m.toolId == data.toolId && m.toolResult == null);
+        (m) => m.toolId == data.toolId && m.toolResult == null,
+      );
     }
     if (idx < 0) {
-      idx = state.lastIndexWhere((m) =>
-          m.toolName == data.toolName &&
-          m.toolResult == null &&
-          m.sourceId == null);
+      idx = state.lastIndexWhere(
+        (m) =>
+            m.toolName == data.toolName &&
+            m.toolResult == null &&
+            m.sourceId == null,
+      );
     }
     if (idx >= 0) {
       final msg = state[idx];
@@ -775,10 +853,12 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   void finalizeStreaming(String msgId) {
     final idx = state.indexWhere((m) => m.id == msgId);
     if (idx < 0) return;
+    // Apply any text still in the coalescing buffer before closing the stream.
+    final tail = _pendingText.remove(msgId)?.toString() ?? '';
     final msg = state[idx];
     state = [
       for (int i = 0; i < state.length; i++)
-        if (i == idx) msg.copyWith(streaming: false) else state[i],
+        if (i == idx) msg.copyWith(text: msg.text + tail, streaming: false) else state[i],
     ];
   }
 
@@ -798,10 +878,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       state = [
         for (int i = 0; i < state.length; i++)
           if (i == idx)
-            msg.copyWith(
-              text: msg.text + chunk,
-              streaming: !data.done,
-            )
+            msg.copyWith(text: msg.text + chunk, streaming: !data.done)
           else
             state[i],
       ];
@@ -883,6 +960,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   }
 
   void finalizeStreamingMessagesForSource(String sourceId) {
+    _flushTextChunks();
     var changed = false;
     final next = [
       for (final msg in state)

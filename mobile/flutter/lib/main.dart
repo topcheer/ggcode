@@ -1,6 +1,9 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import 'core/wakelock.dart';
 
 import 'core/l10n/app_localizations.dart';
@@ -27,10 +30,29 @@ class GGCodeApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // Watch theme changes to trigger rebuild
     ref.watch(themeProvider);
+    final theme = buildAppTheme();
+    final dark = theme.colorScheme.brightness == Brightness.dark;
+    // M18: the status bar icons never followed the theme (ConnectScreen has
+    // no AppBar, so iOS rendered dark icons over the dark gradient).
+    final overlay = dark
+        ? SystemUiOverlayStyle.light.copyWith(
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: AppColors.background,
+            systemNavigationBarIconBrightness: Brightness.light,
+          )
+        : SystemUiOverlayStyle.dark.copyWith(
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: AppColors.background,
+            systemNavigationBarIconBrightness: Brightness.dark,
+          );
     return MaterialApp(
       title: 'GGCode Mobile',
       debugShowCheckedModeBanner: false,
-      theme: buildAppTheme(),
+      theme: theme,
+      builder: (context, child) => AnnotatedRegion<SystemUiOverlayStyle>(
+        value: overlay,
+        child: child ?? const SizedBox.shrink(),
+      ),
       home: const AppShell(),
     );
   }
@@ -51,16 +73,49 @@ class _AppShellState extends ConsumerState<AppShell>
   bool _bootstrapReconnectIssued = false;
   bool _bootstrapSelectionEvaluated = false;
 
+  // M3: `captureLiveProjection` used to run on EVERY chat provider change
+  // (one per streaming chunk), copying the whole message list and writing
+  // workspaceCacheProvider state - a second full rebuild of the chat list per
+  // chunk. The disk flush is already debounced at 350ms; mirror that here.
+  Timer? _projectionTimer;
+
+  static const _projectionDebounce = Duration(milliseconds: 350);
+
+  void _flushProjectionNow() {
+    _projectionTimer?.cancel();
+    _projectionTimer = null;
+    _captureProjection();
+  }
+
+  void _captureProjection() {
+    if (_demoMode) return;
+    ref
+        .read(workspaceCacheProvider.notifier)
+        .captureLiveProjection(
+          messages: ref.read(chatProvider),
+          subagents: ref.read(subagentProvider),
+          sessionInfo: ref.read(sessionInfoProvider),
+          agentStatus: ref.read(agentStatusProvider),
+          agentStatusMessage: ref.read(agentStatusMessageProvider),
+          lastEventId: ref.read(connectionProvider.notifier).lastAppliedEventId,
+          authoritative: ref
+              .read(connectionProvider.notifier)
+              .canPersistLiveProjection,
+          sessionUrl: ref.read(connectionProvider.notifier).liveSessionUrl,
+        );
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     Future.microtask(
-        () => ref.read(workspaceCacheProvider.notifier).initialize());
+      () => ref.read(workspaceCacheProvider.notifier).initialize(),
+    );
     Future.microtask(
-        () => ref.read(themeProvider.notifier).loadThemePreference());
-    Future.microtask(
-        () => loadLanguagePreference(ref));
+      () => ref.read(themeProvider.notifier).loadThemePreference(),
+    );
+    Future.microtask(() => loadLanguagePreference(ref));
 
     // Demo mode: inject sample messages for screenshots
     if (_demoMode) {
@@ -70,39 +125,43 @@ class _AppShellState extends ConsumerState<AppShell>
         notifier.addUserMessage('帮我重构 main.go 里的 agent loop，把流式处理和工具执行拆成独立函数');
         notifier.set([
           ChatMessage(
-              id: 'u1',
-              isUser: true,
-              text: '帮我重构 main.go 里的 agent loop，把流式处理和工具执行拆成独立函数',
-              time: now),
+            id: 'u1',
+            isUser: true,
+            text: '帮我重构 main.go 里的 agent loop，把流式处理和工具执行拆成独立函数',
+            time: now,
+          ),
           ChatMessage(
-              id: 'a1',
-              text: '我来帮你重构。先看一下当前的代码结构：',
-              time: now.add(Duration(seconds: 1))),
+            id: 'a1',
+            text: '我来帮你重构。先看一下当前的代码结构：',
+            time: now.add(Duration(seconds: 1)),
+          ),
           ChatMessage(
-              id: 't1',
-              toolName: 'Read',
-              toolDetail: 'Read: internal/agent/agent.go',
-              toolId: 'tool1',
-              time: now.add(Duration(seconds: 2))),
+            id: 't1',
+            toolName: 'Read',
+            toolDetail: 'Read: internal/agent/agent.go',
+            toolId: 'tool1',
+            time: now.add(Duration(seconds: 2)),
+          ),
           ChatMessage(
-              id: 't1r',
-              toolName: 'Read',
-              toolDetail: 'Read: internal/agent/agent.go',
-              toolResult:
-                  '// agent.go — 847 lines\npackage agent\n\nfunc (a *Agent) Run(ctx context.Context) error {\n\t// Main agent loop\n}\n\nfunc (a *Agent) RunStream(ctx context.Context) error {\n\t// Streaming mode\n}',
-              toolId: 'tool1',
-              time: now.add(Duration(seconds: 3))),
+            id: 't1r',
+            toolName: 'Read',
+            toolDetail: 'Read: internal/agent/agent.go',
+            toolResult: '// agent.go — 847 lines\npackage agent\n\nfunc (a *Agent) Run(ctx context.Context) error {\n\t// Main agent loop\n}\n\nfunc (a *Agent) RunStream(ctx context.Context) error {\n\t// Streaming mode\n}',
+            toolId: 'tool1',
+            time: now.add(Duration(seconds: 3)),
+          ),
           ChatMessage(
-              id: 't2',
-              toolName: 'Grep',
-              toolDetail: 'Grep: func.*agent.*Stream in internal/agent/',
-              toolId: 'tool2',
-              time: now.add(Duration(seconds: 4))),
+            id: 't2',
+            toolName: 'Grep',
+            toolDetail: 'Grep: func.*agent.*Stream in internal/agent/',
+            toolId: 'tool2',
+            time: now.add(Duration(seconds: 4)),
+          ),
           ChatMessage(
-              id: 'a2',
-              text:
-                  '代码结构分析完毕。我的重构方案：\n\n1. **拆分 `RunStream`** — 把流式处理提取到 `streamHandler`\n2. **独立工具执行器** — `toolExecutor` 负责工具调用和结果收集\n3. **上下文传递优化** — 用 `PipelineCtx` 替代全局状态\n\n开始重构？',
-              time: now.add(Duration(seconds: 5))),
+            id: 'a2',
+            text: '代码结构分析完毕。我的重构方案：\n\n1. **拆分 `RunStream`** — 把流式处理提取到 `streamHandler`\n2. **独立工具执行器** — `toolExecutor` 负责工具调用和结果收集\n3. **上下文传递优化** — 用 `PipelineCtx` 替代全局状态\n\n开始重构？',
+            time: now.add(Duration(seconds: 5)),
+          ),
         ]);
       });
     }
@@ -112,6 +171,7 @@ class _AppShellState extends ConsumerState<AppShell>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _connSub?.cancel();
+    _projectionTimer?.cancel();
     wakelockDisable();
     super.dispose();
   }
@@ -124,6 +184,8 @@ class _AppShellState extends ConsumerState<AppShell>
     final notifier = ref.read(connectionProvider.notifier);
     void flushWorkspaceCache() {
       if (_demoMode) return;
+      // Pending (debounced) projection must land before the disk flush.
+      _flushProjectionNow();
       unawaited(ref.read(workspaceCacheProvider.notifier).flushNow());
     }
 
@@ -204,7 +266,8 @@ class _AppShellState extends ConsumerState<AppShell>
 
     // Track first successful connection
     ref.listen<TunnelConnectionState>(connectionProvider, (prev, next) {
-      final connectedUsable = next.sessionReady ||
+      final connectedUsable =
+          next.sessionReady ||
           (next.status == ConnectionStatus.connected && next.relaySync == null);
       if (connectedUsable && !_hasConnected) {
         setState(() {
@@ -212,7 +275,8 @@ class _AppShellState extends ConsumerState<AppShell>
         });
         return;
       }
-      final leftSession = next.status == ConnectionStatus.disconnected &&
+      final leftSession =
+          next.status == ConnectionStatus.disconnected &&
           (next.url == null || next.url!.isEmpty);
       if (leftSession && _hasConnected) {
         setState(() {
@@ -223,19 +287,10 @@ class _AppShellState extends ConsumerState<AppShell>
 
     void persistLiveProjection() {
       if (_demoMode) return;
-      ref.read(workspaceCacheProvider.notifier).captureLiveProjection(
-            messages: ref.read(chatProvider),
-            subagents: ref.read(subagentProvider),
-            sessionInfo: ref.read(sessionInfoProvider),
-            agentStatus: ref.read(agentStatusProvider),
-            agentStatusMessage: ref.read(agentStatusMessageProvider),
-            lastEventId:
-                ref.read(connectionProvider.notifier).lastAppliedEventId,
-            authoritative:
-                ref.read(connectionProvider.notifier).canPersistLiveProjection,
-            sessionUrl:
-                ref.read(connectionProvider.notifier).liveSessionUrl,
-          );
+      _projectionTimer ??= Timer(_projectionDebounce, () {
+        _projectionTimer = null;
+        _captureProjection();
+      });
     }
 
     ref.listen<List<ChatMessage>>(chatProvider, (prev, next) {
@@ -277,25 +332,35 @@ class _AppShellState extends ConsumerState<AppShell>
     }
 
     if (!_demoMode && !workspaceCache.initialized) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     // Show ConnectScreen only before first successful connection.
     // Once connected, always show ChatScreen (connection status shown in AppBar).
-    final hasSelectedSession = workspaceCache.selectedSessionId != null &&
+    final hasSelectedSession =
+        workspaceCache.selectedSessionId != null &&
         workspaceCache.selectedSessionId!.isNotEmpty;
-    final connectedUsable = connState.sessionReady ||
+    final connectedUsable =
+        connState.sessionReady ||
         (connState.status == ConnectionStatus.connected &&
             connState.relaySync == null);
-    if (!_hasConnected &&
-        !_demoMode &&
-        !hasSelectedSession &&
-        !connectedUsable) {
-      return const ConnectScreen();
-    }
-
-    return const ChatScreen();
+    final showConnect =
+        !_hasConnected && !_demoMode && !hasSelectedSession && !connectedUsable;
+    // M5: fade-through between Connect and Chat (was an instant swap).
+    return AnimatedSwitcher(
+      duration: AppMotion.duration(context, AppMotion.emphasis),
+      switchInCurve: AppMotion.decelerate,
+      switchOutCurve: AppMotion.accelerate,
+      transitionBuilder: (child, anim) => FadeTransition(
+        opacity: anim,
+        child: ScaleTransition(
+          scale: Tween(begin: 0.985, end: 1.0).animate(anim),
+          child: child,
+        ),
+      ),
+      child: showConnect
+          ? const ConnectScreen(key: ValueKey('connect'))
+          : const ChatScreen(key: ValueKey('chat')),
+    );
   }
 }

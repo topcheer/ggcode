@@ -69,5 +69,9 @@
   "chat.copied": "복사됨",
   "chat.select_all": "모두 선택",
   "codeblock.show_more": "더 보기 (남은 {count}줄)",
-  "codeblock.show_less": "접기"
+  "codeblock.show_less": "접기",
+  "chat.send": "보내기",
+  "chat.interrupt": "중단",
+  "chat.attach_image": "이미지 첨부",
+  "chat.close_tab": "탭 닫기"
 }

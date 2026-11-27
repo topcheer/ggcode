@@ -1,7 +1,9 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+
 import '../../../core/l10n/app_localizations.dart';
+
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_mermaid/flutter_mermaid.dart';
 import 'package:flutter/services.dart';
@@ -64,7 +66,10 @@ class MessageBubble extends StatelessWidget {
                 Clipboard.setData(ClipboardData(text: text));
                 Navigator.pop(ctx);
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(t('chat.copied')), duration: Duration(seconds: 1)),
+                  SnackBar(
+                    content: Text(t('chat.copied')),
+                    duration: Duration(seconds: 1),
+                  ),
                 );
               },
             ),
@@ -86,6 +91,28 @@ class MessageBubble extends StatelessWidget {
       _parseShellCommand(message.text) != null;
 
   bool get _isShellOutputMessage => message.kind == _shellOutputKind;
+
+  // M9: base64Decode used to run inside build for every thumbnail on every
+  // rebuild (and MemoryImage compares bytes by identity, so each rebuild was a
+  // cache miss + decode). Decode once per data URL instead.
+  static final Map<String, Uint8List?> _thumbnailCache = <String, Uint8List?>{};
+
+  static Uint8List? _decodeThumbnail(String dataUrl) {
+    if (_thumbnailCache.containsKey(dataUrl)) {
+      return _thumbnailCache[dataUrl];
+    }
+    final b64 = dataUrl.contains(',') ? dataUrl.split(',').last : dataUrl;
+    Uint8List? bytes;
+    try {
+      bytes = base64Decode(b64);
+    } catch (_) {
+      bytes = null;
+    }
+    if (_thumbnailCache.length >= 64)
+      _thumbnailCache.remove(_thumbnailCache.keys.first);
+    _thumbnailCache[dataUrl] = bytes;
+    return bytes;
+  }
 
   Widget _buildUserBubble(BuildContext context) {
     return Align(
@@ -116,27 +143,20 @@ class MessageBubble extends StatelessWidget {
                 runSpacing: 6,
                 alignment: WrapAlignment.end,
                 children: message.imageThumbnails.map((dataUrl) {
-                  final b64 = dataUrl.contains(',') ? dataUrl.split(',').last : dataUrl;
-                  // #1424-A: base64Decode throws FormatException on the
-                  // synchronous build path - one corrupt thumbnail (cache
-                  // truncation / heterogeneous client / escaped JSON)
-                  // ErrorWidget'd the WHOLE bubble (text unreadable too)
-                  // and re-threw on every scroll. Decode defensively and
-                  // fall back to a placeholder; errorBuilder covers any
+                  // #1424-A: a corrupt thumbnail (cache truncation /
+                  // heterogeneous client / escaped JSON) must not ErrorWidget
+                  // the WHOLE bubble. Decode defensively (cached) and fall
+                  // back to a placeholder; errorBuilder covers any
                   // decode-valid-but-broken-payload case.
-                  Uint8List? bytes;
-                  try {
-                    bytes = base64Decode(b64);
-                  } catch (_) {
-                    bytes = null; // placeholder below
-                  }
+                  final bytes = _decodeThumbnail(dataUrl);
                   return ClipRRect(
                     borderRadius: BorderRadius.circular(12),
                     child: bytes == null
                         ? Container(
                             width: 120,
                             height: 120,
-                            color: Theme.of(context).disabledColor.withValues(alpha: 0.15),
+                            color: Theme.of(context).disabledColor
+                                .withValues(alpha: 0.15),
                             child: Icon(
                               Icons.broken_image_outlined,
                               size: 32,
@@ -147,6 +167,8 @@ class MessageBubble extends StatelessWidget {
                             bytes,
                             width: 120,
                             height: 120,
+                            cacheWidth: 240,
+                            gaplessPlayback: true,
                             fit: BoxFit.cover,
                             errorBuilder: (_, _, _) => Icon(
                               Icons.broken_image_outlined,
@@ -162,7 +184,12 @@ class MessageBubble extends StatelessWidget {
             if (message.text.isNotEmpty)
               SelectableText(
                 message.text,
-                style: TextStyle(color: AppColors.textPrimary, fontSize: 14, height: 1.4),
+                style: TextStyle(
+                  color: AppColors.onAccent,
+                  fontSize: 14,
+                  height: 1.4,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
           ],
         ),
@@ -206,7 +233,8 @@ class MessageBubble extends StatelessWidget {
                   color: AppColors.accent,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
-                  fontFamily: 'monospace',
+                  fontFamily: AppFonts.mono,
+                  fontFamilyFallback: AppFonts.monoFallback,
                 ),
               ),
             ),
@@ -218,7 +246,8 @@ class MessageBubble extends StatelessWidget {
                   color: AppColors.textPrimary,
                   fontSize: 13,
                   height: 1.45,
-                  fontFamily: 'monospace',
+                  fontFamily: AppFonts.mono,
+                  fontFamilyFallback: AppFonts.monoFallback,
                 ),
               ),
             ),
@@ -279,7 +308,10 @@ class MessageBubble extends StatelessWidget {
                 return _buildMermaidDiagram(seg.content);
               }
               if (seg.isCodeBlock) {
-                return _CodeBlockWidget(code: seg.content, language: seg.language);
+                return _CodeBlockWidget(
+                  code: seg.content,
+                  language: seg.language,
+                );
               }
               if (seg.content.trim().isEmpty) return const SizedBox.shrink();
               return MarkdownBody(
@@ -351,7 +383,8 @@ class MessageBubble extends StatelessWidget {
                 color: AppColors.textPrimary,
                 fontSize: 13,
                 height: 1.45,
-                fontFamily: 'monospace',
+                fontFamily: AppFonts.mono,
+                fontFamilyFallback: AppFonts.monoFallback,
               ),
             ),
             if (message.streaming)
@@ -421,17 +454,23 @@ class MessageBubble extends StatelessWidget {
       codeblockPadding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       listBullet: TextStyle(color: AppColors.textPrimary, fontSize: 14),
       h2: TextStyle(
-          color: AppColors.textPrimary,
-          fontSize: 16,
-          fontWeight: FontWeight.w600),
+        color: AppColors.textPrimary,
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+      ),
       h3: TextStyle(
-          color: AppColors.textPrimary,
-          fontSize: 15,
-          fontWeight: FontWeight.w600),
-      strong:
-          TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w700),
+        color: AppColors.textPrimary,
+        fontSize: 15,
+        fontWeight: FontWeight.w600,
+      ),
+      strong: TextStyle(
+        color: AppColors.textPrimary,
+        fontWeight: FontWeight.w700,
+      ),
       em: TextStyle(
-          color: AppColors.textSecondary, fontStyle: FontStyle.italic),
+        color: AppColors.textSecondary,
+        fontStyle: FontStyle.italic,
+      ),
       blockquote: TextStyle(color: AppColors.textSecondary, fontSize: 14),
       blockquoteDecoration: BoxDecoration(
         color: AppColors.backgroundElevated,
@@ -443,7 +482,10 @@ class MessageBubble extends StatelessWidget {
 
   List<_TextSegment> _parseSegments(String text) {
     final segments = <_TextSegment>[];
-    final regex = RegExp(r'```([a-zA-Z0-9]*)\s*\n([\s\S]*?)```', multiLine: true);
+    final regex = RegExp(
+      r'```([a-zA-Z0-9]*)\s*\n([\s\S]*?)```',
+      multiLine: true,
+    );
 
     int lastEnd = 0;
     for (final match in regex.allMatches(text)) {
@@ -458,11 +500,13 @@ class MessageBubble extends StatelessWidget {
       if (lang == 'mermaid') {
         segments.add(_TextSegment(content: code, isMermaid: true));
       } else {
-        segments.add(_TextSegment(
-          content: code,
-          isCodeBlock: true,
-          language: lang.isNotEmpty ? lang : null,
-        ));
+        segments.add(
+          _TextSegment(
+            content: code,
+            isCodeBlock: true,
+            language: lang.isNotEmpty ? lang : null,
+          ),
+        );
       }
       lastEnd = match.end;
     }
@@ -495,23 +539,29 @@ class MessageBubble extends StatelessWidget {
   TextSpan _buildAnsiText(String text) {
     final regex = RegExp(r'\x1B\[[0-9;]*m');
     final spans = <TextSpan>[];
-    final state = _AnsiState();
+    // M1: the default foreground was hard-coded #E5E7EB, which is 1.1:1 on the
+    // light palette's surfaceElevated (#EAECF2) - shell output was invisible.
+    final state = _AnsiState(
+      defaultColor: AppColors.textPrimary,
+      light: AppColors.isLight,
+    );
     int lastEnd = 0;
     for (final match in regex.allMatches(text)) {
       if (match.start > lastEnd) {
-        spans.add(TextSpan(
-          text: text.substring(lastEnd, match.start),
-          style: state.toTextStyle(),
-        ));
+        spans.add(
+          TextSpan(
+            text: text.substring(lastEnd, match.start),
+            style: state.toTextStyle(),
+          ),
+        );
       }
       state.apply(match.group(0) ?? '');
       lastEnd = match.end;
     }
     if (lastEnd < text.length) {
-      spans.add(TextSpan(
-        text: text.substring(lastEnd),
-        style: state.toTextStyle(),
-      ));
+      spans.add(
+        TextSpan(text: text.substring(lastEnd), style: state.toTextStyle()),
+      );
     }
     if (spans.isEmpty) {
       spans.add(TextSpan(text: text, style: state.toTextStyle()));
@@ -577,82 +627,97 @@ class _ReasoningBubbleState extends State<_ReasoningBubble> {
           onTap: () => setState(() => _collapsed = !_collapsed),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.psychology_alt_outlined,
-                      size: 15,
-                      color: AppColors.accent,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      widget.message.sourceName != null
-                          ? '${widget.message.sourceName} ${t('status.thinking')}'
-                          : t('status.thinking'),
-                      style: TextStyle(
+            child: AnimatedSize(
+              duration: AppMotion.duration(context, AppMotion.base),
+              curve: AppMotion.standard,
+              alignment: Alignment.topCenter,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.psychology_alt_outlined,
+                        size: 15,
                         color: AppColors.accent,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
                       ),
-                    ),
-                    const Spacer(),
-                    if (widget.message.streaming && !_collapsed)
-                      Container(
-                        width: 6,
-                        height: 6,
-                        margin: const EdgeInsets.only(right: 8),
-                        decoration: BoxDecoration(
+                      const SizedBox(width: 6),
+                      Text(
+                        widget.message.sourceName != null
+                            ? '${widget.message.sourceName} ${t('status.thinking')}'
+                            : t('status.thinking'),
+                        style: TextStyle(
                           color: AppColors.accent,
-                          shape: BoxShape.circle,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
-                    Icon(
-                      _collapsed ? Icons.expand_more : Icons.expand_less,
-                      key: Key('reasoningToggle-${widget.message.id}'),
-                      size: 18,
-                      color: AppColors.textMuted,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                if (_collapsed)
-                  Text(
-                    preview,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 13,
-                      height: 1.4,
-                    ),
-                  )
-                else
-                  MarkdownBody(
-                    key: Key('reasoningBody-${widget.message.id}'),
-                    data: widget.message.text,
-                    selectable: true,
-                    styleSheet: MarkdownStyleSheet(
-                      p: TextStyle(
+                      const Spacer(),
+                      if (widget.message.streaming && !_collapsed)
+                        Container(
+                          width: 6,
+                          height: 6,
+                          margin: const EdgeInsets.only(right: 8),
+                          decoration: BoxDecoration(
+                            color: AppColors.accent,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      AnimatedRotation(
+                        turns: _collapsed ? 0 : 0.5,
+                        duration: AppMotion.duration(context, AppMotion.base),
+                        curve: AppMotion.standard,
+                        child: Icon(
+                          Icons.expand_more,
+                          key: Key('reasoningToggle-${widget.message.id}'),
+                          size: 18,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  if (_collapsed)
+                    Text(
+                      preview,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
                         color: AppColors.textSecondary,
                         fontSize: 13,
-                        height: 1.45,
+                        height: 1.4,
                       ),
-                      code: TextStyle(
-                        color: AppColors.accent.withValues(alpha: 0.95),
-                        fontSize: 12,
-                        backgroundColor: AppColors.surface,
+                    )
+                  else
+                    MarkdownBody(
+                      key: Key('reasoningBody-${widget.message.id}'),
+                      data: widget.message.text,
+                      selectable: true,
+                      styleSheet: MarkdownStyleSheet(
+                        p: TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 13,
+                          height: 1.45,
+                        ),
+                        code: TextStyle(
+                          color: AppColors.accent.withValues(alpha: 0.95),
+                          fontSize: 12,
+                          backgroundColor: AppColors.surface,
+                        ),
+                        codeblockDecoration: BoxDecoration(
+                          color: AppColors.surfaceElevated,
+                          borderRadius: BorderRadius.circular(AppRadii.sm),
+                        ),
+                        codeblockPadding: const EdgeInsets.fromLTRB(
+                          12,
+                          8,
+                          12,
+                          8,
+                        ),
                       ),
-                      codeblockDecoration: BoxDecoration(
-                        color: AppColors.surfaceElevated,
-                        borderRadius: BorderRadius.circular(AppRadii.sm),
-      ),
-                      codeblockPadding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -714,84 +779,102 @@ class _CodeBlockWidgetState extends State<_CodeBlockWidget> {
       decoration: BoxDecoration(
         color: AppColors.surfaceElevated,
         borderRadius: BorderRadius.circular(AppRadii.sm),
-        border: Border(
-          left: BorderSide(color: AppColors.accent, width: 3),
-        ),
+        border: Border(left: BorderSide(color: AppColors.accent, width: 3)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header: language label + copy button
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 4, 4),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  widget.language ?? '',
-                  style: TextStyle(
-                    color: AppColors.textMuted,
-                    fontSize: 11,
-                    fontFamily: 'monospace',
+      child: AnimatedSize(
+        duration: AppMotion.duration(context, AppMotion.base),
+        curve: AppMotion.standard,
+        alignment: Alignment.topCenter,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header: language label + copy button
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 4, 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    widget.language ?? '',
+                    style: TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 11,
+                      fontFamily: AppFonts.mono,
+                      fontFamilyFallback: AppFonts.monoFallback,
+                    ),
                   ),
+                  // 40x40 touch target (was ~24px) with a semantic label.
+                  Semantics(
+                    button: true,
+                    label: _copied ? t('chat.copied') : t('chat.copy_text'),
+                    child: InkWell(
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        Clipboard.setData(ClipboardData(text: widget.code));
+                        setState(() => _copied = true);
+                        Future.delayed(const Duration(seconds: 2), () {
+                          if (mounted) setState(() => _copied = false);
+                        });
+                      },
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        alignment: Alignment.center,
+                        child: Icon(
+                          _copied ? Icons.check : Icons.copy,
+                          size: 18,
+                          color: _copied
+                              ? AppColors.success
+                              : AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Code content
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              child: SelectableText(
+                displayCode,
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 13,
+                  height: 1.45,
+                  fontFamily: AppFonts.mono,
+                  fontFamilyFallback: AppFonts.monoFallback,
                 ),
-                InkWell(
-                  onTap: () {
-                    Clipboard.setData(ClipboardData(text: widget.code));
-                    setState(() => _copied = true);
-                    Future.delayed(const Duration(seconds: 2), () {
-                      if (mounted) setState(() => _copied = false);
-                    });
-                  },
-                  borderRadius: BorderRadius.circular(6),
-                  child: Padding(
-                    padding: const EdgeInsets.all(4),
-                    child: Icon(
-                      _copied ? Icons.check : Icons.copy,
-                      size: 16,
-                      color: AppColors.textSecondary,
+              ),
+            ),
+            // Show more / Show less button
+            if (canCollapse) ...[
+              Divider(color: AppColors.border, height: 1),
+              InkWell(
+                onTap: () => setState(() => _collapsed = !_collapsed),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  alignment: Alignment.center,
+                  child: Text(
+                    _collapsed
+                        ? t(
+                            'codeblock.show_more',
+                            args: {'count': '${lines.length - _previewLines}'},
+                          )
+                        : t('codeblock.show_less'),
+                    style: TextStyle(
+                      color: AppColors.accent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
-              ],
-            ),
-          ),
-          // Code content
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-            child: SelectableText(
-              displayCode,
-              style: TextStyle(
-                color: AppColors.textPrimary,
-                fontSize: 13,
-                height: 1.45,
-                fontFamily: 'monospace',
               ),
-            ),
-          ),
-          // Show more / Show less button
-          if (canCollapse) ...[
-            Divider(color: AppColors.border, height: 1),
-            InkWell(
-              onTap: () => setState(() => _collapsed = !_collapsed),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                alignment: Alignment.center,
-                child: Text(
-                  _collapsed
-                      ? t('codeblock.show_more', args: {'count': '${lines.length - _previewLines}'})
-                      : t('codeblock.show_less'),
-                  style: TextStyle(
-                    color: AppColors.accent,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -805,9 +888,26 @@ class _ShellCommandData {
 }
 
 class _AnsiState {
+  _AnsiState({required this.defaultColor, required this.light});
+
+  final Color defaultColor;
+
+  /// On light palettes the ANSI "white" (37/97, 256-colour 7/15) must become
+  /// the theme's primary text or it disappears on the light surface.
+  final bool light;
+
   bool bold = false;
   Color? foreground;
   Color? background;
+
+  Color _fg(int code) {
+    if (light && (code == 37 || code == 97 || code == 7 || code == 15)) {
+      return defaultColor;
+    }
+    if (30 <= code && code <= 37) return _ansiPalette[code - 30];
+    if (90 <= code && code <= 97) return _ansiBrightPalette[code - 90];
+    return _ansi256Color(code, defaultColor);
+  }
 
   void apply(String sequence) {
     final body = sequence.substring(2, sequence.length - 1);
@@ -836,9 +936,9 @@ class _AnsiState {
           break;
         default:
           if (30 <= code && code <= 37) {
-            foreground = _ansiPalette[code - 30];
+            foreground = _fg(code);
           } else if (90 <= code && code <= 97) {
-            foreground = _ansiBrightPalette[code - 90];
+            foreground = _fg(code);
           } else if (40 <= code && code <= 47) {
             background = _ansiPalette[code - 40];
           } else if (100 <= code && code <= 107) {
@@ -846,9 +946,11 @@ class _AnsiState {
           } else if ((code == 38 || code == 48) &&
               i + 2 < codes.length &&
               codes[i + 1] == 5) {
-            final color = _ansi256Color(codes[i + 2]);
+            final color = _ansi256Color(codes[i + 2], defaultColor);
             if (code == 38) {
-              foreground = color;
+              foreground = light && (codes[i + 2] == 7 || codes[i + 2] == 15)
+                  ? defaultColor
+                  : color;
             } else {
               background = color;
             }
@@ -859,10 +961,10 @@ class _AnsiState {
   }
 
   TextStyle toTextStyle() => TextStyle(
-        color: foreground ?? const Color(0xFFE5E7EB),
-        backgroundColor: background,
-        fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-      );
+    color: foreground ?? defaultColor,
+    backgroundColor: background,
+    fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+  );
 }
 
 const _ansiPalette = <Color>[
@@ -887,9 +989,9 @@ const _ansiBrightPalette = <Color>[
   Color(0xFFFFFFFF),
 ];
 
-Color _ansi256Color(int code) {
+Color _ansi256Color(int code, [Color? fallback]) {
   if (code < 0) {
-    return const Color(0xFFE5E7EB);
+    return fallback ?? const Color(0xFFE5E7EB);
   }
   if (code < 8) {
     return _ansiPalette[code];
@@ -909,7 +1011,7 @@ Color _ansi256Color(int code) {
     int channel(int component) => component == 0 ? 0 : 55 + (component * 40);
     return Color.fromARGB(0xFF, channel(r), channel(g), channel(b));
   }
-  return const Color(0xFFE5E7EB);
+  return fallback ?? const Color(0xFFE5E7EB);
 }
 
 /// ─── Mobile File Transfer V1: file card (agent → phone, any format) ───
@@ -926,7 +1028,9 @@ class _FileCardBubble extends ConsumerWidget {
     if (m.startsWith('video/')) return Icons.videocam;
     if (m.startsWith('audio/')) return Icons.audiotrack;
     if (m.contains('pdf')) return Icons.picture_as_pdf;
-    if (m.contains('zip') || filename.endsWith('.zip') || filename.endsWith('.tar.gz')) {
+    if (m.contains('zip') ||
+        filename.endsWith('.zip') ||
+        filename.endsWith('.tar.gz')) {
       return Icons.folder_zip;
     }
     if (m.startsWith('text/')) return Icons.description;
@@ -962,8 +1066,9 @@ class _FileCardBubble extends ConsumerWidget {
       case FileTransferStatus.transferring:
         trailing = Text(
           '${entry.receivedChunks.length}/${entry.totalChunks}',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         );
         break;
       case FileTransferStatus.verifying:
@@ -1007,14 +1112,14 @@ class _FileCardBubble extends ConsumerWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(title,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
                       Text(
                         entry.status == FileTransferStatus.failed
                             ? (entry.error ?? 'Transfer failed')
                             : _humanSize(entry.size),
                         style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant),
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     ],
                   ),

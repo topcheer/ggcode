@@ -41,7 +41,14 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     _breathAnimation = Tween<double>(begin: 0.85, end: 1.0).animate(
       CurvedAnimation(parent: _breathController, curve: Curves.easeInOutSine),
     );
-    _breathController.repeat(reverse: true);
+    // M8: honour the OS "reduce motion" setting - the logo breath loop is
+    // the one ambient animation that starts outside build (no context).
+    final disableAnimations = WidgetsBinding
+        .instance
+        .platformDispatcher
+        .accessibilityFeatures
+        .disableAnimations;
+    if (!disableAnimations) _breathController.repeat(reverse: true);
 
     _pulseController = AnimationController(
       duration: const Duration(milliseconds: 1200),
@@ -57,11 +64,14 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     await store.load();
     if (!mounted) return;
     setState(() {
-      _connections = store.all
-          .where((c) => !c.permanentlyFailed)
-          .toList()
-        ..sort((a, b) => (b.lastConnectedAt ?? DateTime.fromMillisecondsSinceEpoch(0))
-            .compareTo(a.lastConnectedAt ?? DateTime.fromMillisecondsSinceEpoch(0)));
+      _connections = store.all.where((c) => !c.permanentlyFailed).toList()
+        ..sort(
+          (a, b) =>
+              (b.lastConnectedAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+                  .compareTo(
+                    a.lastConnectedAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+                  ),
+        );
     });
   }
 
@@ -116,15 +126,19 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       case RelaySyncPhase.restoringLocal:
         return t('relay_sync.restoring_title');
       case RelaySyncPhase.waitingHost:
-        return t(sync.recoveryState == 'pending'
-            ? 'relay_sync.pending_title'
-            : 'relay_sync.waiting_host_title');
+        return t(
+          sync.recoveryState == 'pending'
+              ? 'relay_sync.pending_title'
+              : 'relay_sync.waiting_host_title',
+        );
       case RelaySyncPhase.waiting:
         return t('relay_sync.waiting_title');
       case RelaySyncPhase.replaying:
-        return t(sync.resumeMode == 'full_history'
-            ? 'relay_sync.full_history_title'
-            : 'relay_sync.replaying_title');
+        return t(
+          sync.resumeMode == 'full_history'
+              ? 'relay_sync.full_history_title'
+              : 'relay_sync.replaying_title',
+        );
       case RelaySyncPhase.snapshot:
         return t('relay_sync.snapshot_title');
     }
@@ -134,25 +148,33 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     final sync = state.relaySync;
     if (sync == null) return t('connect.connecting_detail');
     if (sync.stalled) {
-      return t('relay_sync.stalled_detail',
-          args: {'count': (sync.remainingReplayCount ?? 0).toString()});
+      return t(
+        'relay_sync.stalled_detail',
+        args: {'count': (sync.remainingReplayCount ?? 0).toString()},
+      );
     }
     switch (sync.phase) {
       case RelaySyncPhase.restoringLocal:
         return t('relay_sync.restoring_detail');
       case RelaySyncPhase.waitingHost:
-        return t(sync.recoveryState == 'pending'
-            ? 'relay_sync.pending_detail'
-            : sync.hasLocalState
-                ? 'relay_sync.waiting_host_with_local_detail'
-                : 'relay_sync.waiting_host_detail');
+        return t(
+          sync.recoveryState == 'pending'
+              ? 'relay_sync.pending_detail'
+              : sync.hasLocalState
+              ? 'relay_sync.waiting_host_with_local_detail'
+              : 'relay_sync.waiting_host_detail',
+        );
       case RelaySyncPhase.waiting:
-        return t(sync.hasLocalState
-            ? 'relay_sync.waiting_with_local_detail'
-            : 'relay_sync.waiting_detail');
+        return t(
+          sync.hasLocalState
+              ? 'relay_sync.waiting_with_local_detail'
+              : 'relay_sync.waiting_detail',
+        );
       case RelaySyncPhase.replaying:
-        return t('relay_sync.replaying_detail',
-            args: {'count': (sync.remainingReplayCount ?? 0).toString()});
+        return t(
+          'relay_sync.replaying_detail',
+          args: {'count': (sync.remainingReplayCount ?? 0).toString()},
+        );
       case RelaySyncPhase.snapshot:
         return t('relay_sync.snapshot_detail');
     }
@@ -169,7 +191,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
   @override
   Widget build(BuildContext context) {
-    watchAppTheme(ref); // re-run on theme switch: AppColors is static/non-reactive
+    watchAppTheme(
+      ref,
+    ); // re-run on theme switch: AppColors is static/non-reactive
     final connState = ref.watch(connectionProvider);
     ref.listen<TunnelConnectionState>(connectionProvider, (prev, next) {
       if (prev?.status != next.status) {
@@ -183,7 +207,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
     // Pulse animation for connecting state
     if (showProgress && !_pulseController.isAnimating) {
-      _pulseController.repeat(reverse: true);
+      if (!AppMotion.reduceMotion(context))
+        _pulseController.repeat(reverse: true);
     } else if (!showProgress && _pulseController.isAnimating) {
       _pulseController.stop();
     }
@@ -198,11 +223,16 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
           child: showProgress
               ? _buildConnectingView(connState, errorMsg)
               : SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 0),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 28,
+                    vertical: 0,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      SizedBox(height: MediaQuery.of(context).size.height * 0.08),
+                      SizedBox(
+                        height: MediaQuery.of(context).size.height * 0.08,
+                      ),
 
                       // ─── Logo + Brand ───
                       _buildLogoSection(),
@@ -232,7 +262,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                         SizedBox(height: 40),
                         _buildRecentHeader(),
                         SizedBox(height: 12),
-                        ...(_connections.map((conn) => _buildConnectionCard(conn, connState))),
+                        ...(_connections.map(
+                          (conn) => _buildConnectionCard(conn, connState),
+                        )),
                       ],
 
                       SizedBox(height: 40),
@@ -257,10 +289,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [
-                AppColors.background,
-                AppColors.backgroundElevated,
-              ],
+              colors: [AppColors.background, AppColors.backgroundElevated],
             ),
           ),
         ),
@@ -301,45 +330,44 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
           // Animated logo with glow
           AnimatedBuilder(
             animation: _breathAnimation,
+            // M6: static subtree in `child:` - only the scale is rebuilt per frame.
+            child: Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(28),
+                gradient: LinearGradient(
+                  colors: [AppColors.surfaceElevated, AppColors.surface],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                border: Border.all(
+                  color: AppColors.borderStrong.withValues(alpha: 0.6),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.accent.withValues(alpha: 0.12),
+                    blurRadius: 32,
+                    spreadRadius: 2,
+                    offset: Offset(0, 8),
+                  ),
+                  ...AppShadows.panel,
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(24),
+                child: Image.asset(
+                  'assets/icon.png',
+                  width: 72,
+                  height: 72,
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ),
             builder: (context, child) {
               return Transform.scale(
                 scale: _breathAnimation.value,
-                child: Container(
-                  width: 96,
-                  height: 96,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(28),
-                    gradient: LinearGradient(
-                      colors: [
-                        AppColors.surfaceElevated,
-                        AppColors.surface,
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    border: Border.all(
-                      color: AppColors.borderStrong.withValues(alpha: 0.6),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.accent.withValues(alpha: 0.12),
-                        blurRadius: 32,
-                        spreadRadius: 2,
-                        offset: Offset(0, 8),
-                      ),
-                      ...AppShadows.panel,
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(24),
-                    child: Image.asset(
-                      'assets/icon.png',
-                      width: 72,
-                      height: 72,
-                      fit: BoxFit.contain,
-                    ),
-                  ),
-                ),
+                child: child,
               );
             },
           ),
@@ -426,10 +454,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
             height: 1,
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [
-                  Colors.transparent,
-                  AppColors.border,
-                ],
+                colors: [Colors.transparent, AppColors.border],
               ),
             ),
           ),
@@ -451,10 +476,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
             height: 1,
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [
-                  AppColors.border,
-                  Colors.transparent,
-                ],
+                colors: [AppColors.border, Colors.transparent],
               ),
             ),
           ),
@@ -483,11 +505,22 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
               hintText: 'wss://host/ws?token=xxx',
               hintStyle: TextStyle(color: AppColors.textMuted, fontSize: 13),
               border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-              prefixIcon: Icon(Icons.link, color: AppColors.textSecondary, size: 20),
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 16,
+              ),
+              prefixIcon: Icon(
+                Icons.link,
+                color: AppColors.textSecondary,
+                size: 20,
+              ),
               suffixIcon: _urlController.text.isNotEmpty
                   ? IconButton(
-                      icon: Icon(Icons.clear_rounded, color: AppColors.textSecondary, size: 20),
+                      icon: Icon(
+                        Icons.clear_rounded,
+                        color: AppColors.textSecondary,
+                        size: 20,
+                      ),
                       onPressed: () {
                         _urlController.clear();
                         setState(() {});
@@ -504,14 +537,19 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
           width: double.infinity,
           height: 50,
           child: FilledButton(
-            onPressed: isConnecting ? null : _connect,
+            // Primary action: accent fill (the QR button above is the
+            // secondary path), and disabled until a URL is entered.
+            onPressed: isConnecting || _urlController.text.trim().isEmpty
+                ? null
+                : _connect,
             style: FilledButton.styleFrom(
-              backgroundColor: AppColors.surfaceElevated,
-              foregroundColor: AppColors.textPrimary,
+              backgroundColor: AppColors.accent,
+              foregroundColor: AppColors.onAccent,
+              disabledBackgroundColor: AppColors.surfaceElevated,
+              disabledForegroundColor: AppColors.textMuted,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(AppRadii.md),
               ),
-              side: BorderSide(color: AppColors.borderStrong.withValues(alpha: 0.4)),
             ),
             child: Text(
               t('connect.button_connect'),
@@ -543,7 +581,11 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
           Expanded(
             child: Text(
               errorMsg,
-              style: TextStyle(color: AppColors.danger, fontSize: 12, height: 1.3),
+              style: TextStyle(
+                color: AppColors.danger,
+                fontSize: 12,
+                height: 1.3,
+              ),
             ),
           ),
         ],
@@ -569,7 +611,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
         ),
         SizedBox(width: 8),
         Expanded(
-          child: Container(height: 1, color: AppColors.border.withValues(alpha: 0.3)),
+          child: Container(
+            height: 1,
+            color: AppColors.border.withValues(alpha: 0.3),
+          ),
         ),
       ],
     );
@@ -579,7 +624,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   // Connection Card
   // ═══════════════════════════════════════════════════════
 
-  Widget _buildConnectionCard(StoredConnection conn, TunnelConnectionState connState) {
+  Widget _buildConnectionCard(
+    StoredConnection conn,
+    TunnelConnectionState connState,
+  ) {
     final cacheState = ref.read(workspaceCacheProvider);
     String sessionTitle = '';
     if (conn.sessionId != null && conn.sessionId!.isNotEmpty) {
@@ -591,10 +639,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
     String name = sessionTitle.isNotEmpty
         ? sessionTitle
         : (conn.displayName?.isNotEmpty == true
-            ? conn.displayName!
-            : (conn.workspacePath?.isNotEmpty == true
-                ? conn.workspacePath!.split('/').last
-                : 'Unknown'));
+              ? conn.displayName!
+              : (conn.workspacePath?.isNotEmpty == true
+                    ? conn.workspacePath!.split('/').last
+                    : 'Unknown'));
     final subtitle = [
       if (sessionTitle.isEmpty && conn.displayName?.isNotEmpty == true)
         conn.displayName,
@@ -715,10 +763,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                 else if (timeStr.isNotEmpty)
                   Text(
                     timeStr,
-                    style: TextStyle(
-                      color: AppColors.textMuted,
-                      fontSize: 11,
-                    ),
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 11),
                   ),
                 SizedBox(width: 4),
                 Icon(
@@ -738,7 +783,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   // Connecting View (immersive)
   // ═══════════════════════════════════════════════════════
 
-  Widget _buildConnectingView(TunnelConnectionState connState, String? errorMsg) {
+  Widget _buildConnectingView(
+    TunnelConnectionState connState,
+    String? errorMsg,
+  ) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 40),
@@ -762,7 +810,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: AppColors.accent.withValues(alpha: _pulseAnimation.value * 0.3),
+                            color: AppColors.accent.withValues(
+                              alpha: _pulseAnimation.value * 0.3,
+                            ),
                             width: 2,
                           ),
                         ),
@@ -774,7 +824,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: AppColors.accent.withValues(alpha: _pulseAnimation.value * 0.5),
+                            color: AppColors.accent.withValues(
+                              alpha: _pulseAnimation.value * 0.5,
+                            ),
                             width: 1.5,
                           ),
                         ),
@@ -787,8 +839,12 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                           shape: BoxShape.circle,
                           gradient: RadialGradient(
                             colors: [
-                              AppColors.accent.withValues(alpha: _pulseAnimation.value * 0.4),
-                              AppColors.accentSoft.withValues(alpha: _pulseAnimation.value * 0.15),
+                              AppColors.accent.withValues(
+                                alpha: _pulseAnimation.value * 0.4,
+                              ),
+                              AppColors.accentSoft.withValues(
+                                alpha: _pulseAnimation.value * 0.15,
+                              ),
                               Colors.transparent,
                             ],
                           ),
@@ -855,45 +911,56 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   // ═══════════════════════════════════════════════════════
 
   Widget _buildScanner() {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Top bar
-            Padding(
-              padding: EdgeInsets.all(8),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: Icon(Icons.close_rounded, color: AppColors.textPrimary),
-                    onPressed: () => setState(() => _showScanner = false),
-                  ),
-                  Text(
-                    t('connect.scan_qr'),
-                    style: TextStyle(
+    // M2: the scanner is toggled by a bool (not pushed as a route) on the
+    // `home` screen, so the system back gesture exited the app. Intercept it.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) setState(() => _showScanner = false);
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.background,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // Top bar
+              Padding(
+                padding: EdgeInsets.all(8),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: Icon(
+                        Icons.close_rounded,
+                        color: AppColors.textPrimary,
+                      ),
+                      onPressed: () => setState(() => _showScanner = false),
+                    ),
+                    Text(
+                      t('connect.scan_qr'),
+                      style: TextStyle(
                         color: AppColors.textPrimary,
                         fontSize: 18,
-                        fontWeight: FontWeight.w600),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Scanner
+              Expanded(child: buildQrScanner(onDetect: _handleQrCode)),
+              Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(
+                  'Point the camera at the QR code shown in GGCode Desktop',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
                   ),
-                ],
+                  textAlign: TextAlign.center,
+                ),
               ),
-            ),
-            // Scanner
-            Expanded(
-              child: buildQrScanner(
-                onDetect: _handleQrCode,
-              ),
-            ),
-            Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                'Point the camera at the QR code shown in GGCode Desktop',
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

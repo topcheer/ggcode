@@ -18,7 +18,9 @@ class SubagentPanel extends ConsumerStatefulWidget {
 class _SubagentPanelState extends ConsumerState<SubagentPanel> {
   @override
   Widget build(BuildContext context) {
-    watchAppTheme(ref); // re-run on theme switch: AppColors is static/non-reactive
+    watchAppTheme(
+      ref,
+    ); // re-run on theme switch: AppColors is static/non-reactive
     final agents = ref.watch(subagentProvider);
     // #1874 case 1: expansion lives in subagentExpandedProvider so the
     // connection layer's cleanup timer can defer removal while open.
@@ -41,8 +43,9 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
   }
 
   Widget _buildCard(SubagentInfo agent) {
-    final isExpanded =
-        ref.read(subagentExpandedProvider).contains(agent.agentId);
+    final isExpanded = ref
+        .read(subagentExpandedProvider)
+        .contains(agent.agentId);
     final color = _parseColor(agent.color);
     final isRunning =
         agent.status == 'running' || agent.status == 'waiting_approval';
@@ -74,8 +77,10 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
             children: [
               // Header
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 child: Row(
                   children: [
                     // Animated dot
@@ -92,7 +97,9 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
                       Icon(
                         agent.success ? Icons.check_circle : Icons.error,
                         size: 16,
-                        color: agent.success ? Colors.green : Colors.red,
+                        color: agent.success
+                            ? AppColors.success
+                            : AppColors.danger,
                       ),
                     const SizedBox(width: 8),
                     // Name
@@ -126,70 +133,84 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
                   ],
                 ),
               ),
-              // Expanded content
-              if (isExpanded)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Divider(color: AppColors.border, height: 1),
-                      const SizedBox(height: 8),
-                      // Streaming text or summary
-                      Consumer(builder: (context, ref, _) {
-                        final chatMessages = ref.watch(chatProvider);
-                        final agentMessages = chatMessages
-                            .where((m) => m.sourceId == agent.agentId)
-                            .toList();
-
-                        if (agentMessages.isEmpty && agent.summary != null) {
-                          return Text(
-                            agent.summary!,
-                            style: TextStyle(
-                                color: AppColors.textSecondary, fontSize: 13),
-                          );
-                        }
-
-                        return Column(
+              // Expanded content (M5: animated expand/collapse)
+              AnimatedSize(
+                duration: AppMotion.duration(context, AppMotion.base),
+                curve: AppMotion.standard,
+                alignment: Alignment.topCenter,
+                child: isExpanded
+                    ? Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
-                          children: agentMessages.map((msg) {
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 4),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (msg.streaming)
-                                    Container(
-                                      margin: const EdgeInsets.only(
-                                          top: 4, right: 6),
-                                      width: 6,
-                                      height: 6,
-                                      decoration: BoxDecoration(
-                                        color: color,
-                                        shape: BoxShape.circle,
-                                      ),
+                          children: [
+                            Divider(color: AppColors.border, height: 1),
+                            const SizedBox(height: 8),
+                            // Streaming text or summary
+                            Consumer(
+                              builder: (context, ref, _) {
+                                final chatMessages = ref.watch(chatProvider);
+                                final agentMessages = chatMessages
+                                    .where((m) => m.sourceId == agent.agentId)
+                                    .toList();
+
+                                if (agentMessages.isEmpty &&
+                                    agent.summary != null) {
+                                  return Text(
+                                    agent.summary!,
+                                    style: TextStyle(
+                                      color: AppColors.textSecondary,
+                                      fontSize: 13,
                                     ),
-                                  Expanded(
-                                    child: Text(
-                                      msg.text,
-                                      style: TextStyle(
-                                        color: AppColors.textPrimary
-                                            .withValues(alpha: 0.85),
-                                        fontSize: 13,
-                                        fontFamily: 'monospace',
+                                  );
+                                }
+
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: agentMessages.map((msg) {
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 4),
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          if (msg.streaming)
+                                            Container(
+                                              margin: const EdgeInsets.only(
+                                                top: 4,
+                                                right: 6,
+                                              ),
+                                              width: 6,
+                                              height: 6,
+                                              decoration: BoxDecoration(
+                                                color: color,
+                                                shape: BoxShape.circle,
+                                              ),
+                                            ),
+                                          Expanded(
+                                            child: Text(
+                                              msg.text,
+                                              style: TextStyle(
+                                                color: AppColors.textPrimary
+                                                    .withValues(alpha: 0.85),
+                                                fontSize: 13,
+                                                fontFamily: 'monospace',
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          }).toList(),
-                        );
-                      }),
-                    ],
-                  ),
-                ),
+                                    );
+                                  }).toList(),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
             ],
           ),
         ),
@@ -201,7 +222,7 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
     try {
       return Color(int.parse(hex.replaceFirst('#', '0xFF')));
     } catch (_) {
-      return Colors.green;
+      return AppColors.success;
     }
   }
 }

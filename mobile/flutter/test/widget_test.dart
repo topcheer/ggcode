@@ -195,6 +195,9 @@ void main() {
       ),
     );
     await tester.pump();
+    // AppShell cross-fades Connect <-> Chat (AnimatedSwitcher, 300ms): let the
+    // outgoing screen leave before asserting a single instance.
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump();
 
     expect(find.byType(ConnectScreen), findsOneWidget);
@@ -209,13 +212,17 @@ void main() {
       url: 'wss://example.test/ws?token=abc',
     ));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump();
     expect(find.byType(ChatScreen), findsOneWidget);
+    expect(find.byType(ConnectScreen), findsNothing);
 
     notifier.emit(TunnelConnectionState(status: ConnectionStatus.disconnected));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump();
     expect(find.byType(ConnectScreen), findsOneWidget);
+    expect(find.byType(ChatScreen), findsNothing);
   });
 
   testWidgets(
@@ -232,6 +239,9 @@ void main() {
       ),
     );
     await tester.pump();
+    // AppShell cross-fades Connect <-> Chat (AnimatedSwitcher, 300ms): let the
+    // outgoing screen leave before asserting a single instance.
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump();
 
     expect(find.byType(ConnectScreen), findsOneWidget);
@@ -248,6 +258,9 @@ void main() {
       url: 'wss://example.test/ws?token=abc',
     ));
     await tester.pump();
+    // AppShell cross-fades Connect <-> Chat (AnimatedSwitcher, 300ms): let the
+    // outgoing screen leave before asserting a single instance.
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump();
 
     expect(find.byType(ConnectScreen), findsOneWidget);
@@ -280,6 +293,9 @@ void main() {
 
     cache.setPendingUrl('wss://example.test/ws?token=abc');
     await tester.pump();
+    // AppShell cross-fades Connect <-> Chat (AnimatedSwitcher, 300ms): let the
+    // outgoing screen leave before asserting a single instance.
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump();
 
     expect(notifier.restoreCalls, 0);
@@ -308,6 +324,9 @@ void main() {
     expect(notifier.restoreCalls, 1);
 
     await tester.pump();
+    // AppShell cross-fades Connect <-> Chat (AnimatedSwitcher, 300ms): let the
+    // outgoing screen leave before asserting a single instance.
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump();
 
     expect(notifier.restoreCalls, 1);
@@ -344,6 +363,9 @@ void main() {
       ),
     );
     await tester.pump();
+    // AppShell cross-fades Connect <-> Chat (AnimatedSwitcher, 300ms): let the
+    // outgoing screen leave before asserting a single instance.
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump();
 
     expect(find.byType(ChatScreen), findsOneWidget);
@@ -374,6 +396,9 @@ void main() {
       url: 'wss://example.test/ws?token=abc',
     ));
     await tester.pump();
+    // AppShell cross-fades Connect <-> Chat (AnimatedSwitcher, 300ms): let the
+    // outgoing screen leave before asserting a single instance.
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump();
 
     expect(find.byType(ChatScreen), findsOneWidget);

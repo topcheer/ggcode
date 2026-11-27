@@ -46,6 +46,14 @@ Scan the QR code with the ggcode Mobile app to complete pairing.
 - **Language sync** — interface language follows desktop setting
 - **Notifications** — receive push alerts for task completions, errors, and review requests
 
+### Input and motion (v1.3.297)
+
+- The composer is multi-line (up to 6 lines): `Enter` inserts a newline, send with the send button; long prompts no longer need a single line.
+- The system back gesture closes the QR scanner instead of leaving the app.
+- **Connect** is the primary action and stays disabled until a URL is entered (or pair with **Scan QR Code**).
+- Expand/collapse (tool results, code blocks, reasoning, subagent cards, workspace groups), the send/stop button, the scroll-to-latest button, the approval card and the Connect → Chat switch are animated; the OS "reduce motion" setting disables the ambient pulses and the transitions.
+- Approving, denying, copying and submitting a questionnaire give haptic feedback.
+
 ## How Tunneling Works
 
 ```

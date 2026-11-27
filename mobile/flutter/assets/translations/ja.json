@@ -69,5 +69,9 @@
   "chat.copied": "コピーしました",
   "chat.select_all": "すべて選択",
   "codeblock.show_more": "もっと表示（残り {count} 行）",
-  "codeblock.show_less": "折りたたむ"
+  "codeblock.show_less": "折りたたむ",
+  "chat.send": "送信",
+  "chat.interrupt": "中断",
+  "chat.attach_image": "画像を添付",
+  "chat.close_tab": "タブを閉じる"
 }

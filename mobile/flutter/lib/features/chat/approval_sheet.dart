@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/session_provider.dart';
@@ -25,7 +26,7 @@ class _ApprovalSheetState extends ConsumerState<ApprovalSheet> {
       decoration: BoxDecoration(
         color: AppColors.backgroundElevated,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -33,12 +34,12 @@ class _ApprovalSheetState extends ConsumerState<ApprovalSheet> {
         children: [
           Row(
             children: [
-              const Icon(Icons.warning_amber, color: Colors.orange, size: 18),
+              Icon(Icons.warning_amber, color: AppColors.warning, size: 18),
               const SizedBox(width: 8),
               Text(
                 t('approval.title'),
                 style: TextStyle(
-                  color: Colors.orange.withValues(alpha: 0.9),
+                  color: AppColors.warning.withValues(alpha: 0.9),
                   fontWeight: FontWeight.w600,
                   fontSize: 14,
                 ),
@@ -64,7 +65,10 @@ class _ApprovalSheetState extends ConsumerState<ApprovalSheet> {
                   ? '${widget.approval.input.substring(0, 300)}...'
                   : widget.approval.input,
               style: TextStyle(
-                  color: AppColors.textSecondary, fontSize: 12, fontFamily: 'monospace'),
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                  fontFamily: AppFonts.mono,
+                  fontFamilyFallback: AppFonts.monoFallback),
             ),
           ),
           const SizedBox(height: 12),
@@ -78,19 +82,19 @@ class _ApprovalSheetState extends ConsumerState<ApprovalSheet> {
               TextButton(
                 onPressed: () => _respond(ref, 'deny'),
                 child: Text(t('approval.deny'),
-                    style: const TextStyle(color: Colors.redAccent)),
+                    style: TextStyle(color: AppColors.danger)),
               ),
               TextButton(
                 onPressed: () => _respond(ref, 'allow'),
                 child: Text(
                   t('approval.allow'),
-                  style: const TextStyle(color: Colors.green),
+                  style: TextStyle(color: AppColors.success),
                 ),
               ),
               FilledButton(
                 onPressed: () => _respond(ref, 'always_allow'),
                 style:
-                    FilledButton.styleFrom(backgroundColor: AppColors.accent),
+                    FilledButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: AppColors.onAccent),
                 child: Text(t('approval.always_allow')),
               ),
             ],
@@ -109,12 +113,15 @@ class _ApprovalSheetState extends ConsumerState<ApprovalSheet> {
     // tool call was approved while the host blocks forever. Keep the
     // sheet visible and surface the failure instead of clearing it.
     if (ref.read(connectionProvider).status != ConnectionStatus.connected) {
+      HapticFeedback.heavyImpact();
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(t('approval.send_failed_reconnect')),
       ));
       return;
     }
     _responded = true;
+    // M19: haptic confirmation for a decision the user cannot undo.
+    HapticFeedback.selectionClick();
     ref.read(connectionProvider.notifier).send({
       'type': 'approval_response',
       'data': {'id': widget.approval.id, 'decision': decision},

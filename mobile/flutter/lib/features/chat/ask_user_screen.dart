@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/protocol.dart' as proto;
@@ -31,7 +32,9 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
 
   @override
   Widget build(BuildContext context) {
-    watchAppTheme(ref); // re-run on theme switch: AppColors is static/non-reactive
+    watchAppTheme(
+      ref,
+    ); // re-run on theme switch: AppColors is static/non-reactive
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     final maxHeight = MediaQuery.sizeOf(context).height * 0.85;
     ref.listen<AskUserInfo?>(askUserProvider, (prev, next) {
@@ -79,8 +82,11 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   child: Row(
                     children: [
-                      Icon(Icons.help_outline,
-                          color: AppColors.accent, size: 20),
+                      Icon(
+                        Icons.help_outline,
+                        color: AppColors.accent,
+                        size: 20,
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -121,23 +127,27 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.accent,
+                        foregroundColor: AppColors.onAccent,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
-                    // #1424-B: Submit was ALWAYS enabled and _submit maps
-                    // unanswered questions to empty answers - an
-                    // all-empty submission sent status 'submitted' with
-                    // zero answers, indistinguishable from 'cancelled'
-                    // while the agent waits for a real answer. Require at
-                    // least one answered question (choice or freeform).
-                    onPressed: _hasAnyAnswer(askUser) ? () => _submit(askUser) : null,
+                      // #1424-B: Submit was ALWAYS enabled and _submit maps
+                      // unanswered questions to empty answers - an
+                      // all-empty submission sent status 'submitted' with
+                      // zero answers, indistinguishable from 'cancelled'
+                      // while the agent waits for a real answer. Require at
+                      // least one answered question (choice or freeform).
+                      onPressed: _hasAnyAnswer(askUser)
+                          ? () => _submit(askUser)
+                          : null,
                       child: Text(
                         'Submit',
                         style: TextStyle(
-                            color: AppColors.textPrimary,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600),
+                          color: AppColors.textPrimary,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),
@@ -163,7 +173,9 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
               Text(
                 '${index + 1}. ',
                 style: TextStyle(
-                    color: AppColors.accent, fontWeight: FontWeight.w600),
+                  color: AppColors.accent,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               Expanded(
                 child: Text(
@@ -177,49 +189,60 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
 
           // Single choice
           if (question.kind == 'single')
-            ...question.choices.map((choice) => _buildChoiceTile(
-                  question.id,
-                  choice,
-                  isSelected:
-                      (_selectedChoices[question.id]?.length ?? 0) == 1 &&
-                          _selectedChoices[question.id]!.first == choice.id,
-                  multi: false,
-                )),
+            ...question.choices.map(
+              (choice) => _buildChoiceTile(
+                question.id,
+                choice,
+                isSelected:
+                    (_selectedChoices[question.id]?.length ?? 0) == 1 &&
+                    _selectedChoices[question.id]!.first == choice.id,
+                multi: false,
+              ),
+            ),
 
           // Multi choice
           if (question.kind == 'multi')
-            ...question.choices.map((choice) => _buildChoiceTile(
-                  question.id,
-                  choice,
-                  isSelected:
-                      _selectedChoices[question.id]?.contains(choice.id) ??
-                          false,
-                  multi: true,
-                )),
+            ...question.choices.map(
+              (choice) => _buildChoiceTile(
+                question.id,
+                choice,
+                isSelected:
+                    _selectedChoices[question.id]?.contains(choice.id) ?? false,
+                multi: true,
+              ),
+            ),
 
           // Freeform
           if (question.kind == 'text' || question.allowFreeform) ...[
             const SizedBox(height: 4),
             TextField(
               controller: _freeformControllers.putIfAbsent(
-                  question.id, () => TextEditingController()),
+                question.id,
+                () => TextEditingController(),
+              ),
               style: TextStyle(color: AppColors.textPrimary, fontSize: 14),
               decoration: InputDecoration(
                 hintText: question.placeholder.isNotEmpty
                     ? question.placeholder
                     : 'Type your answer...',
-                hintStyle:
-                    TextStyle(color: AppColors.textMuted),
+                hintStyle: TextStyle(color: AppColors.textMuted),
                 filled: true,
                 fillColor: AppColors.surfaceElevated,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
                   borderSide: BorderSide.none,
                 ),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
               ),
-              maxLines: question.kind == 'text' ? 3 : 1,
+              // M7: free-form answers auto-grow (was a fixed 3-line box).
+              minLines: question.kind == 'text' ? 2 : 1,
+              maxLines: question.kind == 'text' ? 6 : 1,
+              keyboardType: question.kind == 'text'
+                  ? TextInputType.multiline
+                  : TextInputType.text,
             ),
           ],
         ],
@@ -227,8 +250,12 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
     );
   }
 
-  Widget _buildChoiceTile(String questionId, proto.AskUserChoice choice,
-      {required bool isSelected, required bool multi}) {
+  Widget _buildChoiceTile(
+    String questionId,
+    proto.AskUserChoice choice, {
+    required bool isSelected,
+    required bool multi,
+  }) {
     return InkWell(
       onTap: () {
         setState(() {
@@ -251,11 +278,11 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
             Icon(
               multi
                   ? (isSelected
-                      ? Icons.check_box
-                      : Icons.check_box_outline_blank)
+                        ? Icons.check_box
+                        : Icons.check_box_outline_blank)
                   : (isSelected
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_unchecked),
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked),
               color: isSelected ? AppColors.accent : AppColors.textMuted,
               size: 20,
             ),
@@ -264,7 +291,9 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
               child: Text(
                 choice.label,
                 style: TextStyle(
-                  color: isSelected ? AppColors.textPrimary : AppColors.textSecondary,
+                  color: isSelected
+                      ? AppColors.textPrimary
+                      : AppColors.textSecondary,
                   fontSize: 14,
                 ),
               ),
@@ -275,18 +304,19 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
     );
   }
 
-
   /// #1424-B: whether at least one question has a real answer (a picked
   /// choice or non-empty freeform text) - gates the Submit button.
   bool _hasAnyAnswer(AskUserInfo askUser) {
     for (final q in askUser.questions) {
       if ((_selectedChoices[q.id] ?? const []).isNotEmpty) return true;
-      if ((_freeformControllers[q.id]?.text ?? '').trim().isNotEmpty) return true;
+      if ((_freeformControllers[q.id]?.text ?? '').trim().isNotEmpty)
+        return true;
     }
     return false;
   }
 
   void _submit(AskUserInfo askUser) {
+    HapticFeedback.selectionClick(); // M19: confirm an irreversible submit
     // #1873 case 1: same trio as approval_sheet (#1023) - double-tap
     // guard and disconnect guard. Without them a send over a dead
     // tunnel is a silent no-op, yet the local message still gets marked
@@ -294,9 +324,9 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
     // ask_user_response forever while the user believes they answered.
     if (_responded) return;
     if (ref.read(connectionProvider).status != ConnectionStatus.connected) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(t('approval.send_failed_reconnect')),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('approval.send_failed_reconnect'))),
+      );
       return;
     }
     _responded = true;
@@ -337,10 +367,9 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
 
     // Update the ask_user chat message with the answer
     if (askUser.msgId.isNotEmpty) {
-      ref.read(chatProvider.notifier).updateAskUserAnswer(
-            askUser.msgId,
-            parts.join(' / '),
-          );
+      ref
+          .read(chatProvider.notifier)
+          .updateAskUserAnswer(askUser.msgId, parts.join(' / '));
     }
 
     ref.read(askUserProvider.notifier).set(null);
@@ -351,9 +380,9 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
     // left the device still clears the question and blocks the host.
     if (_responded) return;
     if (ref.read(connectionProvider).status != ConnectionStatus.connected) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(t('approval.send_failed_reconnect')),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('approval.send_failed_reconnect'))),
+      );
       return;
     }
     _responded = true;
@@ -375,10 +404,9 @@ void cancelPendingAskUser(WidgetRef ref, String id) {
   });
 
   if (askUser.msgId.isNotEmpty) {
-    ref.read(chatProvider.notifier).updateAskUserAnswer(
-          askUser.msgId,
-          'Cancelled',
-        );
+    ref
+        .read(chatProvider.notifier)
+        .updateAskUserAnswer(askUser.msgId, 'Cancelled');
   }
 
   ref.read(askUserProvider.notifier).set(null);

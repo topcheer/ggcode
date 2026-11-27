@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../core/qr_scanner.dart';
 import '../../core/web_url_open.dart';
 
@@ -159,7 +160,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   @override
   Widget build(BuildContext context) {
     watchAppTheme(
-        ref); // re-run on theme switch: AppColors is static/non-reactive
+      ref,
+    ); // re-run on theme switch: AppColors is static/non-reactive
     ref.listen<ApprovalInfo?>(approvalProvider, (prev, next) {
       if (next != null && prev == null) {
         FocusManager.instance.primaryFocus?.unfocus();
@@ -175,15 +177,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final isHistorical = ref.watch(isHistoricalViewProvider);
     final currentSession =
         cache.selectedSessionId == null || cache.selectedSessionId!.isEmpty
-            ? null
-            : cacheNotifier.sessionForId(cache.selectedSessionId!);
+        ? null
+        : cacheNotifier.sessionForId(cache.selectedSessionId!);
     final currentWorkspace =
         currentSession != null && currentSession.workspaceKey.isNotEmpty
-            ? cache.workspaces[currentSession.workspaceKey]
-            : (cache.selectedWorkspaceKey != null &&
-                    cache.selectedWorkspaceKey!.isNotEmpty
-                ? cache.workspaces[cache.selectedWorkspaceKey!]
-                : null);
+        ? cache.workspaces[currentSession.workspaceKey]
+        : (cache.selectedWorkspaceKey != null &&
+                  cache.selectedWorkspaceKey!.isNotEmpty
+              ? cache.workspaces[cache.selectedWorkspaceKey!]
+              : null);
 
     // Build tab list: main + all agents (active first, then completed)
     final tabIds = <String>['main'];
@@ -204,8 +206,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     _updateTabs(tabIds, tabNames);
 
     // Filter messages for current tab
-    final currentSourceId =
-        _currentTab < _tabIds.length ? _tabIds[_currentTab] : 'main';
+    final currentSourceId = _currentTab < _tabIds.length
+        ? _tabIds[_currentTab]
+        : 'main';
     final messages = currentSourceId == 'main'
         ? allMessages.where((m) => m.sourceId == null).toList()
         : allMessages.where((m) => m.sourceId == currentSourceId).toList();
@@ -256,18 +259,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         ScrollViewKeyboardDismissBehavior.onDrag,
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
                     itemCount: messages.length,
+                    // M10: keyed rows so expand/collapse State follows the
+                    // message (not the index) across session switches, and
+                    // findChildIndexCallback keeps that mapping O(1).
+                    findChildIndexCallback: (Key key) {
+                      final id = (key as ValueKey<String>).value;
+                      final index = messages.indexWhere((m) => m.id == id);
+                      return index < 0 ? null : index;
+                    },
                     itemBuilder: (context, index) {
                       final msg = messages[index];
-                      if (msg.toolName != null) {
-                        return _buildToolMessage(msg);
-                      }
-                      return MessageBubble(message: msg);
+                      // M3: isolate each row's repaint from the streaming row.
+                      return RepaintBoundary(
+                        key: ValueKey<String>(msg.id),
+                        child: msg.toolName != null
+                            ? _buildToolMessage(msg)
+                            : MessageBubble(message: msg),
+                      );
                     },
                   ),
                 ),
               ),
             ),
-            if (approval != null) ApprovalSheet(approval: approval),
+            AnimatedSize(
+              duration: AppMotion.duration(context, AppMotion.enter),
+              curve: AppMotion.standard,
+              alignment: Alignment.bottomCenter,
+              child: approval != null
+                  ? ApprovalSheet(
+                      key: ValueKey(approval.id),
+                      approval: approval,
+                    )
+                  : const SizedBox(width: double.infinity),
+            ),
             InputBar(controller: _inputController),
           ],
         ),
@@ -275,43 +299,76 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         // the bottom (see _onListScroll). Animated jump; also used as the
         // escape hatch when the #1024 auto-follow guard (<=120px) has
         // stopped following the stream.
-        if (_showJumpButton)
-          Positioned(
-            right: 16,
-            bottom: 96,
-            child: Material(
-              color: AppColors.surfaceElevated,
-              shape: const CircleBorder(),
-              elevation: 4,
-              shadowColor: Colors.black54,
-              child: InkWell(
-                customBorder: const CircleBorder(),
-                onTap: () => _scrollController.hasClients
-                    ? _scrollController.animateTo(
-                        _scrollController.position.maxScrollExtent,
-                        duration: const Duration(milliseconds: 250),
-                        curve: Curves.easeOutCubic,
-                      )
-                    : null,
-                child: Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: AppColors.border),
+        Positioned(
+          right: 16,
+          bottom: 96,
+          child: IgnorePointer(
+            ignoring: !_showJumpButton,
+            child: AnimatedOpacity(
+              opacity: _showJumpButton ? 1 : 0,
+              duration: AppMotion.duration(
+                context,
+                _showJumpButton ? AppMotion.enter : AppMotion.exit,
+              ),
+              curve: _showJumpButton
+                  ? AppMotion.decelerate
+                  : AppMotion.accelerate,
+              child: AnimatedScale(
+                scale: _showJumpButton ? 1 : 0.8,
+                duration: AppMotion.duration(context, AppMotion.enter),
+                curve: AppMotion.decelerate,
+                child: Material(
+                  color: AppColors.surfaceElevated,
+                  shape: const CircleBorder(),
+                  elevation: 4,
+                  shadowColor: Colors.black54,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: () => _scrollController.hasClients
+                        ? _scrollController.animateTo(
+                            _scrollController.position.maxScrollExtent,
+                            duration: AppMotion.duration(
+                              context,
+                              const Duration(milliseconds: 250),
+                            ),
+                            curve: Curves.easeOutCubic,
+                          )
+                        : null,
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: Icon(
+                        Icons.arrow_downward,
+                        size: 20,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
                   ),
-                  child: Icon(Icons.arrow_downward,
-                      size: 20, color: AppColors.textSecondary),
                 ),
               ),
             ),
           ),
-        if (!connState.sessionReady &&
-            connState.status != ConnectionStatus.disconnected)
-          _SyncingOverlay(
-            status: connState.status,
-            sync: connState.relaySync,
+        ),
+        // Positioned.fill is the direct Stack child; the overlay itself is
+        // cross-faded by the AnimatedSwitcher.
+        Positioned.fill(
+          child: AnimatedSwitcher(
+            duration: AppMotion.duration(context, AppMotion.base),
+            child:
+                !connState.sessionReady &&
+                    connState.status != ConnectionStatus.disconnected
+                ? _SyncingOverlay(
+                    key: ValueKey('sync-${connState.status.name}'),
+                    status: connState.status,
+                    sync: connState.relaySync,
+                  )
+                : const SizedBox.shrink(),
           ),
+        ),
       ],
     );
 
@@ -346,16 +403,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                               child: Text(
                                 currentWorkspace?.key != null
                                     ? _decodeWorkspaceName(
-                                        currentWorkspace!.key)
+                                        currentWorkspace!.key,
+                                      )
                                     : info?.workspace.split('/').last ??
-                                        'GGCode',
+                                          'GGCode',
                                 style: const TextStyle(fontSize: 16),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
                             SizedBox(width: 4),
-                            Icon(Icons.expand_more,
-                                size: 16, color: AppColors.textSecondary),
+                            Icon(
+                              Icons.expand_more,
+                              size: 16,
+                              color: AppColors.textSecondary,
+                            ),
                           ],
                         ),
                         if (currentSession != null)
@@ -366,9 +427,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                               }
                               final wsName =
                                   currentSession.workspaceKey.isNotEmpty
-                                      ? _decodeWorkspaceName(
-                                          currentSession.workspaceKey)
-                                      : '';
+                                  ? _decodeWorkspaceName(
+                                      currentSession.workspaceKey,
+                                    )
+                                  : '';
                               final date = currentSession.sessionId.length >= 8
                                   ? currentSession.sessionId.substring(0, 8)
                                   : currentSession.sessionId;
@@ -397,78 +459,88 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         ),
         actions: [
           // Language selector
-          Consumer(builder: (context, ref, _) {
-            final lang = ref.watch(languageProvider);
-            return PopupMenuButton<String>(
-              icon: const Icon(Icons.language, size: 20),
-              tooltip: t('settings.language'),
-              onSelected: (newLang) {
-                persistLanguageChoice(ref, newLang);
-                ref
-                    .read(connectionProvider.notifier)
-                    .service
-                    ?.sendLanguageChange(newLang);
-                setState(() {});
-              },
-              itemBuilder: (_) => supportedLanguages.map((code) {
-                final labels = {
-                  'en': 'English',
-                  'zh-CN': '简体中文',
-                  'zh-TW': '繁體中文',
-                  'ja': '日本語',
-                  'ko': '한국어',
-                  'es': 'Español',
-                  'fr': 'Français',
-                  'de': 'Deutsch',
-                  'ru': 'Русский',
-                  'pt': 'Português',
-                };
-                return PopupMenuItem(
-                  value: code,
-                  child: Row(children: [
-                    if (code == lang)
-                      const Icon(Icons.check, size: 16, color: Colors.blue)
-                    else
-                      const SizedBox(width: 16),
-                    const SizedBox(width: 8),
-                    Text(labels[code] ?? code),
-                  ]),
-                );
-              }).toList(),
-            );
-          }),
-          // Theme toggle
-          Consumer(builder: (context, ref, _) {
-            final current = ref.watch(themeProvider);
-            return PopupMenuButton<String>(
-              tooltip: 'Theme: ${displayThemeName(current)}',
-              icon: const Icon(Icons.palette_outlined, size: 20),
-              initialValue: current,
-              onSelected: (next) {
-                ref.read(themeProvider.notifier).setTheme(next);
-                ref
-                    .read(connectionProvider.notifier)
-                    .service
-                    ?.sendThemeChange(next);
-              },
-              itemBuilder: (context) => [
-                for (final theme in availableThemes)
-                  PopupMenuItem<String>(
-                    value: theme,
+          Consumer(
+            builder: (context, ref, _) {
+              final lang = ref.watch(languageProvider);
+              return PopupMenuButton<String>(
+                icon: const Icon(Icons.language, size: 20),
+                tooltip: t('settings.language'),
+                onSelected: (newLang) {
+                  persistLanguageChoice(ref, newLang);
+                  ref
+                      .read(connectionProvider.notifier)
+                      .service
+                      ?.sendLanguageChange(newLang);
+                  setState(() {});
+                },
+                itemBuilder: (_) => supportedLanguages.map((code) {
+                  final labels = {
+                    'en': 'English',
+                    'zh-CN': '简体中文',
+                    'zh-TW': '繁體中文',
+                    'ja': '日本語',
+                    'ko': '한국어',
+                    'es': 'Español',
+                    'fr': 'Français',
+                    'de': 'Deutsch',
+                    'ru': 'Русский',
+                    'pt': 'Português',
+                  };
+                  return PopupMenuItem(
+                    value: code,
                     child: Row(
                       children: [
-                        if (theme == current)
-                          Icon(Icons.check, size: 16, color: AppColors.accent)
+                        if (code == lang)
+                          const Icon(
+                            Icons.check,
+                            size: 16,
+                            color: Color(0xFF6EA8FF),
+                          )
                         else
                           const SizedBox(width: 16),
                         const SizedBox(width: 8),
-                        Text(displayThemeName(theme)),
+                        Text(labels[code] ?? code),
                       ],
                     ),
-                  ),
-              ],
-            );
-          }),
+                  );
+                }).toList(),
+              );
+            },
+          ),
+          // Theme toggle
+          Consumer(
+            builder: (context, ref, _) {
+              final current = ref.watch(themeProvider);
+              return PopupMenuButton<String>(
+                tooltip: 'Theme: ${displayThemeName(current)}',
+                icon: const Icon(Icons.palette_outlined, size: 20),
+                initialValue: current,
+                onSelected: (next) {
+                  ref.read(themeProvider.notifier).setTheme(next);
+                  ref
+                      .read(connectionProvider.notifier)
+                      .service
+                      ?.sendThemeChange(next);
+                },
+                itemBuilder: (context) => [
+                  for (final theme in availableThemes)
+                    PopupMenuItem<String>(
+                      value: theme,
+                      child: Row(
+                        children: [
+                          if (theme == current)
+                            Icon(Icons.check, size: 16, color: AppColors.accent)
+                          else
+                            const SizedBox(width: 16),
+                          const SizedBox(width: 8),
+                          Text(displayThemeName(theme)),
+                        ],
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
           _ConnectionStatusIcon(
             status: connState.status,
             isP2P: connState.isP2P,
@@ -494,8 +566,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.of(ctx).pop(),
-                      child: Text(t('chat.cancel'),
-                          style: TextStyle(color: AppColors.textSecondary)),
+                      child: Text(
+                        t('chat.cancel'),
+                        style: TextStyle(color: AppColors.textSecondary),
+                      ),
                     ),
                     TextButton(
                       onPressed: () async {
@@ -555,8 +629,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                                 : Icons.error,
                             size: 12,
                             color: agent?.success ?? false
-                                ? Colors.green
-                                : Colors.red,
+                                ? AppColors.success
+                                : AppColors.danger,
                           ),
                         if (isRunning || isCompleted) const SizedBox(width: 4),
                         Text(
@@ -568,14 +642,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                           ),
                         ),
                         if (isCompleted && id != 'main')
-                          GestureDetector(
-                            onTap: () => _closeTab(id),
-                            child: Padding(
-                              padding: EdgeInsets.only(left: 4),
-                              child: Icon(
-                                Icons.close,
-                                size: 14,
-                                color: AppColors.textMuted,
+                          Semantics(
+                            button: true,
+                            label: t('chat.close_tab'),
+                            child: GestureDetector(
+                              onTap: () => _closeTab(id),
+                              behavior: HitTestBehavior.opaque,
+                              child: SizedBox(
+                                width: 32,
+                                height: 32,
+                                child: Icon(
+                                  Icons.close,
+                                  size: 16,
+                                  color: AppColors.textMuted,
+                                ),
                               ),
                             ),
                           ),
@@ -603,9 +683,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         .sessionsForWorkspace(key),
                     activeWorkspaceKey:
                         ref.read(workspaceCacheProvider).selectedWorkspaceKey ??
-                            '',
-                    liveSessionId:
-                        ref.read(connectionProvider.notifier).currentSessionId,
+                        '',
+                    liveSessionId: ref
+                        .read(connectionProvider.notifier)
+                        .currentSessionId,
                     liveSessionIds: ref
                         .read(backgroundConnectionProvider.notifier)
                         .liveSessionIds,
@@ -613,7 +694,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   ),
                 ),
                 VerticalDivider(
-                    width: 1, thickness: 1, color: AppColors.border),
+                  width: 1,
+                  thickness: 1,
+                  color: AppColors.border,
+                ),
                 Expanded(child: chatBody),
               ],
             )
@@ -721,12 +805,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                       liveSessionIds: bgConn.liveSessionIds,
                       onSessionTap: (session) async {
                         debugPrint(
-                            '[chat] onSessionTap: session=${session.sessionId} url=${session.url.substring(0, session.url.length > 60 ? 60 : session.url.length)}...');
+                          '[chat] onSessionTap: session=${session.sessionId} url=${session.url.substring(0, session.url.length > 60 ? 60 : session.url.length)}...',
+                        );
                         Navigator.of(ctx).pop();
                         if (session.sessionId ==
                             connNotifier.currentSessionId) {
                           debugPrint(
-                              '[chat] onSessionTap: same session, skipping');
+                            '[chat] onSessionTap: same session, skipping',
+                          );
                           return;
                         }
                         // If session has a background service, adopt it.
@@ -743,8 +829,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                           // session.url from SQLite may have expired auth_ticket.
                           var connUrl = session.url;
                           try {
-                            final desc =
-                                ShareConnectionDescriptor.parse(connUrl);
+                            final desc = ShareConnectionDescriptor.parse(
+                              connUrl,
+                            );
                             final stored = ConnectionStore.instance
                                 .findByRoomId(desc.roomId);
                             if (stored != null &&
@@ -755,19 +842,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                                   ShareConnectionDescriptor.parse(stored.url);
                               if (storedDesc.roomId == desc.roomId) {
                                 debugPrint(
-                                    '[chat] onSessionTap: using renew_token URL for room=${desc.roomId}');
+                                  '[chat] onSessionTap: using renew_token URL for room=${desc.roomId}',
+                                );
                                 connUrl = stored.url;
                               } else {
                                 debugPrint(
-                                    '[chat] onSessionTap: renew_token room mismatch ${storedDesc.roomId} != ${desc.roomId}, ignoring');
+                                  '[chat] onSessionTap: renew_token room mismatch ${storedDesc.roomId} != ${desc.roomId}, ignoring',
+                                );
                               }
                             }
                           } catch (e) {
                             debugPrint(
-                                '[chat] onSessionTap: URL lookup failed: $e');
+                              '[chat] onSessionTap: URL lookup failed: $e',
+                            );
                           }
-                          final bgService =
-                              bgConn.adoptService(session.sessionId);
+                          final bgService = bgConn.adoptService(
+                            session.sessionId,
+                          );
                           if (bgService != null) {
                             connNotifier.adoptService(
                               bgService,
@@ -814,7 +905,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                               TextButton(
                                 onPressed: () => Navigator.of(dctx).pop(true),
                                 style: TextButton.styleFrom(
-                                  foregroundColor: Colors.red,
+                                  foregroundColor: AppColors.danger,
                                 ),
                                 child: Text(t('common.clear')),
                               ),
@@ -830,12 +921,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                           setModalState(() {});
                         }
                       },
-                      icon: Icon(Icons.cleaning_services_outlined,
-                          size: 16, color: Colors.red.withValues(alpha: 0.7)),
+                      icon: Icon(
+                        Icons.cleaning_services_outlined,
+                        size: 16,
+                        color: AppColors.danger.withValues(alpha: 0.7),
+                      ),
                       label: Text(
                         t('workspace.clear_cache'),
                         style: TextStyle(
-                          color: Colors.red.withValues(alpha: 0.7),
+                          color: AppColors.danger.withValues(alpha: 0.7),
                           fontSize: 13,
                         ),
                       ),
@@ -854,8 +948,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final prettyName = _prettyToolName(msg.toolName ?? 'tool');
     final title =
         (msg.toolDisplayName != null && msg.toolDisplayName!.isNotEmpty)
-            ? msg.toolDisplayName!
-            : prettyName;
+        ? msg.toolDisplayName!
+        : prettyName;
     return _ToolMessageCard(message: msg, title: title);
   }
 
@@ -871,7 +965,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     try {
       return Color(int.parse(hex.replaceFirst('#', '0xFF')));
     } catch (_) {
-      return Colors.green;
+      return AppColors.success;
     }
   }
 }
@@ -880,10 +974,7 @@ class _ToolMessageCard extends StatefulWidget {
   final ChatMessage message;
   final String title;
 
-  const _ToolMessageCard({
-    required this.message,
-    required this.title,
-  });
+  const _ToolMessageCard({required this.message, required this.title});
 
   @override
   State<_ToolMessageCard> createState() => _ToolMessageCardState();
@@ -915,7 +1006,14 @@ class _ToolMessageCardState extends State<_ToolMessageCard>
   void _syncAnimation() {
     if (_isRunning) {
       if (!_pulse.isAnimating) {
-        _pulse.repeat(reverse: true);
+        // M8: initState has no inherited-widget access - read the flag from
+        // the platform dispatcher instead of MediaQuery.
+        final disableAnimations = WidgetsBinding
+            .instance
+            .platformDispatcher
+            .accessibilityFeatures
+            .disableAnimations;
+        if (!disableAnimations) _pulse.repeat(reverse: true);
       }
       return;
     }
@@ -934,14 +1032,75 @@ class _ToolMessageCardState extends State<_ToolMessageCard>
   @override
   Widget build(BuildContext context) {
     final detail = widget.message.toolDetail ?? '';
-    final hasResultBody = widget.message.toolResult != null &&
+    final hasResultBody =
+        widget.message.toolResult != null &&
         widget.message.toolResult!.isNotEmpty;
 
+    // M6: the Column below is passed as `child:` so the per-frame glow
+    // animation only rebuilds the DecoratedBox, not the whole tool card
+    // (it used to rebuild _ToolResultCard at 60-120fps while running).
     return AnimatedBuilder(
       animation: _pulse,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.build,
+                size: 13,
+                color:
+                    (widget.message.isToolError && !_isRunning
+                            ? AppColors.danger
+                            : AppColors.accent)
+                        .withValues(alpha: 0.9),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: widget.title,
+                        style: TextStyle(
+                          color: AppColors.accent.withValues(alpha: 0.97),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (detail.isNotEmpty)
+                        TextSpan(
+                          text: '  $detail',
+                          style: TextStyle(
+                            color: AppColors.textMuted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
+                    ],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _ToolStatusBadge(message: widget.message, isRunning: _isRunning),
+            ],
+          ),
+          if (hasResultBody)
+            _ToolResultCard(
+              result: widget.message.toolResult!,
+              payload: widget.message.toolPayload,
+              payloadMode: widget.message.toolPayloadMode,
+              toolName: widget.message.toolName,
+              isError: widget.message.isToolError,
+            ),
+        ],
+      ),
       builder: (context, child) {
-        final glowT =
-            _isRunning ? Curves.easeInOut.transform(_pulse.value) : 0.0;
+        final glowT = _isRunning
+            ? Curves.easeInOut.transform(_pulse.value)
+            : 0.0;
         final borderColor = _isRunning
             ? Color.lerp(
                 AppColors.accent.withValues(alpha: 0.38),
@@ -949,8 +1108,8 @@ class _ToolMessageCardState extends State<_ToolMessageCard>
                 glowT,
               )!
             : widget.message.isToolError
-                ? AppColors.danger.withValues(alpha: 0.34)
-                : AppColors.border;
+            ? AppColors.danger.withValues(alpha: 0.34)
+            : AppColors.border;
         final glowColor = Color.lerp(
           AppColors.accent.withValues(alpha: 0.10),
           AppColors.accentSoft.withValues(alpha: 0.26),
@@ -976,66 +1135,7 @@ class _ToolMessageCardState extends State<_ToolMessageCard>
                 ),
             ],
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    Icons.build,
-                    size: 13,
-                    color: (_isRunning
-                            ? AppColors.accent
-                            : (widget.message.isToolError
-                                ? AppColors.danger
-                                : AppColors.accent))
-                        .withValues(alpha: 0.9),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(
-                            text: widget.title,
-                            style: TextStyle(
-                              color: AppColors.accent.withValues(alpha: 0.97),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          if (detail.isNotEmpty)
-                            TextSpan(
-                              text: '  $detail',
-                              style: TextStyle(
-                                color: AppColors.textMuted,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w400,
-                              ),
-                            ),
-                        ],
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _ToolStatusBadge(
-                    message: widget.message,
-                    isRunning: _isRunning,
-                  ),
-                ],
-              ),
-              if (hasResultBody)
-                _ToolResultCard(
-                  result: widget.message.toolResult!,
-                  payload: widget.message.toolPayload,
-                  payloadMode: widget.message.toolPayloadMode,
-                  toolName: widget.message.toolName,
-                  isError: widget.message.isToolError,
-                ),
-            ],
-          ),
+          child: child,
         );
       },
     );
@@ -1046,10 +1146,7 @@ class _ToolStatusBadge extends StatelessWidget {
   final ChatMessage message;
   final bool isRunning;
 
-  const _ToolStatusBadge({
-    required this.message,
-    required this.isRunning,
-  });
+  const _ToolStatusBadge({required this.message, required this.isRunning});
 
   @override
   Widget build(BuildContext context) {
@@ -1117,7 +1214,7 @@ class _HistoricalSessionBanner extends StatelessWidget {
       margin: EdgeInsets.fromLTRB(8, 6, 8, 0),
       padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.amber.withValues(alpha: 0.12),
+        color: AppColors.warning.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(AppRadii.sm),
         border: Border.all(color: AppColors.warning.withValues(alpha: 0.28)),
       ),
@@ -1177,11 +1274,7 @@ class _RelaySyncBanner extends StatelessWidget {
             width: 16,
             height: 16,
             child: isWarning
-                ? Icon(
-                    Icons.sync_problem,
-                    size: 16,
-                    color: AppColors.warning,
-                  )
+                ? Icon(Icons.sync_problem, size: 16, color: AppColors.warning)
                 : const CircularProgressIndicator(strokeWidth: 2),
           ),
           const SizedBox(width: 10),
@@ -1223,15 +1316,19 @@ class _RelaySyncBanner extends StatelessWidget {
       case RelaySyncPhase.restoringLocal:
         return t('relay_sync.restoring_title');
       case RelaySyncPhase.waitingHost:
-        return t(sync.recoveryState == 'pending'
-            ? 'relay_sync.pending_title'
-            : 'relay_sync.waiting_host_title');
+        return t(
+          sync.recoveryState == 'pending'
+              ? 'relay_sync.pending_title'
+              : 'relay_sync.waiting_host_title',
+        );
       case RelaySyncPhase.waiting:
         return t('relay_sync.waiting_title');
       case RelaySyncPhase.replaying:
-        return t(sync.resumeMode == 'full_history'
-            ? 'relay_sync.full_history_title'
-            : 'relay_sync.replaying_title');
+        return t(
+          sync.resumeMode == 'full_history'
+              ? 'relay_sync.full_history_title'
+              : 'relay_sync.replaying_title',
+        );
       case RelaySyncPhase.snapshot:
         return t('relay_sync.snapshot_title');
     }
@@ -1241,9 +1338,7 @@ class _RelaySyncBanner extends StatelessWidget {
     if (sync.stalled) {
       return t(
         'relay_sync.stalled_detail',
-        args: {
-          'count': (sync.remainingReplayCount ?? 0).toString(),
-        },
+        args: {'count': (sync.remainingReplayCount ?? 0).toString()},
       );
     }
     switch (sync.phase) {
@@ -1254,19 +1349,19 @@ class _RelaySyncBanner extends StatelessWidget {
           sync.recoveryState == 'pending'
               ? 'relay_sync.pending_detail'
               : sync.hasLocalState
-                  ? 'relay_sync.waiting_host_with_local_detail'
-                  : 'relay_sync.waiting_host_detail',
+              ? 'relay_sync.waiting_host_with_local_detail'
+              : 'relay_sync.waiting_host_detail',
         );
       case RelaySyncPhase.waiting:
-        return t(sync.hasLocalState
-            ? 'relay_sync.waiting_with_local_detail'
-            : 'relay_sync.waiting_detail');
+        return t(
+          sync.hasLocalState
+              ? 'relay_sync.waiting_with_local_detail'
+              : 'relay_sync.waiting_detail',
+        );
       case RelaySyncPhase.replaying:
         return t(
           'relay_sync.replaying_detail',
-          args: {
-            'count': (sync.remainingReplayCount ?? 0).toString(),
-          },
+          args: {'count': (sync.remainingReplayCount ?? 0).toString()},
         );
       case RelaySyncPhase.snapshot:
         return t('relay_sync.snapshot_detail');
@@ -1318,9 +1413,10 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
                   Text(
                     t('workspace.scan_new'),
                     style: TextStyle(
-                        color: AppColors.textPrimary,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600),
+                      color: AppColors.textPrimary,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ],
               ),
@@ -1348,8 +1444,10 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
                 children: [
                   Text(
                     t('workspace.scan_hint'),
-                    style:
-                        TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 13,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                   SizedBox(height: 16),
@@ -1365,8 +1463,10 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
                   TextField(
                     key: const Key('workspaceScannerManualUrlField'),
                     controller: _manualUrlController,
-                    style:
-                        TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                    style: TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 14,
+                    ),
                     decoration: InputDecoration(
                       hintText: t('workspace.url_placeholder'),
                       hintStyle: TextStyle(color: AppColors.textMuted),
@@ -1376,12 +1476,16 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
                         borderRadius: BorderRadius.circular(AppRadii.md),
                         borderSide: BorderSide.none,
                       ),
-                      prefixIcon:
-                          Icon(Icons.link, color: AppColors.textSecondary),
+                      prefixIcon: Icon(
+                        Icons.link,
+                        color: AppColors.textSecondary,
+                      ),
                       suffixIcon: manualUrl.isNotEmpty
                           ? IconButton(
-                              icon: Icon(Icons.clear,
-                                  color: AppColors.textSecondary),
+                              icon: Icon(
+                                Icons.clear,
+                                color: AppColors.textSecondary,
+                              ),
                               onPressed: () {
                                 _manualUrlController.clear();
                                 setState(() {});
@@ -1470,52 +1574,57 @@ class _ToolResultCardState extends State<_ToolResultCard> {
                 : AppColors.border,
           ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  _expanded ? Icons.expand_less : Icons.expand_more,
-                  size: 14,
-                  color: AppColors.textMuted,
-                ),
-                SizedBox(width: 2),
+        child: AnimatedSize(
+          duration: AppMotion.duration(context, AppMotion.base),
+          curve: AppMotion.standard,
+          alignment: Alignment.topCenter,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    _expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 14,
+                    color: AppColors.textMuted,
+                  ),
+                  SizedBox(width: 2),
+                  Text(
+                    widget.isError ? t('tool.error') : t('tool.result'),
+                    style: TextStyle(
+                      color: widget.isError
+                          ? AppColors.danger.withValues(alpha: 0.9)
+                          : AppColors.textMuted,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 2),
+              if (_rendersMarkdown)
+                _buildMarkdownResult()
+              else
                 Text(
-                  widget.isError ? t('tool.error') : t('tool.result'),
+                  // Expanded state must show the FULL text: payload when the
+                  // host sent a dedicated payload, else the complete result.
+                  // Falling back to `preview` here made >120-char results
+                  // permanently unreachable in the UI (#4286).
+                  _expanded
+                      ? (_usesPayload ? widget.payload! : widget.result)
+                      : preview,
                   style: TextStyle(
                     color: widget.isError
-                        ? AppColors.danger.withValues(alpha: 0.9)
-                        : AppColors.textMuted,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
+                        ? AppColors.danger
+                        : AppColors.textSecondary,
+                    fontSize: 11,
+                    fontFamily: _structuredPayload ? null : 'monospace',
                   ),
+                  maxLines: _expanded ? null : 2,
+                  overflow: _expanded ? null : TextOverflow.ellipsis,
                 ),
-              ],
-            ),
-            SizedBox(height: 2),
-            if (_rendersMarkdown)
-              _buildMarkdownResult()
-            else
-              Text(
-                // Expanded state must show the FULL text: payload when the
-                // host sent a dedicated payload, else the complete result.
-                // Falling back to `preview` here made >120-char results
-                // permanently unreachable in the UI (#4286).
-                _expanded
-                    ? (_usesPayload ? widget.payload! : widget.result)
-                    : preview,
-                style: TextStyle(
-                  color: widget.isError
-                      ? AppColors.danger
-                      : AppColors.textSecondary,
-                  fontSize: 11,
-                  fontFamily: _structuredPayload ? null : 'monospace',
-                ),
-                maxLines: _expanded ? null : 2,
-                overflow: _expanded ? null : TextOverflow.ellipsis,
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1531,10 +1640,7 @@ class _ToolResultCardState extends State<_ToolResultCard> {
           fontSize: 11,
           height: 1.45,
         ),
-        listBullet: TextStyle(
-          color: AppColors.textSecondary,
-          fontSize: 11,
-        ),
+        listBullet: TextStyle(color: AppColors.textSecondary, fontSize: 11),
         strong: TextStyle(
           color: AppColors.textPrimary,
           fontWeight: FontWeight.w700,
@@ -1559,12 +1665,7 @@ class _ToolResultCardState extends State<_ToolResultCard> {
     if (_expanded) {
       return body;
     }
-    return ClipRect(
-      child: SizedBox(
-        height: 48,
-        child: body,
-      ),
-    );
+    return ClipRect(child: SizedBox(height: 48, child: body));
   }
 }
 
@@ -1575,51 +1676,51 @@ class _SyncingOverlay extends StatelessWidget {
   final ConnectionStatus status;
   final RelaySyncState? sync;
 
-  const _SyncingOverlay({required this.status, this.sync});
+  const _SyncingOverlay({super.key, required this.status, this.sync});
 
   @override
   Widget build(BuildContext context) {
     final title = _title();
     final detail = _detail();
 
-    return Positioned.fill(
-      child: AbsorbPointer(
-        child: Container(
-          color: AppColors.background.withValues(alpha: 0.92),
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(
-                  width: 32,
-                  height: 32,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.5,
-                    valueColor: AlwaysStoppedAnimation(AppColors.accent),
-                  ),
+    // Positioned.fill lives at the call site (the overlay is cross-faded by an
+    // AnimatedSwitcher, and Positioned must be a direct Stack child).
+    return AbsorbPointer(
+      child: Container(
+        color: AppColors.background.withValues(alpha: 0.92),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 32,
+                height: 32,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  valueColor: AlwaysStoppedAnimation(AppColors.accent),
                 ),
-                const SizedBox(height: 16),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                title,
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (detail.isNotEmpty) ...[
+                const SizedBox(height: 6),
                 Text(
-                  title,
+                  detail,
                   style: TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
                   ),
+                  textAlign: TextAlign.center,
                 ),
-                if (detail.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    detail,
-                    style: TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 13,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
               ],
-            ),
+            ],
           ),
         ),
       ),
@@ -1640,15 +1741,19 @@ class _SyncingOverlay extends StatelessWidget {
       case RelaySyncPhase.restoringLocal:
         return t('relay_sync.restoring_title');
       case RelaySyncPhase.waitingHost:
-        return t(sync!.recoveryState == 'pending'
-            ? 'relay_sync.pending_title'
-            : 'relay_sync.waiting_host_title');
+        return t(
+          sync!.recoveryState == 'pending'
+              ? 'relay_sync.pending_title'
+              : 'relay_sync.waiting_host_title',
+        );
       case RelaySyncPhase.waiting:
         return t('relay_sync.waiting_title');
       case RelaySyncPhase.replaying:
-        return t(sync!.resumeMode == 'full_history'
-            ? 'relay_sync.full_history_title'
-            : 'relay_sync.replaying_title');
+        return t(
+          sync!.resumeMode == 'full_history'
+              ? 'relay_sync.full_history_title'
+              : 'relay_sync.replaying_title',
+        );
       case RelaySyncPhase.snapshot:
         return t('relay_sync.snapshot_title');
     }
@@ -1660,18 +1765,22 @@ class _SyncingOverlay extends StatelessWidget {
     }
     if (sync == null) return '';
     if (sync!.stalled) {
-      return t('relay_sync.stalled_detail',
-          args: {'count': (sync!.remainingReplayCount ?? 0).toString()});
+      return t(
+        'relay_sync.stalled_detail',
+        args: {'count': (sync!.remainingReplayCount ?? 0).toString()},
+      );
     }
     switch (sync!.phase) {
       case RelaySyncPhase.restoringLocal:
         return t('relay_sync.restoring_detail');
       case RelaySyncPhase.waitingHost:
-        return t(sync!.recoveryState == 'pending'
-            ? 'relay_sync.pending_detail'
-            : sync!.hasLocalState
-                ? 'relay_sync.waiting_host_with_local_detail'
-                : 'relay_sync.waiting_host_detail');
+        return t(
+          sync!.recoveryState == 'pending'
+              ? 'relay_sync.pending_detail'
+              : sync!.hasLocalState
+              ? 'relay_sync.waiting_host_with_local_detail'
+              : 'relay_sync.waiting_host_detail',
+        );
       case RelaySyncPhase.waiting:
         return t('relay_sync.waiting_detail');
       case RelaySyncPhase.replaying:

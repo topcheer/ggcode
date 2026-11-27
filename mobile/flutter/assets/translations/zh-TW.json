@@ -69,5 +69,9 @@
   "chat.copied": "已複製",
   "chat.select_all": "全選",
   "codeblock.show_more": "展開（剩餘 {count} 行）",
-  "codeblock.show_less": "收起"
+  "codeblock.show_less": "收起",
+  "chat.send": "傳送",
+  "chat.interrupt": "中斷",
+  "chat.attach_image": "新增圖片",
+  "chat.close_tab": "關閉標籤"
 }
