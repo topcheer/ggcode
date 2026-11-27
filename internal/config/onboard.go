@@ -62,7 +62,9 @@ func (c *Config) NeedsOnboard() bool {
 			c.OnboardIncomplete = false
 			return false
 		}
-		return true
+		// Only a missing credential re-opens the wizard; a selection that no
+		// longer resolves is #1865 territory (never nag).
+		return c.ActiveEndpointCredentialMissing()
 	}
 
 	if c.FilePath != "" {
@@ -77,6 +79,28 @@ func (c *Config) NeedsOnboard() bool {
 	}
 
 	return !endpointUsable(resolved)
+}
+
+// ActiveEndpointCredentialMissing reports whether the selected endpoint resolves
+// cleanly but lacks the credential it needs (a missing/unresolvable API key, not
+// an OAuth token, not a keyless or loopback endpoint). A config that cannot
+// resolve at all is NOT reported here: a broken selection is a different
+// problem, and treating it as "no key" would nag users whose provider works.
+func (c *Config) ActiveEndpointCredentialMissing() bool {
+	if c == nil {
+		return false
+	}
+	resolved, err := c.ResolveActiveEndpoint()
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(resolved.AuthType), "oauth") {
+		return false
+	}
+	if endpointNeedsNoAPIKey(resolved) {
+		return false
+	}
+	return !hasUsableAPIKey(resolved.APIKey)
 }
 
 // ActiveEndpointUsable reports whether the selected endpoint can be called with

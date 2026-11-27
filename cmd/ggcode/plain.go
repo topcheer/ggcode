@@ -655,3 +655,30 @@ func plainStreamPrinter(pendingToolCalls map[string]bool) (func(provider.StreamE
 			fmt.Println()
 		}
 }
+
+// warnPlainFrontendMissingKey reports - before the first message - that the
+// plain frontend starts with an endpoint that has no usable credential. Without
+// it the user learns about it the hard way: the first message returns 401
+// ("API key is invalid or expired"), which is the same dead end onboarding's
+// silent success used to leave behind. Prints the same remedies as the wizard.
+// Returns true when the warning was printed.
+func warnPlainFrontendMissingKey(w io.Writer, cfg *config.Config) bool {
+	if w == nil || cfg == nil || !cfg.ActiveEndpointCredentialMissing() {
+		return false
+	}
+	vendor, endpoint, envHint := cfg.Vendor, cfg.Endpoint, ""
+	if resolved, err := cfg.ResolveActiveEndpoint(); err == nil && resolved != nil {
+		vendor, endpoint = resolved.VendorID, resolved.EndpointID
+		envHint = config.PreferredVendorAPIKeyEnvVar(resolved.VendorID)
+	}
+	if envHint == "" {
+		envHint = "DEEPSEEK_API_KEY"
+	}
+	fmt.Fprintf(w,
+		"[notice] no usable API key for %s/%s - the first message will fail with 401.\n"+
+			"  Fix it with `ggcode onboard`, or without the wizard:\n"+
+			"    - export %s='<your key>', or\n"+
+			"    - add it to %s as: export %s='<your key>'\n",
+		orUnknown(vendor), orUnknown(endpoint), envHint, config.KeysEnvPath(), envHint)
+	return true
+}
