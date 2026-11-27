@@ -89,3 +89,20 @@ func TestPersistOnboardOutcome_SilentWhenKeyPersisted(t *testing.T) {
 		t.Error("a configured provider must not re-onboard")
 	}
 }
+
+// A wizard started without a TTY used to block forever with no output (a VPS
+// SSH one-liner, a container exec, a systemd unit). It must fail fast with the
+// non-interactive remedies instead.
+func TestOnboardingNeedsTTYError_Actionable(t *testing.T) {
+	cfg := onboardTestConfig(t, false)
+	err := onboardingNeedsTTYError(cfg)
+	if err == nil {
+		t.Fatal("want an error for a non-TTY onboarding")
+	}
+	msg := err.Error()
+	for _, want := range []string{"interactive terminal", "DEEPSEEK_API_KEY", "keys.env", "deepseek"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error must mention %q, got:\n%s", want, msg)
+		}
+	}
+}

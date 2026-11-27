@@ -16,6 +16,9 @@ import (
 )
 
 func runOnboardAndRestart(cfg *config.Config) error {
+	if !onboardTTYAvailable() {
+		return onboardingNeedsTTYError(cfg)
+	}
 	result, err := tui.RunOnboard(cfg)
 	if err != nil {
 		return err
@@ -173,6 +176,9 @@ func newOnboardCmd(cfgFile *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
+			if !onboardTTYAvailable() {
+				return onboardingNeedsTTYError(cfg)
+			}
 			// A user explicitly asking for onboarding overrides the marker that
 			// suppresses the automatic prompt.
 			cfg.OnboardIncomplete = false
@@ -210,4 +216,38 @@ func persistOnboardOutcome(cfg *config.Config, w io.Writer) error {
 			"    - add it to %s as: export %s='<your key>'\n",
 		vendor, endpoint, envHint, config.KeysEnvPath(), envHint)
 	return nil
+}
+
+// onboardingNeedsTTYError explains, instead of hanging, what to do when the
+// wizard is started without an interactive terminal (a non-TTY SSH command, a
+// container exec, a systemd unit). Without this guard the tea program blocked
+// forever with no output.
+func onboardingNeedsTTYError(cfg *config.Config) error {
+	vendor, envHint := "", ""
+	if cfg != nil {
+		vendor = cfg.Vendor
+		if resolved, err := cfg.ResolveActiveEndpoint(); err == nil && resolved != nil {
+			vendor = resolved.VendorID
+			envHint = config.PreferredVendorAPIKeyEnvVar(resolved.VendorID)
+		}
+	}
+	if envHint == "" {
+		envHint = "DEEPSEEK_API_KEY"
+	}
+	return fmt.Errorf("onboarding needs an interactive terminal (no TTY on stdin/stdout).\n"+
+		"Set the API key non-interactively instead:\n"+
+		"    export %s='<your key>'\n"+
+		"  or add it to %s as: export %s='<your key>'\n"+
+		"  (provider in effect: %s)", envHint, config.KeysEnvPath(), envHint, orUnknown(vendor))
+}
+
+func orUnknown(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "none"
+	}
+	return s
+}
+
+func onboardTTYAvailable() bool {
+	return writerIsTerminal(os.Stdin) && writerIsTerminal(os.Stdout)
 }

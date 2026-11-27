@@ -85,6 +85,16 @@ The key goes to `~/.ggcode/keys.env`; the vendor file keeps only a `${ENV}` refe
 refuses to advance on an empty API key when the chosen provider needs one (a key already exported in
 the environment satisfies the step).
 
+The wizard needs an interactive terminal. Run without a TTY (a non-interactive SSH command, a
+container exec, a systemd unit) it exits with the non-interactive alternative instead of blocking:
+
+```
+Error: onboarding needs an interactive terminal (no TTY on stdin/stdout).
+Set the API key non-interactively instead:
+    export DEEPSEEK_API_KEY='<your key>'
+  or add it to ~/.ggcode/keys.env as: export DEEPSEEK_API_KEY='<your key>'
+```
+
 ### mcp
 
 MCP (Model Context Protocol) server management:
