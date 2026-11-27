@@ -36,7 +36,7 @@
 
 ## 安全模型
 
-- 宏只能组合**只读工具**（与 `code_execution` 同一白名单）。`edit_file`/`run_command` 等写操作在 define 时即被拒绝——写操作永远走正常逐调用审批（含 diff 预览），宏无法旁路权限
+- 宏只能组合**只读工具**（与 `code_execution` 同一白名单：`internal/tool/code_execution.go` 的 `sandboxToolGroups`，覆盖文件/git/LSP/代码情报/记忆与召回/后台命令/定时与任务/agent 与团队/MCP/运行时/网络 共 70 余个只读工具；action 型工具因含写动作一律不入列）。`edit_file`/`run_command` 等写操作在 define 时即被拒绝——写操作永远走正常逐调用审批（含 diff 预览），宏无法旁路权限。白名单与 `code_execution` 的工具描述由同一份分组生成，沙箱内可用 `tools.names()` / `tools.describe(name)` 自查
 - 宏不能调用宏（`macro` 不在只读集），递归结构上不可能
 - 占位符替换做 JSON 转义，注入值无法逃出字符串字面量
 - 输出预算：单步 2KB / 总量 16KB 截断

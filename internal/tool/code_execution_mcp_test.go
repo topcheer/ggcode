@@ -141,8 +141,10 @@ func TestCodeExecution_MCPWriteToolNotExposed(t *testing.T) {
 	if !result.IsError {
 		t.Fatalf("expected error calling non-exposed write tool, got: %s", result.Content)
 	}
-	if !strings.Contains(result.Content, "has no member") {
-		t.Errorf("expected undefined-member error, got: %s", result.Content)
+	// A registered-but-withheld member now reports itself as not callable
+	// (read-only sandbox) instead of goja's bare "has no member" TypeError.
+	if !strings.Contains(result.Content, "not callable inside code_execution") {
+		t.Errorf("expected the not-callable error, got: %s", result.Content)
 	}
 	if unsafe.callCount() != 0 {
 		t.Errorf("write tool must never execute from the sandbox, got %d calls", unsafe.callCount())
