@@ -2,11 +2,14 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
+
+	"github.com/spf13/cobra"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/tui"
@@ -27,7 +30,7 @@ func runOnboardAndRestart(cfg *config.Config) error {
 		endpointID := "default"
 
 		if err := cfg.AddVendor(vendorID, cp.Name, cp.APIKey); err != nil {
-
+			return fmt.Errorf("creating custom vendor: %w", err)
 		}
 
 		if err := cfg.AddEndpoint(vendorID, endpointID, cp.Protocol, cp.BaseURL, cp.APIKey); err != nil {
@@ -106,6 +109,10 @@ func runOnboardAndRestart(cfg *config.Config) error {
 		return fmt.Errorf("saving config: %w", err)
 	}
 
+	if err := persistOnboardOutcome(cfg, os.Stderr); err != nil {
+		return err
+	}
+
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("finding executable: %w", err)
@@ -138,4 +145,69 @@ func sanitizeVendorID(name string) string {
 		result = "custom"
 	}
 	return result
+}
+
+// newOnboardCmd exposes the onboarding flow on demand. It exists because owner
+// invariant #1865 forbids re-opening onboarding automatically once a config
+// file exists: without an explicit entry point, an install whose key never made
+// it to disk (or that needs a different provider) had no way back except
+// deleting the config file.
+func newOnboardCmd(cfgFile *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "onboard",
+		Short: "Re-run the setup wizard (provider, API key, model, options)",
+		Long: "Re-run the interactive onboarding: choose the provider and endpoint, paste the API key, pick the model. " +
+			"Use it when the wizard skipped the API key or when you want to switch provider. " +
+			"The key is written to keys.env and the vendor file stores only a ${ENV} reference.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			path := *cfgFile
+			if path == "" {
+				resolved, err := resolveConfigFilePath()
+				if err != nil {
+					return fmt.Errorf("resolving config path: %w", err)
+				}
+				path = resolved
+			}
+			wd, _ := os.Getwd()
+			cfg, err := config.LoadWithInstance(path, wd)
+			if err != nil {
+				return fmt.Errorf("loading config: %w", err)
+			}
+			// A user explicitly asking for onboarding overrides the marker that
+			// suppresses the automatic prompt.
+			cfg.OnboardIncomplete = false
+			return runOnboardAndRestart(cfg)
+		},
+	}
+}
+
+// persistOnboardOutcome records whether the wizard actually configured a
+// usable provider. A key that never reached disk is the one onboarding failure
+// the user cannot see: the config file exists, so #1865 keeps onboarding from
+// running again, and every request fails 401 "API 密钥无效或未配置". In that
+// case the marker is persisted (NeedsOnboard honours it) and the remedies are
+// printed instead of leaving the user with a green wizard and a dead provider.
+func persistOnboardOutcome(cfg *config.Config, w io.Writer) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if cfg.ActiveEndpointUsable() {
+		return nil
+	}
+	cfg.OnboardIncomplete = true
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("saving config: %w", err)
+	}
+	vendor, endpoint, envHint := cfg.Vendor, cfg.Endpoint, ""
+	if resolved, err := cfg.ResolveActiveEndpoint(); err == nil && resolved != nil {
+		vendor, endpoint = resolved.VendorID, resolved.EndpointID
+		envHint = config.PreferredVendorAPIKeyEnvVar(resolved.VendorID)
+	}
+	fmt.Fprintf(w,
+		"Warning: onboarding finished without a usable API key for %s/%s.\n"+
+			"  Fix it by re-running the wizard (`ggcode onboard`), or without it:\n"+
+			"    - export %s in your shell/profile, or\n"+
+			"    - add it to %s as: export %s='<your key>'\n",
+		vendor, endpoint, envHint, config.KeysEnvPath(), envHint)
+	return nil
 }
