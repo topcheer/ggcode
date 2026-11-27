@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // detectMacDarkMode reports whether the OS prefers a dark UI. On Linux it asks
@@ -16,6 +18,7 @@ func detectMacDarkMode() bool {
 	if cmd := exec.Command("gsettings", "get", "org.gnome.desktop.interface", "color-scheme"); true {
 		done := make(chan string, 1)
 		go func() {
+			defer safego.Recover("desktop.appearance-gsettings")
 			out, err := cmd.Output()
 			if err != nil {
 				done <- ""
