@@ -84,6 +84,26 @@ ggcode Mobile app
 3. The mobile app connects to the relay and receives events in real-time
 4. On reconnect, historical events are replayed for continuity
 
+### Relay vs P2P (the status pill)
+
+After the relay connection is up, the host automatically tries to upgrade to a
+direct WebRTC DataChannel (signalling goes through the relay). The chat screen's
+status pill shows which path the app is currently using:
+
+- **Relay** (cloud icon) — events arrive over the relay WebSocket.
+- **P2P** (lightning icon) — events arrive over the DataChannel; the relay stays
+  connected for signalling and as the fallback path.
+
+The host never trusts the DataChannel on its own: until the app has sent
+something on it (newer app builds answer a keepalive ping right away), every
+event is also sent over the relay and the app de-duplicates by event id. If the
+channel dies silently (app backgrounded, network path lost), the host detects
+the missed keepalives, falls back to relay-only and retries later — the pill may
+flip between P2P and Relay during that recovery, but no messages are lost. If
+the pill shows Relay permanently, direct connectivity is simply not possible on
+your networks (symmetric NAT / cellular without TURN) and the relay path is
+used. Details: `docs/design/p2p-direct-connection.md`.
+
 ## Security
 
 - **End-to-end encrypted** — your data is encrypted between your device and your ggcode instance
