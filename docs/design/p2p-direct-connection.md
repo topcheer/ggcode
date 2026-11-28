@@ -302,6 +302,19 @@ transient signaling 消息，relay 会转发给所有已连接的 client（不�
 - transient 事件（无 EventID）转发给所有 client
 - 支持 cursor-based replay recovery
 
+**部署触发（Railway 项目 `ggcode-gateway`，服务 `ggcode`，域名 `gateway.ggcode.dev`）**：
+
+- 服务从 `topcheer/ggcode` 的 `main` 自动部署，root directory `/ggcode-relay`，Config File path
+  `/ggcode-relay/railway.json`（在服务 Settings 中设置——Railway 只在仓库根目录查找配置文件，
+  不设置这个路径时 `ggcode-relay/railway.*` 不会被读取，`watchPatterns` 也就不会生效）。
+- `build.watchPatterns = ["/ggcode-relay/**"]`：只有改动 `ggcode-relay/` 下文件的 push 才会部署；
+  其它 main push（CLI / mobile / docs）不再重启 relay。模式相对仓库根目录而非 root directory。
+- 每次部署都会让 relay 以 `close 1012 relay_restarting` 断开所有在线 share（host 会自动重连并
+  重新协商 P2P），所以非 relay 改动不应触发部署；确实需要重新部署 relay 代码之外的改动时，
+  用 Railway 的 Deploy Latest Commit（设置 watch paths 后空提交不再触发）。
+- 2026-11-28 验证：合并 #5989 后 docs-only push 仍触发部署（配置文件未被读取）→ 设置
+  Config File path 后再次 docs-only push 不产生部署。
+
 **TURN 服务器**（独立部署）：
 - coturn at `turn.allpayone.net:8443`
 - realm: `turn.allpayone.net`
