@@ -4,19 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/topcheer/ggcode/internal/rexcache"
-	"github.com/topcheer/ggcode/internal/util"
-	"net/http"
 	"net/url"
 	"strings"
-	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/rexcache"
 )
 
 type WebSearch struct{}
 
 func (t WebSearch) Name() string { return "web_search" }
 func (t WebSearch) Description() string {
-	return "Search the web using DuckDuckGo. Returns search result snippets, not full page contents. Use web_fetch on a selected result URL when you need the page text."
+	return "Search the web (DuckDuckGo, with automatic fallback to Bing when DuckDuckGo rate-limits or blocks the request; repeated queries are served from a short cache). Returns search result snippets, not full page contents. Use web_fetch on a selected result URL when you need the page text."
 }
 
 func (t WebSearch) ToolMeta() ToolMeta {
@@ -86,26 +85,6 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		args.MaxResults = 10
 	}
 
-	searchURL := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(args.Query)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
-	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("invalid request: %v", err)}, nil
-	}
-	req.Header.Set("User-Agent", "ggcode/1.0 (web search tool)")
-
-	client := util.NewInsecureAwareClient(15 * time.Second)
-	resp, err := client.Do(req)
-	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("search request failed: %v", err)}, nil
-	}
-	defer resp.Body.Close()
-
-	body, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("read body failed: %v", err)}, nil
-	}
-
 	fetchLimit := args.MaxResults
 	if len(args.AllowedDomains) > 0 || len(args.BlockedDomains) > 0 {
 		fetchLimit = args.MaxResults * 3
@@ -114,7 +93,7 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		}
 	}
 
-	results := parseDDGResults(string(body), fetchLimit)
+	results, source := querySearchBackends(ctx, args.Query, fetchLimit)
 
 	// #5580: backend-level result count, captured BEFORE domain filtering.
 	// The degrade counter must judge backend health on this, not on the
@@ -139,11 +118,19 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	if len(results) == 0 {
 		msg := "No results found."
+		if backendTotal > 0 {
+			msg = "No results match the allowed_domains/blocked_domains filter."
+		} else if AllSearchBackendsCoolingDown() {
+			msg = "Search backends are rate-limited right now (DuckDuckGo, Bing and 360 Search all served anti-bot challenges recently). Retry in a minute, or use web_fetch on a known URL instead."
+		}
+		debug.Log("websearch", "no results for %q (backendTotal=%d source=%q)", args.Query, backendTotal, source)
 		if degradeAdvisory != "" {
 			msg += degradeAdvisory
 		}
 		return Result{Content: msg}, nil
 	}
+
+	debug.Log("websearch", "%q -> %d results (source=%s)", args.Query, len(results), source)
 
 	var sb strings.Builder
 	for i, r := range results {
@@ -269,11 +256,11 @@ func parseDDGResults(htmlBody string, max int) []searchResult {
 			snippet = StripHTML(snippetMatch[1])
 		}
 
-		if title != "" {
+		if title != "" && !isEngineSelfURL(resultURL) {
 			results = append(results, searchResult{
-				Title:   title,
+				Title:   normalizeResultTitle(title),
 				URL:     resultURL,
-				Snippet: snippet,
+				Snippet: cleanSearchText(snippet),
 			})
 		}
 	}

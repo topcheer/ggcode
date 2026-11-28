@@ -53,7 +53,7 @@ func recordSearchEmpty() string {
 	}
 	searchDegrade.advising = true
 	return fmt.Sprintf(
-		"\n\n[search-degraded] web_search has returned empty results for %d consecutive queries this session - the DuckDuckGo backend is likely degraded or blocked (rate limit / outage). Stop retrying web_search; use web_fetch on known canonical URLs instead (arXiv API: https://arxiv.org/api/query?search_query=..., official documentation domains, previously fetched authoritative pages).",
+		"\n\n[search-degraded] web_search has returned empty results for %d consecutive queries this session - the search backends (DuckDuckGo, then Bing) are likely rate-limited or blocked. Stop retrying web_search; use web_fetch on known canonical URLs instead (official documentation domains, previously fetched authoritative pages).",
 		searchDegrade.consecutiveEmpties)
 }
 
