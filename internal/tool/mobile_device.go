@@ -58,9 +58,11 @@ func (t *MobileDeviceTool) Description() string {
 	return "Control native mobile apps on iOS Simulator or Android Emulator/Device. " +
 		"Actions: devices, boot, install, launch, snapshot (UI tree), screenshot, tap, type, swipe, press, logs, close, list_apps. " +
 		"Use action=\"devices\" first. snapshot returns @eN element references for tap/type/swipe. " +
-		"iOS on macOS is driven through idb (installed automatically via Homebrew on first use when missing; set GGCODE_MOBILE_NO_INSTALL=1 to skip): " +
-		"coordinates are simulator points, text input and snapshot work without a visible simulator window; without idb the tool falls back to " +
-		"AppleScript clicks (needs Accessibility permission and the simulator window)."
+		"Coordinates: with ref= use the @eN from the last snapshot (no x/y). Without ref, x/y are screenshot PIXELS of the last/full-resolution " +
+		"screenshot (the tool divides by the device scale on iOS); rect values in snapshot output are logical points. " +
+		"iOS on macOS is driven through idb (auto-installed in the background on first use when missing: brew idb-companion + fb-idb client; " +
+		"set GGCODE_MOBILE_NO_INSTALL=1 to skip) - text input, snapshot and taps work without a visible simulator window; without idb the tool " +
+		"falls back to AppleScript clicks (needs Accessibility permission and the simulator window)."
 }
 
 func (t *MobileDeviceTool) Parameters() json.RawMessage {
@@ -461,6 +463,20 @@ func runCommand(ctx context.Context, timeout time.Duration, name string, args ..
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, name, args...)
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+// runCommandStdin is runCommand with stdin wired (used by `simctl pbcopy`,
+// which reads the pasteboard content from standard input).
+func runCommandStdin(ctx context.Context, timeout time.Duration, stdin string, name string, args ...string) (string, string, error) {
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, name, args...)
+	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

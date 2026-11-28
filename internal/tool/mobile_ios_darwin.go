@@ -29,7 +29,8 @@ type iosBackend struct {
 	snapshots    map[string]*uiElement
 	idbConnected map[string]bool
 	idbLocator   *idbLocator
-	run          simCmdRunner // idb command runner override (tests)
+	run          simCmdRunner                                         // idb command runner override (tests)
+	paste        func(ctx context.Context, device, text string) error // pasteboard writer override (tests)
 }
 
 func newIOSBackend() *iosBackend {
@@ -411,10 +412,11 @@ func (b *iosBackend) typeText(ctx context.Context, device, ref, text string, x, 
 	}
 
 	if idb := b.idbPath(ctx); idb != "" {
-		if _, stderr, err := b.idb(ctx, idb, device, 30*time.Second, "ui", "text", text); err != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("idb text failed: %v %s", err, strings.TrimSpace(stderr))}, nil
+		how, err := b.idbTypeText(ctx, idb, device, text)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("idb text failed: %v", err)}, nil
 		}
-		return Result{Content: fmt.Sprintf("Typed: %q via idb", text)}, nil
+		return Result{Content: fmt.Sprintf("Typed: %q via idb (%s)", text, how)}, nil
 	}
 	escapedText := escapeAppleScriptString(text)
 	script := typeAppleScript(simFrontendApp(ctx, runCommand), escapedText)
