@@ -1,10 +1,15 @@
-[build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
-
-[deploy]
-startCommand = "/relay"
-healthcheckPath = "/health"
-healthcheckTimeout = 10
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 3
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile",
+    "watchPatterns": ["/ggcode-relay/**"]
+  },
+  "deploy": {
+    "startCommand": "/relay",
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 10,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 3
+  }
+}
