@@ -1,2 +1,9 @@
 # Railway project configuration
 # This file is intentionally minimal — all config is in railway.json
+#
+# watchPatterns (in railway.json) is repo-root based even though this service has
+# rootDirectory=/ggcode-relay: Railway's own monorepo auto-import sets watch paths
+# like "/packages/backend/**" for services whose root directory is that package
+# (docs/deployments/monorepo). Only pushes touching /ggcode-relay/** should
+# redeploy the relay; every unrelated main push restarts it and drops all live
+# mobile shares with `close 1012 relay_restarting`.
