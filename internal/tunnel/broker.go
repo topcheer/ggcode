@@ -77,6 +77,23 @@ type Broker struct {
 	relayLastEventMu sync.RWMutex
 	relayLastEventID string
 
+	// P2P end-to-end confirmation. The host's DataChannel.OnOpen only proves
+	// the host side: the mobile may never activate the channel (or drop it
+	// without the close reaching us) while pion's Send keeps returning nil, so
+	// every downstream event would vanish into a one-way black hole (#1876
+	// case 2). Until the first upstream message arrives on the channel, every
+	// downstream event is mirrored to the relay as well (the mobile dedupes by
+	// EventID). p2pPongSeen flips once the client answered a keepalive ping on
+	// the channel (mobile builds that reply `pong`); from then on the upgrade
+	// manager treats a keepalive miss streak as a dead channel.
+	p2pConfirmCh      chan struct{}
+	p2pConfirmed      atomic.Bool
+	p2pOpenedAt       atomic.Int64
+	p2pLastUpstreamAt atomic.Int64
+	p2pPongCount      atomic.Int32
+	p2pPongSeen       atomic.Bool
+	relaySender       func(GatewayMessage) error // nil = session.Send (tests override)
+
 	projectionHashCacheMu sync.RWMutex
 	projectionHashCache   string
 
@@ -192,19 +209,41 @@ func (b *Broker) senderLoop() {
 		for _, msg := range batch {
 
 			if b.sendViaTransport(msg) {
+				// Unconfirmed channel: mirror to the relay until the mobile has
+				// proven it actually reads this DataChannel.
+				if !b.p2pConfirmed.Load() {
+					b.sendViaRelay(msg, "mirror (P2P unconfirmed)")
+				}
 				b.signalSent(msg.EventID)
 				continue
 			}
-			if b.session != nil {
-				if err := b.session.Send(msg); err != nil {
-					debug.Log("tunnel", "broker: send %s event=%s failed: %v", msg.Type, msg.EventID, err)
-
-					continue
-				}
+			if !b.sendViaRelay(msg, "send") {
+				continue
 			}
 			b.signalSent(msg.EventID)
 		}
 	}
+}
+
+// sendViaRelay is the relay egress used by senderLoop both for plain relay
+// sends and for the unconfirmed-P2P mirror. It reports whether the relay
+// accepted the message.
+func (b *Broker) sendViaRelay(msg GatewayMessage, what string) bool {
+	if b.relaySender != nil {
+		if err := b.relaySender(msg); err != nil {
+			debug.Log("tunnel", "broker: relay %s %s event=%s failed: %v", what, msg.Type, msg.EventID, err)
+			return false
+		}
+		return true
+	}
+	if b.session == nil {
+		return false
+	}
+	if err := b.session.Send(msg); err != nil {
+		debug.Log("tunnel", "broker: %s %s event=%s failed: %v", what, msg.Type, msg.EventID, err)
+		return false
+	}
+	return true
 }
 
 func (b *Broker) sendViaTransport(msg GatewayMessage) bool {
@@ -231,14 +270,82 @@ func (b *Broker) SetP2PTransport(t Transport) {
 	b.p2pTransportMu.Lock()
 	old := b.p2pTransport
 	b.p2pTransport = t
+	if t != nil && t != old {
+		now := time.Now().UnixNano()
+		b.p2pConfirmed.Store(false)
+		b.p2pPongSeen.Store(false)
+		b.p2pPongCount.Store(0)
+		b.p2pOpenedAt.Store(now)
+		b.p2pLastUpstreamAt.Store(now)
+		b.p2pConfirmCh = make(chan struct{})
+	}
 	b.p2pTransportMu.Unlock()
 	if old != nil && old != t {
 		_ = old.Close()
 	}
 	if t != nil {
-		debug.Log("tunnel", "broker: upgraded to P2P transport")
+		debug.Log("tunnel", "broker: upgraded to P2P transport (unconfirmed until the mobile sends on the channel)")
 	} else if old != nil {
 		debug.Log("tunnel", "broker: reverted to relay transport")
+	}
+}
+
+// P2PConfirmCh is closed on the first upstream message the broker receives on
+// the current P2P transport. Callers must treat a nil channel as "no
+// transport".
+func (b *Broker) P2PConfirmCh() <-chan struct{} {
+	b.p2pTransportMu.RLock()
+	defer b.p2pTransportMu.RUnlock()
+	return b.p2pConfirmCh
+}
+
+// P2PConfirmed reports whether the mobile has proven it reads the current
+// DataChannel.
+func (b *Broker) P2PConfirmed() bool {
+	return b.p2pConfirmed.Load()
+}
+
+// SendP2PKeepalive probes the DataChannel with a `ping`; the mobile (newer
+// builds) answers `pong` on the same channel.
+func (b *Broker) SendP2PKeepalive() error {
+	b.p2pTransportMu.RLock()
+	t := b.p2pTransport
+	b.p2pTransportMu.RUnlock()
+	if t == nil {
+		return fmt.Errorf("tunnel: no P2P transport")
+	}
+	data, err := json.Marshal(GatewayMessage{Type: EventPing})
+	if err != nil {
+		return err
+	}
+	return t.Send(data)
+}
+
+func (b *Broker) p2pPongs() int32        { return b.p2pPongCount.Load() }
+func (b *Broker) p2pPongSupported() bool { return b.p2pPongSeen.Load() }
+
+// noteP2PUpstream records liveness evidence from the mobile on the current
+// DataChannel.
+func (b *Broker) noteP2PUpstream(msgType string) {
+	if !b.HasP2PTransport() {
+		return
+	}
+	b.p2pLastUpstreamAt.Store(time.Now().UnixNano())
+	if msgType == CmdPong {
+		b.p2pPongSeen.Store(true)
+		b.p2pPongCount.Add(1)
+	}
+	b.p2pTransportMu.Lock()
+	first := !b.p2pConfirmed.Load()
+	if first {
+		b.p2pConfirmed.Store(true)
+		if ch := b.p2pConfirmCh; ch != nil {
+			close(ch)
+		}
+	}
+	b.p2pTransportMu.Unlock()
+	if first {
+		debug.Log("tunnel", "broker: P2P confirmed by upstream %s (relay mirror off)", msgType)
 	}
 }
 
@@ -320,12 +427,24 @@ func (b *Broker) SyncP2PReplay() {
 			return
 		}
 	}
+	if !b.p2pConfirmed.Load() {
+		// The relay recovery replay was skipped because an upgrade was pending;
+		// until the mobile proves it reads the channel the gap must also reach
+		// it over the relay (senderLoop mirrors every replayed event).
+		debug.Log("tunnel", "broker: syncP2PReplay: P2P unconfirmed, mirroring the replay to relay")
+		b.TriggerReplayNow()
+	}
 }
 
 func (b *Broker) HandleP2PMessage(data []byte) {
 	var msg GatewayMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
 		debug.Log("tunnel", "broker: p2p unmarshal error: %v", err)
+		return
+	}
+	b.noteP2PUpstream(msg.Type)
+	if msg.Type == CmdPong {
+		// keepalive answer, not a command
 		return
 	}
 	b.callbackMu.RLock()

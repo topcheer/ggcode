@@ -1191,10 +1191,34 @@ class ConnectionService {
     try {
       final json = utf8.decode(bytes);
       final msg = proto.WsMessage.fromJson(json);
+      // Host keepalive on the DataChannel (#1876 case 2, host-side guard):
+      // answer on the same channel; it is not an application message.
+      final reply = p2PKeepaliveReply(json, p2pActive: _p2pActive);
+      if (reply != null) {
+        _p2pManager?.send(reply);
+        return;
+      }
+      if (msg.type == 'ping') return;
       _messageController.add(msg);
     } catch (e) {
       debugPrint('[p2p] failed to parse DataChannel message: $e');
     }
+  }
+}
+
+/// Host keepalive on the DataChannel (#1876 case 2): the host cannot see
+/// whether this side ever activated the channel, so it probes and tears the
+/// channel down after a miss streak. Returns the `pong` frame to send back on
+/// the channel, or null when [frame] is not a keepalive or this side is not
+/// on the channel.
+List<int>? p2PKeepaliveReply(String frame, {required bool p2pActive}) {
+  if (!p2pActive) return null;
+  try {
+    final msg = proto.WsMessage.fromJson(frame);
+    if (msg.type != 'ping') return null;
+    return utf8.encode(jsonEncode({'type': 'pong'}));
+  } catch (_) {
+    return null;
   }
 }
 

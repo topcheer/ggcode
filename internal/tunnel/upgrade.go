@@ -44,15 +44,46 @@ type UpgradeConfig struct {
 	KeepAliveInterval time.Duration
 
 	RetryDelay time.Duration
+
+	// ConfirmTimeout bounds how long the host mirrors every event to the
+	// relay after its DataChannel opened while waiting for the first upstream
+	// message from the mobile. Exceeding it means the mobile never (or no
+	// longer) reads the channel: the host reverts to relay-only.
+	ConfirmTimeout time.Duration
 }
+
+const (
+	defaultKeepAliveInterval = 20 * time.Second
+	defaultConfirmTimeout    = 45 * time.Second
+	// After an *unconfirmed* revert (mobile never used the channel) wait this
+	// long before negotiating again, so a client that cannot do P2P does not
+	// make the host flap every RetryDelay.
+	unconfirmedRetryDelay = 2 * time.Minute
+	p2pKeepaliveMaxMisses = 3
+)
 
 func DefaultUpgradeConfig() UpgradeConfig {
 	return UpgradeConfig{
 		Enabled:           true,
 		ICETimeout:        25 * time.Second,
-		KeepAliveInterval: 20 * time.Second,
+		KeepAliveInterval: defaultKeepAliveInterval,
 		RetryDelay:        30 * time.Second,
+		ConfirmTimeout:    defaultConfirmTimeout,
 	}
+}
+
+func (c UpgradeConfig) keepAliveInterval() time.Duration {
+	if c.KeepAliveInterval > 0 {
+		return c.KeepAliveInterval
+	}
+	return defaultKeepAliveInterval
+}
+
+func (c UpgradeConfig) confirmTimeout() time.Duration {
+	if c.ConfirmTimeout > 0 {
+		return c.ConfirmTimeout
+	}
+	return defaultConfirmTimeout
 }
 
 type PeerFactory func() (
@@ -82,6 +113,9 @@ type UpgradeManager struct {
 	signalCh chan SignalMessage
 
 	restartAt time.Time
+
+	// backoffUntil suppresses Start/Restart after an unconfirmed revert.
+	backoffUntil time.Time
 
 	stopped atomic.Bool
 
@@ -118,6 +152,11 @@ func (m *UpgradeManager) Start() {
 		return
 	}
 	m.mu.Lock()
+	if now := time.Now(); now.Before(m.backoffUntil) {
+		m.mu.Unlock()
+		debug.Log("tunnel", "upgrade: Start deferred (backoff %s)", time.Until(m.backoffUntil).Round(time.Second))
+		return
+	}
 	if m.state == UpgradeNegotiating || m.state == UpgradeActive {
 		m.mu.Unlock()
 		return
@@ -142,6 +181,11 @@ func (m *UpgradeManager) Restart() {
 		return
 	}
 	m.mu.Lock()
+	if now := time.Now(); now.Before(m.backoffUntil) {
+		m.mu.Unlock()
+		debug.Log("tunnel", "upgrade: Restart deferred (backoff %s)", time.Until(m.backoffUntil).Round(time.Second))
+		return
+	}
 	if m.state == UpgradeActive {
 		m.mu.Unlock()
 		return
@@ -244,8 +288,43 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 
 	p2pDone := make(chan struct{})
 	var p2pDoneOnce sync.Once
+	var reverted atomic.Bool
+
+	// revertToRelay tears the channel down and makes the relay the only
+	// transport again. Idempotent: the transport's OnDisconnect and our own
+	// watchdogs (confirmation timeout / keepalive misses) share it.
+	revertToRelay := func(reason string, retryAfter time.Duration) {
+		if !reverted.CompareAndSwap(false, true) {
+			p2pDoneOnce.Do(func() { close(p2pDone) })
+			return
+		}
+		debug.Log("tunnel", "upgrade: reverting to relay (%s)", reason)
+		m.broker.SetP2PTransport(nil)
+		m.broker.p2pNegotiating.Store(false)
+		m.broker.TriggerReplayNow()
+		if !staleGen() && !m.stopped.Load() {
+			m.setState(UpgradeFailed)
+		}
+		p2pDoneOnce.Do(func() { close(p2pDone) })
+		safego.Go("tunnel.upgrade.retry", func() {
+			// Not bound to the negotiation ctx (ICETimeout): the revert is a
+			// deliberate decision and RetryDelay/backoff regularly exceed it.
+			timer := time.NewTimer(retryAfter)
+			defer timer.Stop()
+			<-timer.C
+			if m.stopped.Load() {
+				debug.Log("tunnel", "upgrade: retry aborted, manager stopped")
+				return
+			}
+			m.Start()
+		})
+	}
 
 	p2pTransport.OnDisconnect(func() {
+		if reverted.Load() {
+			p2pDoneOnce.Do(func() { close(p2pDone) })
+			return
+		}
 		if staleGen() {
 			return
 		}
@@ -292,11 +371,12 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 				debug.Log("tunnel", "upgrade: DataChannel ready but stale/stopped, discarding")
 				return
 			}
-			debug.Log("tunnel", "upgrade: DataChannel ready, switching transport")
+			debug.Log("tunnel", "upgrade: DataChannel ready, switching transport (mirrored to relay until the mobile confirms)")
 			m.broker.SetP2PTransport(p2pTransport)
 
 			m.broker.SyncP2PReplay()
 			m.setState(UpgradeActive)
+			m.awaitConfirmation(p2pDone, &reverted, revertToRelay, staleGen)
 		case <-ctx.Done():
 			return
 		}
@@ -338,6 +418,104 @@ func (m *UpgradeManager) setState(s UpgradeState) {
 	m.state = s
 	m.mu.Unlock()
 	m.notifyState()
+}
+
+// awaitConfirmation guards the window between the host's DataChannel opening
+// and the mobile actually using it. Until the first upstream message arrives
+// the broker mirrors every event to the relay; if nothing arrives within
+// ConfirmTimeout the channel is torn down (relay-only) and re-negotiation is
+// backed off. From the moment the channel is installed the host probes it
+// with a ping every KeepAliveInterval: mobile builds that answer `pong` on
+// the channel confirm themselves (and, once confirmed, a miss streak tears a
+// silently dead channel down - pion keeps reporting Open in that case and
+// Send never fails); older builds only confirm through their own traffic.
+func (m *UpgradeManager) awaitConfirmation(p2pDone <-chan struct{}, reverted *atomic.Bool, revertToRelay func(string, time.Duration), staleGen func() bool) {
+	confirmCh := m.broker.P2PConfirmCh()
+	if confirmCh == nil {
+		return
+	}
+	interval := m.cfg.keepAliveInterval()
+
+	safego.Go("tunnel.upgrade.confirm", func() {
+		select {
+		case <-confirmCh:
+			debug.Log("tunnel", "upgrade: P2P confirmed by mobile")
+		case <-time.After(m.cfg.confirmTimeout()):
+			if staleGen() || m.stopped.Load() || reverted.Load() {
+				return
+			}
+			m.mu.Lock()
+			m.backoffUntil = time.Now().Add(unconfirmedRetryDelay)
+			m.mu.Unlock()
+			revertToRelay("mobile never used the DataChannel (confirm timeout)", unconfirmedRetryDelay)
+			return
+		case <-p2pDone:
+			return
+		}
+	})
+
+	misses := 0
+	safego.Go("tunnel.upgrade.keepalive", func() {
+		probe := func() bool {
+			before := m.broker.p2pPongs()
+			if err := m.broker.SendP2PKeepalive(); err != nil {
+				debug.Log("tunnel", "upgrade: keepalive send failed: %v", err)
+				revertToRelay("keepalive send failed", m.cfg.RetryDelay)
+				return false
+			}
+			// Give the pong a third of the interval, then judge.
+			deadline := time.After(interval / 3)
+			for {
+				if m.broker.p2pPongs() > before {
+					return true
+				}
+				select {
+				case <-deadline:
+					return false
+				case <-p2pDone:
+					return false
+				default:
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+		}
+		// First probe right away so a pong-capable mobile confirms well inside
+		// ConfirmTimeout even when KeepAliveInterval is close to it. A miss
+		// here is not judged (older clients never answer); a send failure has
+		// already reverted and the loop exits on the next iteration.
+		time.Sleep(200 * time.Millisecond)
+		if staleGen() || m.stopped.Load() || reverted.Load() {
+			return
+		}
+		probe()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-p2pDone:
+				return
+			case <-ticker.C:
+			}
+			if staleGen() || m.stopped.Load() || reverted.Load() {
+				return
+			}
+			if probe() {
+				misses = 0
+				continue
+			}
+			if !m.broker.p2pPongSupported() {
+				// Older mobile builds never answer: liveness is only proven by
+				// their own traffic, nothing to enforce here.
+				continue
+			}
+			misses++
+			debug.Log("tunnel", "upgrade: keepalive missed (%d/%d)", misses, p2pKeepaliveMaxMisses)
+			if misses >= p2pKeepaliveMaxMisses {
+				revertToRelay("keepalive misses (mobile stopped answering on the DataChannel)", m.cfg.RetryDelay)
+				return
+			}
+		}
+	})
 }
 
 func (m *UpgradeManager) stateLocked() UpgradeState {

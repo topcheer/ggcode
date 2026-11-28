@@ -374,4 +374,28 @@ void main() {
     expect(offline.data?['reason'], 'relay_restarting');
     expect(offline.data?['retry_after_ms'], 5000);
   });
+
+  test('DataChannel keepalive ping is answered with pong on the channel', () {
+    final ping = jsonEncode({'type': 'ping', 'event_id': ''});
+    final reply = p2PKeepaliveReply(ping, p2pActive: true);
+    expect(reply, isNotNull);
+    expect(proto.WsMessage.fromJson(utf8.decode(reply!)).type, 'pong');
+  });
+
+  test('DataChannel keepalive ping is ignored while P2P is not active', () {
+    expect(p2PKeepaliveReply(jsonEncode({'type': 'ping'}), p2pActive: false),
+        isNull);
+  });
+
+  test('application frames on the DataChannel are never mistaken for ping',
+      () {
+    for (final type in ['text', 'tool_call', 'session_info', 'pong']) {
+      expect(
+        p2PKeepaliveReply(jsonEncode({'type': type}), p2pActive: true),
+        isNull,
+        reason: type,
+      );
+    }
+    expect(p2PKeepaliveReply('not json', p2pActive: true), isNull);
+  });
 }

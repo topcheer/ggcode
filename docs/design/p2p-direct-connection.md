@@ -52,9 +52,36 @@ Mobile connects → Relay WebSocket (WSS) → Key exchange
                      SyncP2PReplay()           (replay all projection events)
                      (send incremental gap)
                               │
-                     All messages via P2P
-                     (relay kept for signaling)
+                     [unconfirmed] every event also mirrored to relay
+                              │
+              mobile sends on the channel ──┐   nothing within ConfirmTimeout
+                              │              │            │
+                        P2P-only            │   revert to relay-only,
+                        (keepalive ping/pong)│   back off 2 min
+                                           └── pong answers confirm too
 ```
+
+### 端到端确认与 keepalive（#1876 case 2 host 侧修复）
+
+Host 侧 `DataChannel.OnOpen` 只能证明 host 自己的通道打开了。移动端可能从未激活这个通道
+（或断开时 close 没有传回来），而 pion 的 `Send` 持续返回 nil，ICE 状态也不变——此时如果
+host 已经切到 P2P-only，所有下游事件都会进入单向黑洞（实际观察：relay 重连后 P2P 建立，
+host 每条 `p2p send ... ok`，移动端却显示 Relay 且 26 分钟没有更新）。因此：
+
+- **确认前双写**：`SetP2PTransport` 之后 broker 标记 `p2pConfirmed=false`，`senderLoop` 把每条
+  事件同时发到 DataChannel 和 relay（移动端按 EventID / ordinal 去重），`SyncP2PReplay` 的
+  缺口也镜像到 relay。收到移动端在通道上的任何上行消息后，`noteP2PUpstream` 置 confirmed，
+  停止镜像。
+- **确认超时回退**：`ConfirmTimeout`（默认 45s）内没有任何上行 → `revertToRelay`（关闭通道、
+  `TriggerReplayNow`），并把再次协商退避 `unconfirmedRetryDelay`（2 min）。
+- **keepalive**：通道安装后 host 立即、然后每个 `KeepAliveInterval`（20s）在通道上发 `ping`；
+  新版移动端在同一通道回 `pong`（既算确认，也标记 `p2pPongSeen`）。已确认且支持 pong 的客户端
+  连续 3 次不回 → 视为通道已死，回退到 relay；老版本客户端不回 pong，只靠自身流量确认，
+  不做强判。`pong` 不会进入 `OnCommand`。
+
+`UpgradeManager.OnStateChange` / `ShareStatusSnapshot` 目前仍未把传输模式暴露给 TUI / 桌面，
+排查时看 debug 日志：`upgrade: DataChannel ready, switching transport (mirrored to relay ...)`、
+`broker: P2P confirmed by upstream ...`、`upgrade: reverting to relay (...)`。
 
 ## Key Components
 
@@ -73,7 +100,8 @@ type Transport interface {
 ```
 
 Broker 通过 `p2pTransport` 字段管理当前活跃传输层。当 P2P transport 存在时，
-所有出站消息走 DataChannel；不存在时走 relay WebSocket。
+所有出站消息走 DataChannel；不存在时走 relay WebSocket。P2P transport 存在但尚未被
+移动端确认（`p2pConfirmed=false`）时，出站消息同时镜像到 relay，见上文「端到端确认与 keepalive」。
 
 ### 2. Broker (`internal/tunnel/broker.go`)
 
