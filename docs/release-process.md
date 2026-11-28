@@ -173,6 +173,8 @@ Stage all four files as part of the release commit. Each mobile release within t
 
 **Do not automate this in git hooks.** A pre-push hook that auto-bumps causes an infinite push loop (hook creates commit → push doesn't include it → next push bumps again).
 
+**TestFlight-only builds (no version bump).** To ship a new iOS build to internal TestFlight testers without a new version — e.g. to validate a change like a lowered deployment target before the next release — keep `X.Y.Z`, bump only the build number (`version_sync.sh X.Y.Z` with the current version; Apple rejects a `CFBundleVersion` that is not higher than the last upload, and the next release's auto-bump must also land above it, so commit the bump), push `main`, then dispatch `Mobile Release` with `platform=ios` and `testflight_only=true` (leave `version` / `build_number_override` empty so `pubspec.yaml` is the source of truth). `testflight_only` runs only `fastlane upload_testflight`: it does **not** expire other builds, submit a Beta App Review, or submit for App Store Review, so a version already waiting for review is untouched. Use `expire_and_promote` later if the build should go to External Testing.
+
 ### 3.6 Know what the pre-commit hook will do
 
 If `.githooks/pre-commit` is installed, `git commit` will:

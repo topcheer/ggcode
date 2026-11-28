@@ -34,6 +34,11 @@ on:
         required: false
         type: string
         default: ''
+      testflight_only:
+        description: 'iOS only: upload to TestFlight and nothing else (no External Testing promote, no App Store review submission). Pair with a build-number-only bump.'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: mobile-release-${{ github.ref }}
@@ -476,15 +481,25 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
+      # testflight_only: upload and stop. deploy_external would expire every other
+      # VALID build (incl. one attached to a pending App Store review) and submit
+      # a Beta App Review; submit_for_review would developer-reject that review.
+      - name: Upload to TestFlight (upload only)
+        if: steps.check-build.outputs.skip != 'true' && inputs.testflight_only == true
+        run: |
+          cd ios
+          bundle install --jobs 4 --retry 3
+          bundle exec fastlane upload_testflight
+
       - name: Upload to TestFlight & promote
-        if: steps.check-build.outputs.skip != 'true'
+        if: steps.check-build.outputs.skip != 'true' && inputs.testflight_only != true
         run: |
           cd ios
           bundle install --jobs 4 --retry 3
           bundle exec fastlane deploy_external
 
       - name: Submit for App Store Review
-        if: steps.check-build.outputs.skip != 'true'
+        if: steps.check-build.outputs.skip != 'true' && inputs.testflight_only != true
         run: |
           cd ios
           bundle exec fastlane submit_for_review
