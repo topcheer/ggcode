@@ -140,9 +140,14 @@ func TestBrokerUpstreamWithoutTransportDoesNotConfirm(t *testing.T) {
 // confirmHarness runs a real UpgradeManager against a fake transport whose
 // channel is already open, and returns once the broker installed it.
 func confirmHarness(t *testing.T, cfg UpgradeConfig) (*UpgradeManager, *Broker, *confirmTransport) {
+	return confirmHarnessWithRelay(t, cfg, nil)
+}
+
+func confirmHarnessWithRelay(t *testing.T, cfg UpgradeConfig, relaySender func(GatewayMessage) error) (*UpgradeManager, *Broker, *confirmTransport) {
 	t.Helper()
 	b := NewBroker(NewSession("wss://test.local"))
 	t.Cleanup(func() { b.Stop() })
+	b.relaySender = relaySender
 	tr := &confirmTransport{}
 	ready := make(chan struct{})
 	close(ready)
@@ -162,27 +167,41 @@ func confirmHarness(t *testing.T, cfg UpgradeConfig) (*UpgradeManager, *Broker, 
 	return m, b, tr
 }
 
-func TestRunUpgradeRevertsWhenMobileNeverUsesTheChannel(t *testing.T) {
-	m, b, _ := confirmHarness(t, UpgradeConfig{ConfirmTimeout: 300 * time.Millisecond, KeepAliveInterval: 50 * time.Millisecond})
+func TestRunUpgradeStaysMirroredWhenMobileNeverSignals(t *testing.T) {
+	// Older mobile builds never speak on the channel (heartbeat goes over the
+	// relay WebSocket) while their DataChannel is perfectly healthy: silence
+	// must not tear the channel down, and the relay mirror must stay on.
+	var mu sync.Mutex
+	var relay []GatewayMessage
+	m, b, tr := confirmHarnessWithRelay(t, UpgradeConfig{ConfirmTimeout: 300 * time.Millisecond, KeepAliveInterval: 50 * time.Millisecond}, func(msg GatewayMessage) error {
+		mu.Lock()
+		defer mu.Unlock()
+		relay = append(relay, msg)
+		return nil
+	})
+	tr.answerPong.Store(false)
+	relayCount := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(relay)
+	}
 
+	time.Sleep(3 * 300 * time.Millisecond) // well past ConfirmTimeout
+	if !b.HasP2PTransport() {
+		t.Fatal("silent-but-healthy channel must not be torn down on confirm timeout")
+	}
 	if b.P2PConfirmed() {
-		t.Fatal("mobile never sent anything; channel must be unconfirmed")
+		t.Fatal("channel must still be unconfirmed")
 	}
-	waitFor(t, "revert to relay after confirm timeout", func() bool { return !b.HasP2PTransport() })
-	if got := m.State(); got != UpgradeFailed {
-		t.Fatalf("expected UpgradeFailed after unconfirmed revert, got %v", got)
+	if got := m.State(); got != UpgradeActive {
+		t.Fatalf("expected UpgradeActive, got %v", got)
 	}
-	// Unconfirmed revert backs off: a Start right now is deferred.
-	m.Start()
-	if got := m.State(); got != UpgradeFailed {
-		t.Fatalf("Start must be deferred during backoff, got %v", got)
-	}
-	m.mu.Lock()
-	backoff := time.Until(m.backoffUntil)
-	m.mu.Unlock()
-	if backoff < time.Minute {
-		t.Fatalf("expected ~2m backoff, got %s", backoff)
-	}
+
+	// Mirror still on: a new event reaches both paths.
+	ev := GatewayMessage{Type: EventActivity, EventID: "ev-late"}
+	b.enqueueOut(ev)
+	waitFor(t, "late event mirrored to relay", func() bool { return relayCount() == 1 })
+	waitFor(t, "late event on P2P", func() bool { return tr.sentCount() >= 1 })
 }
 
 func TestRunUpgradeStaysActiveWhenMobileSendsOnTheChannel(t *testing.T) {

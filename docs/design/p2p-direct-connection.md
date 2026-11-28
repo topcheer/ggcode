@@ -56,8 +56,8 @@ Mobile connects → Relay WebSocket (WSS) → Key exchange
                               │
               mobile sends on the channel ──┐   nothing within ConfirmTimeout
                               │              │            │
-                        P2P-only            │   revert to relay-only,
-                        (keepalive ping/pong)│   back off 2 min
+                        P2P-only            │   stay mirrored (log only):
+                        (keepalive ping/pong)│   silence is not proof of a dead channel
                                            └── pong answers confirm too
 ```
 
@@ -72,16 +72,18 @@ host 每条 `p2p send ... ok`，移动端却显示 Relay 且 26 分钟没有更�
   事件同时发到 DataChannel 和 relay（移动端按 EventID / ordinal 去重），`SyncP2PReplay` 的
   缺口也镜像到 relay。收到移动端在通道上的任何上行消息后，`noteP2PUpstream` 置 confirmed，
   停止镜像。
-- **确认超时回退**：`ConfirmTimeout`（默认 45s）内没有任何上行 → `revertToRelay`（关闭通道、
-  `TriggerReplayNow`），并把再次协商退避 `unconfirmedRetryDelay`（2 min）。
+- **确认超时不回退**：`ConfirmTimeout`（默认 45s）内没有任何上行只记一条 unconfirmed 日志，通道保留、镜像继续。
+  原因：老版本移动端的心跳走 relay WebSocket，从不往 DataChannel 写东西，"沉默"与"从未激活"
+  在 host 侧无法区分；首版在这里回退，结果把一个健康会话的闪电图标每 45s 打回 Relay。
 - **keepalive**：通道安装后 host 立即、然后每个 `KeepAliveInterval`（20s）在通道上发 `ping`；
   新版移动端在同一通道回 `pong`（既算确认，也标记 `p2pPongSeen`）。已确认且支持 pong 的客户端
-  连续 3 次不回 → 视为通道已死，回退到 relay；老版本客户端不回 pong，只靠自身流量确认，
-  不做强判。`pong` 不会进入 `OnCommand`。
+  连续 3 次不回 → 视为通道已死，回退到 relay 并在 `RetryDelay` 后重试；老版本客户端不回 pong，
+  只靠自身流量确认，不强判。`pong` 不会进入 `OnCommand`。
 
 `UpgradeManager.OnStateChange` / `ShareStatusSnapshot` 目前仍未把传输模式暴露给 TUI / 桌面，
 排查时看 debug 日志：`upgrade: DataChannel ready, switching transport (mirrored to relay ...)`、
-`broker: P2P confirmed by upstream ...`、`upgrade: reverting to relay (...)`。
+`broker: P2P confirmed by upstream ...`、`upgrade: P2P unconfirmed after 45s ...; keeping the relay mirror on`、
+`upgrade: reverting to relay (...)`（仅 keepalive 漏应答 / 发送失败 / 对端断开）。
 
 ## Key Components
 

@@ -45,21 +45,18 @@ type UpgradeConfig struct {
 
 	RetryDelay time.Duration
 
-	// ConfirmTimeout bounds how long the host mirrors every event to the
-	// relay after its DataChannel opened while waiting for the first upstream
-	// message from the mobile. Exceeding it means the mobile never (or no
-	// longer) reads the channel: the host reverts to relay-only.
+	// ConfirmTimeout bounds how long the host waits for the first upstream
+	// message from the mobile before logging the channel as unconfirmed. The
+	// relay mirror stays on until the mobile actually signals (newer builds
+	// answer the keepalive pong right away); the channel itself is only torn
+	// down by a keepalive miss streak or a transport error.
 	ConfirmTimeout time.Duration
 }
 
 const (
 	defaultKeepAliveInterval = 20 * time.Second
 	defaultConfirmTimeout    = 45 * time.Second
-	// After an *unconfirmed* revert (mobile never used the channel) wait this
-	// long before negotiating again, so a client that cannot do P2P does not
-	// make the host flap every RetryDelay.
-	unconfirmedRetryDelay = 2 * time.Minute
-	p2pKeepaliveMaxMisses = 3
+	p2pKeepaliveMaxMisses    = 3
 )
 
 func DefaultUpgradeConfig() UpgradeConfig {
@@ -114,9 +111,6 @@ type UpgradeManager struct {
 
 	restartAt time.Time
 
-	// backoffUntil suppresses Start/Restart after an unconfirmed revert.
-	backoffUntil time.Time
-
 	stopped atomic.Bool
 
 	onStateChange func(UpgradeState)
@@ -152,11 +146,6 @@ func (m *UpgradeManager) Start() {
 		return
 	}
 	m.mu.Lock()
-	if now := time.Now(); now.Before(m.backoffUntil) {
-		m.mu.Unlock()
-		debug.Log("tunnel", "upgrade: Start deferred (backoff %s)", time.Until(m.backoffUntil).Round(time.Second))
-		return
-	}
 	if m.state == UpgradeNegotiating || m.state == UpgradeActive {
 		m.mu.Unlock()
 		return
@@ -181,11 +170,6 @@ func (m *UpgradeManager) Restart() {
 		return
 	}
 	m.mu.Lock()
-	if now := time.Now(); now.Before(m.backoffUntil) {
-		m.mu.Unlock()
-		debug.Log("tunnel", "upgrade: Restart deferred (backoff %s)", time.Until(m.backoffUntil).Round(time.Second))
-		return
-	}
 	if m.state == UpgradeActive {
 		m.mu.Unlock()
 		return
@@ -423,8 +407,10 @@ func (m *UpgradeManager) setState(s UpgradeState) {
 // awaitConfirmation guards the window between the host's DataChannel opening
 // and the mobile actually using it. Until the first upstream message arrives
 // the broker mirrors every event to the relay; if nothing arrives within
-// ConfirmTimeout the channel is torn down (relay-only) and re-negotiation is
-// backed off. From the moment the channel is installed the host probes it
+// ConfirmTimeout the channel is merely logged as unconfirmed (older mobiles
+// never signal on the channel, so silence is not proof of a dead channel)
+// and the mirror simply stays on. From the moment the channel is installed
+// the host probes it
 // with a ping every KeepAliveInterval: mobile builds that answer `pong` on
 // the channel confirm themselves (and, once confirmed, a miss streak tears a
 // silently dead channel down - pion keeps reporting Open in that case and
@@ -444,11 +430,14 @@ func (m *UpgradeManager) awaitConfirmation(p2pDone <-chan struct{}, reverted *at
 			if staleGen() || m.stopped.Load() || reverted.Load() {
 				return
 			}
-			m.mu.Lock()
-			m.backoffUntil = time.Now().Add(unconfirmedRetryDelay)
-			m.mu.Unlock()
-			revertToRelay("mobile never used the DataChannel (confirm timeout)", unconfirmedRetryDelay)
-			return
+			// No signal from the mobile. An older build that never speaks on the
+			// channel (its heartbeat goes over the relay WebSocket) is
+			// indistinguishable from one that never activated it, so the channel
+			// stays AND the relay mirror stays on: the mobile receives either
+			// way. Tearing the channel down here flipped a healthy session's
+			// lightning icon back to Relay every 45s. The keepalive below still
+			// confirms (pong-capable builds) or tears down (miss streak) later.
+			debug.Log("tunnel", "upgrade: P2P unconfirmed after %s (mobile does not signal on the channel); keeping the relay mirror on", m.cfg.confirmTimeout())
 		case <-p2pDone:
 			return
 		}
