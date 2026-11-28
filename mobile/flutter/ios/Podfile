@@ -1,5 +1,6 @@
-# Uncomment this line to define a global platform for your project
-platform :ios, '17.0'
+# Keep in sync with IPHONEOS_DEPLOYMENT_TARGET in Runner.xcodeproj (App Store "Requires iOS" floor).
+# Flutter 3.50 engine minimum is iOS 15.0; we ship 16.0.
+platform :ios, '16.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
