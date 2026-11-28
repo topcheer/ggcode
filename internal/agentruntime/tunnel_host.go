@@ -255,6 +255,24 @@ func (h *TunnelHost) StopShare() {
 	}
 }
 
+// ReleaseShare marks the active share as ended WITHOUT stopping its
+// session/broker: the caller owns those and stops them (gracefully). The TUI
+// close path uses it so GetShareInfo()/ShareStatusSnapshot stop reporting a
+// share that is being torn down, and the P2P upgrade manager is released.
+// Without it a closed share left activeShare set and the StartShareTool kept
+// refusing "A share session is already active" for the rest of the session.
+func (h *TunnelHost) ReleaseShare() {
+	h.mu.Lock()
+	h.activeShare = nil
+	mgr := h.upgradeMgr
+	h.upgradeMgr = nil
+	h.onlineBroker = nil
+	h.mu.Unlock()
+	if mgr != nil {
+		mgr.Stop()
+	}
+}
+
 func (h *TunnelHost) GetShareInfo() *ShareResult {
 	h.mu.Lock()
 	defer h.mu.Unlock()

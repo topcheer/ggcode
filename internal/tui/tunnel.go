@@ -183,7 +183,10 @@ func (m *Model) detachTunnelLifecycle() (*tunnel.Session, *tunnel.Broker) {
 	m.clearMobileFileSender()
 
 	if m.tunnelHost != nil {
-		m.tunnelHost.DetachOnlineBroker()
+		// The share is over from the user's point of view even though the
+		// detached session/broker above is still draining; release the host
+		// ref so ShareActive() is false and a new start_share is accepted.
+		m.tunnelHost.ReleaseShare()
 	}
 	m.resetTunnelMainStream()
 	m.tunnelPendingApprovalID = ""
@@ -283,6 +286,13 @@ func (m *Model) handleAgentShareRequest(msg agentShareRequestMsg) (tea.Model, te
 		m.chatWriteSystem(nextSystemID(), "Agent stopped the mobile share session.")
 		reply(agentShareReply{})
 		return m, nil
+	}
+	// No TUI-side session but the host may still hold a share ref (closed by
+	// a path that predated ReleaseShare, or a daemon-style share): clear it so
+	// a later start_share is not refused as "already active".
+	if m.tunnelHost != nil && m.tunnelHost.GetShareInfo() != nil {
+		m.tunnelHost.StopShare()
+		m.chatWriteSystem(nextSystemID(), "Agent stopped the mobile share session.")
 	}
 	reply(agentShareReply{})
 	return m, nil

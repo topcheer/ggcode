@@ -212,6 +212,20 @@
 
 验证：桌面前端 vitest 156/156 + tsc 0 错 + vite build；wails app `go vet`/三平台交叉编译/测试通过；Flutter analyze 0 error/warning，`flutter test` 145/145（新增 `chat_stream_coalesce_test.dart` 钉住合并语义）。
 
+## 8. 追加：用 idb-first `mobile_device` 从零实测时发现并修复的缺陷（2026-11-28）
+
+模拟器由 `mobile_device` 工具（idb 驱动）真实操控，每一步经 `ggcode -p` 的真实工具调用路径，截图在 `/tmp/gg-probe/D0–D21`。
+
+| # | 发现 | 根因 | 修复 | 验证 |
+|---|---|---|---|---|
+| 1 | idb 自动安装失败（`Refusing to load formula meta/fb/idb-companion from untrusted tap`） | Homebrew 7 拒绝加载未信任 tap 的 formula；旧安装链同步执行还会撞上 180s 工具超时并把失败永久缓存 | 安装器改为分离进程异步执行（不占工具超时），只信任 idb 维护方 tap（`meta/fb`/`facebook/fb`）后重试；客户端装进 `~/.ggcode/idb` venv；失败/进行中原因写入结果 | 卸载 idb 后从零安装三次迭代，最终 `rc=0`（companion 1.7.8 + fb-idb） |
+| 2 | `type` 输入 357 字符的 wss URL 变成 `wss：//gateway。ggcode。dev…恶意J一般29天…` | `idb ui text` 走 HID 键盘事件，经模拟器的中文拼音输入法重组 | 改为剪贴板粘贴：写 pasteboard 并 `simctl pbpaste` 读回验证（设备剪贴板是宿主的 ~0.8s 懒同步镜像，`simctl pbcopy` 在本机是 no-op）→ 等待字段 `IsEditing` 焦点 → 空字段长按取编辑菜单 "Paste"（真实用户手势，不触发跨 app 粘贴确认）；非空字段先 Cmd+V + 确认气泡，再退回菜单，菜单含 Cut/Copy 时放弃以免替换选中文本；结果标明落地路径 | URL 逐字节 EXACT；纯中文+emoji 在 URL 框与 composer 均 EXACT |
+| 3 | 字段未聚焦时 Cmd+V 被静默丢弃，工具却报 "Typed" | 无焦点校验 | 粘贴前轮询 accessibility 树等待 `IsEditing`，否则明确报错 "no text field has keyboard focus" | 单测 + 真机 |
+| 4 | `/share stop` 之后同一会话里 agent 再调 `start_share` 永远被拒 "already active" | TUI 关闭路径 `detachTunnelLifecycle` 只清 Model 侧并 `DetachOnlineBroker`，从不清理 `TunnelHost.activeShare`（`StopShare()` 生产代码零调用） | 新增 `TunnelHost.ReleaseShare()`（标记结束 + 释放 P2P manager，不停 session/broker），关闭路径调用它；`stop_share` 在 Model 无 session 时兜底 `StopShare()` | 新二进制真实 TUI：`/share` → `/share stop` → agent `start_share` 返回 "Share session started." |
+| 5 | "Clear all cached data" 之后重启仍停在"缓存历史会话"死胡同（回不到 Connect，弹层也没有 Clear 按钮） | `clearAll()` 清了 SQLite 和内存 state，没把 `_selectionDirty` 置位，SharedPreferences 里的 `selected_session_id` 下次启动被恢复 | `clearAll()` 置 `_selectionDirty = true` 并调度持久化 | 新增 `workspace_cache_clear_all_test.dart`；修复版 app 真机：清缓存 + 重启落在 Connect 页 |
+
+顺带发现、未修（记录）：连接页输入非法 URL 后 "Connecting…" 不超时也不报错；底部弹层的拖动把手带 "Dismiss" 语义但点按无效（需点 Scrim）。
+
 ## 6. 附：证据与截图
 
 - 桌面截图（注入 Wails shim 渲染的真实前端，1440×900）：`/tmp/gg-probe/01-chat-dark.png`（暗色主页：欢迎页 emoji 建议卡、顶部/底部重复状态芯片、10px 状态栏）、`/tmp/gg-probe/02-sidebar-dark.png`（侧栏空状态）、`/tmp/gg-probe/03-settings-dark.png`（设置表单：原生 select、右侧 60% 空白、拥挤的 Context Window 行）。

@@ -53,6 +53,14 @@ Scan the QR code with the ggcode Mobile app to complete pairing.
 - **Connect** is the primary action and stays disabled until a URL is entered (or pair with **Scan QR Code**).
 - Expand/collapse (tool results, code blocks, reasoning, subagent cards, workspace groups), the send/stop button, the scroll-to-latest button, the approval card and the Connect → Chat switch are animated; the OS "reduce motion" setting disables the ambient pulses and the transitions.
 - Approving, denying, copying and submitting a questionnaire give haptic feedback.
+- **Clear all cached data** (workspace sheet) now also drops the persisted selection: previously the stale `selected_session_id` was restored on the next launch and the app opened on a "cached historical session" that no longer existed, with no way back to the Connect screen. After clearing, the next launch starts on **Connect**.
+
+### Testing the app itself
+
+The `mobile_device` tool drives iOS simulators through idb (auto-installed on
+first use) and Android through `adb`; see [Driving simulators with
+`mobile_device`](mobile-device-tool.md) for coordinates, element refs and the
+paste-based text input that works with CJK keyboards.
 
 ## How Tunneling Works
 

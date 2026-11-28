@@ -1201,6 +1201,11 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       sessions: {},
       snapshots: {},
     );
+    // The persisted index (SharedPreferences) must follow: otherwise the
+    // stale selected_session_id is restored on the next launch and the app
+    // opens on a "cached historical session" that no longer exists, with no
+    // way back to the Connect screen (no workspaces -> no Clear button).
+    _selectionDirty = true;
     _scheduleFlush();
   }
 
