@@ -9,6 +9,8 @@
   "connect.scan_qr": "Scan QR Code",
   "connect.connecting": "Connecting...",
   "connect.connecting_detail": "Opening the relay connection and preparing the shared session.",
+  "connect.timeout": "Connection timed out after {seconds}s. Check the URL and try again.",
+  "connect.sync_timeout": "The host did not send session data. The share may have expired - scan the QR code again.",
   "connect.scan_hint": "Scan QR code or enter URL to connect",
   "connect.status_disconnected": "Disconnected",
   "status.thinking": "Thinking...",

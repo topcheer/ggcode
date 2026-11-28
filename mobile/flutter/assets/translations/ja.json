@@ -18,6 +18,8 @@
   "connect.scan_qr": "QRコードをスキャン",
   "connect.connecting": "接続中...",
   "connect.connecting_detail": "Relay接続を確立し、セッション共有を準備しています。",
+  "connect.timeout": "{seconds}秒以内に接続できませんでした。URLを確認して再試行してください。",
+  "connect.sync_timeout": "ホストからセッションデータが届きませんでした。共有が期限切れの可能性があります。QRコードを再度スキャンしてください。",
   "connect.scan_hint": "QRコードをスキャンまたはURLを入力",
   "connect.status_disconnected": "切断",
   "connect.button_connect": "接続",

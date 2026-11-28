@@ -900,6 +900,22 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
                 textAlign: TextAlign.center,
               ),
             ],
+            // Escape hatch: this view is the whole screen, so a silent
+            // endpoint or a host that never sends session data must not
+            // trap the user here (the provider also times both out).
+            SizedBox(height: 32),
+            TextButton(
+              onPressed: () =>
+                  ref.read(connectionProvider.notifier).disconnect(),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.textSecondary,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 12,
+                ),
+              ),
+              child: Text(t('common.cancel')),
+            ),
           ],
         ),
       ),

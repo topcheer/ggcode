@@ -18,6 +18,8 @@
   "connect.scan_qr": "Escanear QR code",
   "connect.connecting": "Conectando...",
   "connect.connecting_detail": "Estabelecendo conexão relay e preparando compartilhamento de sessão.",
+  "connect.timeout": "Tempo esgotado após {seconds} s. Verifique a URL e tente novamente.",
+  "connect.sync_timeout": "O host não enviou dados da sessão. O compartilhamento pode ter expirado - leia o código QR novamente.",
   "connect.scan_hint": "Escaneie um QR code ou digite uma URL",
   "connect.status_disconnected": "Desconectado",
   "connect.button_connect": "Conectar",

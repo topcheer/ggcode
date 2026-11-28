@@ -16,6 +16,7 @@ import 'message_bubble.dart';
 import 'approval_sheet.dart';
 import 'input_bar.dart';
 import 'session_rail.dart';
+import 'sheet_dismiss_handle.dart';
 import '../status/status_bar.dart';
 
 /// Decode workspace display name from base64url workspaceKey.
@@ -777,15 +778,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.backgroundElevated,
-      showDragHandle: true,
+      // Flutter's built-in drag handle is decoration only (no tap, no
+      // semantics) - use our tappable "Dismiss" handle instead.
+      showDragHandle: false,
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setModalState) {
             return SafeArea(
               child: ListView(
                 shrinkWrap: true,
-                padding: EdgeInsets.fromLTRB(16, 8, 16, 24),
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 24),
                 children: [
+                  SheetDismissHandle(onDismiss: () => Navigator.of(ctx).pop()),
                   Text(
                     t('workspace.switcher_title'),
                     style: TextStyle(

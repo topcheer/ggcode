@@ -61,6 +61,22 @@ agent knows whether to verify the field content. Typing into a field that does
 not have focus is refused (`no text field has keyboard focus - tap the field
 first`).
 
+### Caveats
+
+- `@eN` refs are indices into the tree of the **last** `snapshot`. On a screen
+  that keeps updating (a live chat projection) the tree changes between the
+  snapshot and the tap and the ref drifts to a neighbouring element (observed:
+  a composer ref landed on *Attach image*). Take a fresh `snapshot` right
+  before tapping on such screens.
+- `logs` returns the device system log on iOS (use `xcrun simctl spawn <udid>
+  log show --predicate 'process == "Runner"'` for the app's own `debugPrint`
+  output).
+- Swipes follow the standard touch direction (finger up scrolls towards newer
+  content), verified against iOS Settings; a live chat list may still jump
+  because new events re-pin it to the bottom.
+- On a shared Mac other agents may `shutdown`/`delete` simulators; idb then
+  fails with `dtuhidd … invalidated`. Use a dedicated device for automation.
+
 ## Android
 
 Android uses `adb` (`uiautomator` dump for the tree, `input` for taps/swipes,

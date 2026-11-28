@@ -199,6 +199,18 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   final Map<String, Timer> _subagentCleanupTimers = <String, Timer>{};
   Timer? _relaySyncTimeout;
 
+  /// Backstop on the WebSocket handshake. `ConnectionService` already bounds
+  /// `WebSocket.connect` at 30s; this guards the provider against a service
+  /// whose `connect()` never completes (e.g. that bound being dropped in a
+  /// refactor), so the Connect screen can never sit on "Connecting…"
+  /// forever. Overridable for tests.
+  Duration connectHandshakeTimeout = const Duration(seconds: 45);
+
+  /// How long a relay sync may stay without progress after it was first
+  /// flagged as stalled before the attempt is abandoned. Overridable for
+  /// tests.
+  Duration relaySyncStallTimeout = const Duration(seconds: 30);
+
   @override
   TunnelConnectionState build() {
     final cache = ref.read(workspaceCacheProvider.notifier);
@@ -512,8 +524,18 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     // reaches connected status — single source of truth, no double send.
 
     try {
-      // dart:io WebSocket.connect properly awaits handshake
-      await localService.connect();
+      // dart:io WebSocket.connect properly awaits handshake. Bound it: the
+      // future never completes against an endpoint that stays silent.
+      await localService.connect().timeout(connectHandshakeTimeout);
+    } on TimeoutException {
+      if (!_isConnectionGenerationCurrent(generation)) return;
+      debugPrint(
+        '[connection] handshake did not complete within '
+        '${connectHandshakeTimeout.inSeconds}s - aborting',
+      );
+      _abandonConnect(t('connect.timeout', args: {
+        'seconds': '${connectHandshakeTimeout.inSeconds}',
+      }));
     } catch (e) {
       if (!_isConnectionGenerationCurrent(generation)) return;
       state = state.copyWith(
@@ -521,6 +543,27 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           error: e.toString(),
           sessionReady: false);
     }
+  }
+
+  /// Tear down an in-flight or stalled connect attempt and return the user
+  /// to the Connect form with [message]. Late callbacks from the abandoned
+  /// service are ignored because its generation is invalidated; the stored
+  /// connection is kept so a retry (or a later reconnect) still works.
+  void _abandonConnect(String message) {
+    _nextConnectionGeneration();
+    _connectInFlight = null;
+    _connectInFlightUrl = null;
+    service?.disconnect();
+    _disposeActiveService();
+    _clearRelaySyncState();
+    _relayAuthorityEpoch = 0;
+    _liveUrl = '';
+    ref.read(workspaceCacheProvider.notifier).markDisconnected();
+    state = state.copyWith(
+        status: ConnectionStatus.disconnected,
+        error: message,
+        sessionReady: false,
+        relaySync: null);
   }
 
   /// Reconnect using the last known URL (e.g. after app resumes from background).
@@ -553,6 +596,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   void disconnect() {
     _nextConnectionGeneration();
+    // A retry must not coalesce into the attempt the user just cancelled
+    // (the handshake future stays pending until it times out).
+    _connectInFlight = null;
+    _connectInFlightUrl = null;
     service?.disconnect();
     _disposeActiveService();
     _clearRelaySyncState();
@@ -2343,11 +2390,32 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (relaySync == null) {
       return;
     }
-    _relaySyncTimeout = Timer(const Duration(seconds: 30), () {
+    _armRelaySyncStallTimeout();
+  }
+
+  /// Two-stage watchdog for a relay sync that makes no progress. Stage 1
+  /// flags the sync as stalled (the view says it is taking longer than
+  /// expected); if nothing has arrived when stage 2 fires, the host never
+  /// sent session data (expired share, host gone) and the attempt is
+  /// abandoned instead of leaving the user on an immersive view with no way
+  /// back. Any progress re-arms both stages via [_setRelaySyncState].
+  void _armRelaySyncStallTimeout() {
+    _relaySyncTimeout?.cancel();
+    _relaySyncTimeout = Timer(relaySyncStallTimeout, () {
       if (!ref.mounted || state.relaySync == null) return;
-      state = state.copyWith(
-        relaySync: state.relaySync!.copyWith(stalled: true),
+      final current = state.relaySync!;
+      if (!current.stalled) {
+        state = state.copyWith(
+          relaySync: current.copyWith(stalled: true),
+        );
+        _armRelaySyncStallTimeout();
+        return;
+      }
+      debugPrint(
+        '[connection] relay sync made no progress for '
+        '${relaySyncStallTimeout.inSeconds * 2}s - abandoning the attempt',
       );
+      _abandonConnect(t('connect.sync_timeout'));
     });
   }
 

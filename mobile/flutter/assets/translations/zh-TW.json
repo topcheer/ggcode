@@ -9,6 +9,8 @@
   "connect.scan_qr": "掃描二維碼",
   "connect.connecting": "連接中...",
   "connect.connecting_detail": "正在建立 relay 連接并準備共享會話。",
+  "connect.timeout": "連線逾時（{seconds} 秒）。請檢查 URL 後重試。",
+  "connect.sync_timeout": "主機未回傳工作階段資料，分享可能已過期，請重新掃碼。",
   "connect.scan_hint": "掃描二維碼或輸入 URL 連接",
   "connect.status_disconnected": "已斷開",
   "status.thinking": "思考中...",

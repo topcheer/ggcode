@@ -224,7 +224,22 @@
 | 4 | `/share stop` 之后同一会话里 agent 再调 `start_share` 永远被拒 "already active" | TUI 关闭路径 `detachTunnelLifecycle` 只清 Model 侧并 `DetachOnlineBroker`，从不清理 `TunnelHost.activeShare`（`StopShare()` 生产代码零调用） | 新增 `TunnelHost.ReleaseShare()`（标记结束 + 释放 P2P manager，不停 session/broker），关闭路径调用它；`stop_share` 在 Model 无 session 时兜底 `StopShare()` | 新二进制真实 TUI：`/share` → `/share stop` → agent `start_share` 返回 "Share session started." |
 | 5 | "Clear all cached data" 之后重启仍停在"缓存历史会话"死胡同（回不到 Connect，弹层也没有 Clear 按钮） | `clearAll()` 清了 SQLite 和内存 state，没把 `_selectionDirty` 置位，SharedPreferences 里的 `selected_session_id` 下次启动被恢复 | `clearAll()` 置 `_selectionDirty = true` 并调度持久化 | 新增 `workspace_cache_clear_all_test.dart`；修复版 app 真机：清缓存 + 重启落在 Connect 页 |
 
-顺带发现、未修（记录）：连接页输入非法 URL 后 "Connecting…" 不超时也不报错；底部弹层的拖动把手带 "Dismiss" 语义但点按无效（需点 Scrim）。
+顺带发现、未修（记录）：连接页输入非法 URL 后 "Connecting…" 不超时也不报错；底部弹层的拖动把手带 "Dismiss" 语义但点按无效（需点 Scrim）。→ 两项均在 §9 修复。
+
+## 9. 追加：进程重启到 `65bc2446f` 后，经真实工具分发层复核并修复（2026-11-28 12:07–12:50）
+
+`restart` 加载新二进制后（进程 txt inode 与磁盘 inode 一致；`snapshot` 返回 `Driver: idb`），本会话的 `mobile_device` 即 idb-first 版本，以下全部经本会话真实工具调用完成。共享模拟器（iPhone 17 Pro 等）正被其他 agent 的截图流水线 `shutdown`/`delete`（idb 报 `dtuhidd … invalidated`），因此新建专用设备 "GGCode-Verify"（iPhone 17 Pro / iOS 26.5）。
+
+| # | 发现 | 根因 | 修复 | 实测证据 |
+|---|---|---|---|---|
+| 6 | 连接页进度视图是死胡同：握手挂起或主机永不发 `session_info` 时只有标题、副标题，没有任何控件 | `_buildConnectingView` 没有返回/取消控件；`relaySync` 停滞 30s 只改标题、不放弃 | 进度视图增加 **Cancel**（调 `disconnect()`）；relay 同步两阶段看门狗：30s 无进展标记 stalled，再 30s 仍无进展则 `_abandonConnect` 回连接页并报错；握手 45s 兜底超时（service 层已有 30s） | 真机：输入黑洞地址 `wss://10.255.255.1/...` → 进度视图出现 Cancel（截图内联于会话）→ 点击回到 URL 表单；重试后 30s 超时报错 "Connection failed: TimeoutException…"，Cancel 仍在；`widget_test`（Cancel 返回表单）+ `session_provider_test`（handshake timeout、stall 两阶段） |
+| 7 | Cancel 后立即重试被静默吞掉（app 日志无 `_connectImpl`） | `disconnect()` 不清 `_connectInFlight`，同 URL 重试被合并进已取消、仍挂起的握手 future | `disconnect()`/`_abandonConnect()` 清 `_connectInFlight(_Url)` | 真机日志：Cancel 后重试出现 `_connectImpl gen=3`；新增单测 `retrying right after Cancel starts a fresh connect attempt` |
+| 8 | 工作区弹层把手带 "Dismiss" 语义但点按无效 | `showDragHandle: true` 只是装饰，无点击、无语义；AX 树里的 "Dismiss" 其实是 barrier | 新增 `SheetDismissHandle`（44pt 命中区、`InkWell` + `Semantics(button, label=modalBarrierDismissLabel)`）替换内置把手 | 真机：打开弹层 → AX 树 `"Dismiss" rect={16,545,370,44}` → `tap @e2` 弹层关闭；单测 3 条（`sheet_dismiss_handle_test.dart`） |
+| 9 | Agent 运行中，输入框占位文案承诺"仍可发送"，但只有 Stop 没有 Send | `isRunning ? Stop : Send` | 有草稿时 Stop 旁显示 Send；空草稿仍只显示 Stop | 真机截图 `/tmp/gg-probe/74-chat-user-bubble.png`（多行草稿 + Stop/Send 并列）；`widget_test` `InputBar offers Send next to Stop while busy once drafted` |
+
+同时验证通过（真实会话投影）：`type` 中英混排 + emoji 逐字节一致（中文拼音输入法开启）；`tap(ref)`、`swipe`（以 iOS Settings 做对照实验，确认方向语义标准）、`screenshot`、`launch`、`list_apps`；用户气泡右对齐、accent 渐变 + `onAccent` 文字、多行保留（`/tmp/gg-probe/75-chat-user-bubble-full.png`）；重装后自动恢复会话。
+
+未修、新发现（记录）：(a) **运行中从移动端发送的消息显示两条**（`/tmp/gg-probe/75-chat-user-bubble-full.png`）：本地乐观气泡被 host 回显 rename 后，另一条同文本事件（不带 `message_id`）走 `addRemoteUserMessage` 追加；疑似 host 对运行中消息同时记录"客户端消息"与"guidance 注入"两条 `user_message` 事件，或 `seedHistoryDirect` 不带 `message_id`；空闲态发送是否复现未验证，需双侧事件级追踪后再修。(b) 握手阶段文案显示 "Syncing with relay / Waiting for authoritative session data"（实际尚未连上 relay）。(c) 连接失败横幅是原始异常文本（`WebSocketException: … HTTP status code: 400`），应映射为可读文案。(d) `mobile_device logs` 在 iOS 返回设备系统日志（backboardd 刷屏），应按 app 进程过滤。(e) 实时刷新的界面上 `@eN` 引用会漂移（一次 `tap @e16` 落到了 "Attach image"），点按前应重新 `snapshot`。(f) 共享 Mac 上其他 agent 会 `shutdown`/`delete` 模拟器，验证需专用设备。
 
 ## 6. 附：证据与截图
 

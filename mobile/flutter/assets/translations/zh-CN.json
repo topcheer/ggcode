@@ -9,6 +9,8 @@
   "connect.scan_qr": "扫描二维码",
   "connect.connecting": "连接中...",
   "connect.connecting_detail": "正在建立 relay 连接并准备共享会话。",
+  "connect.timeout": "连接超时（{seconds} 秒）。请检查 URL 后重试。",
+  "connect.sync_timeout": "主机未返回会话数据，分享可能已过期，请重新扫码。",
   "connect.scan_hint": "扫描二维码或输入 URL 连接",
   "connect.status_disconnected": "已断开",
   "status.thinking": "思考中...",

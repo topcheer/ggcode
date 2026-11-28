@@ -18,6 +18,8 @@
   "connect.scan_qr": "QR-Code scannen",
   "connect.connecting": "Verbinden...",
   "connect.connecting_detail": "Relay-Verbindung wird hergestellt und Sitzungsfreigabe wird vorbereitet.",
+  "connect.timeout": "Zeitüberschreitung nach {seconds} s. URL prüfen und erneut versuchen.",
+  "connect.sync_timeout": "Der Host hat keine Sitzungsdaten gesendet. Die Freigabe ist möglicherweise abgelaufen - QR-Code erneut scannen.",
   "connect.scan_hint": "QR-Code scannen oder URL eingeben",
   "connect.status_disconnected": "Getrennt",
   "connect.button_connect": "Verbinden",

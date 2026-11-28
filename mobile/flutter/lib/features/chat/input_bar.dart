@@ -129,6 +129,30 @@ class _InputBarState extends ConsumerState<InputBar>
         inputEnabled && (widget.controller.text.trim().isNotEmpty || hasImages);
     _wasEmpty = widget.controller.text.trim().isEmpty;
 
+    // While the agent is running the composer still accepts a message (the
+    // placeholder promises it), so once there is a draft offer Send next to
+    // Stop instead of Stop alone; an empty draft keeps Stop only.
+    final stopButton = _ActionButton(
+      key: const ValueKey('stop'),
+      icon: Icons.stop_circle,
+      color: AppColors.danger,
+      onPressed: () {
+        HapticFeedback.mediumImpact();
+        ref.read(connectionProvider.notifier).send({
+          'type': 'interrupt',
+          'data': {},
+        });
+      },
+      tooltip: t('chat.interrupt'),
+    );
+    final sendButton = _ActionButton(
+      key: const ValueKey('send'),
+      icon: Icons.send,
+      color: canSubmit ? AppColors.accent : AppColors.textMuted,
+      onPressed: canSubmit ? _send : null,
+      tooltip: t('chat.send'),
+    );
+
     return Container(
       padding: EdgeInsets.fromLTRB(12, 8, 12, 14),
       decoration: BoxDecoration(color: AppColors.background),
@@ -284,29 +308,19 @@ class _InputBarState extends ConsumerState<InputBar>
                       child: child,
                     ),
                   ),
-                  child: isRunning
-                      ? _ActionButton(
-                          key: const ValueKey('stop'),
-                          icon: Icons.stop_circle,
-                          color: AppColors.danger,
-                          onPressed: () {
-                            HapticFeedback.mediumImpact();
-                            ref.read(connectionProvider.notifier).send({
-                              'type': 'interrupt',
-                              'data': {},
-                            });
-                          },
-                          tooltip: t('chat.interrupt'),
-                        )
-                      : _ActionButton(
-                          key: const ValueKey('send'),
-                          icon: Icons.send,
-                          color: canSubmit
-                              ? AppColors.accent
-                              : AppColors.textMuted,
-                          onPressed: canSubmit ? _send : null,
-                          tooltip: t('chat.send'),
-                        ),
+                  child: !isRunning
+                      ? sendButton
+                      : _wasEmpty
+                          ? stopButton
+                          : Row(
+                              key: const ValueKey('stop-send'),
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                stopButton,
+                                SizedBox(width: 8),
+                                sendButton,
+                              ],
+                            ),
                 ),
             ],
           ),

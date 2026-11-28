@@ -18,6 +18,8 @@
   "connect.scan_qr": "Сканировать QR-код",
   "connect.connecting": "Подключение...",
   "connect.connecting_detail": "Устанавливается соединение с relay и подготавливается общий доступ к сессии.",
+  "connect.timeout": "Время ожидания истекло через {seconds} с. Проверьте URL и повторите попытку.",
+  "connect.sync_timeout": "Хост не прислал данные сессии. Возможно, срок доступа истёк - отсканируйте QR-код заново.",
   "connect.scan_hint": "Сканируйте QR-код или введите URL",
   "connect.status_disconnected": "Отключено",
   "connect.button_connect": "Подключить",

@@ -55,6 +55,13 @@ Scan the QR code with the ggcode Mobile app to complete pairing.
 - Approving, denying, copying and submitting a questionnaire give haptic feedback.
 - **Clear all cached data** (workspace sheet) now also drops the persisted selection: previously the stale `selected_session_id` was restored on the next launch and the app opened on a "cached historical session" that no longer existed, with no way back to the Connect screen. After clearing, the next launch starts on **Connect**.
 
+### Connecting, cancelling and sheets (v1.3.298)
+
+- The full-screen progress view ("Connecting…" / "Syncing with relay") has a **Cancel** button, so a host that never answers can no longer trap you on it. Cancelling keeps the URL in the form, and an immediate retry starts a fresh attempt.
+- A relay sync that makes no progress is flagged as stalled after 30s and abandoned after another 30s: the app returns to **Connect** with an error ("The host did not send session data…"), e.g. when the share has expired. A handshake that never completes is bounded by a timeout as well.
+- The workspace sheet's drag handle is a real **Dismiss** control: tap it (or the scrim) to close the sheet; screen readers and UI automation get the same action.
+- While the agent is running you can still send: once the composer has a draft, **Send** appears next to **Stop** (an empty draft keeps Stop only).
+
 ### Testing the app itself
 
 The `mobile_device` tool drives iOS simulators through idb (auto-installed on

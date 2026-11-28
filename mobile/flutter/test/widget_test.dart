@@ -13,6 +13,7 @@ import 'dart:io';
 
 import 'package:ggcode_mobile/core/secure_storage.dart';
 import 'package:ggcode_mobile/core/models/protocol.dart' as proto;
+import 'package:ggcode_mobile/core/l10n/app_localizations.dart';
 import 'package:ggcode_mobile/core/providers/session_provider.dart';
 import 'package:ggcode_mobile/core/theme/app_theme.dart';
 import 'package:ggcode_mobile/features/chat/approval_sheet.dart';
@@ -265,6 +266,55 @@ void main() {
 
     expect(find.byType(ConnectScreen), findsOneWidget);
     expect(find.byType(ChatScreen), findsNothing);
+  });
+
+  testWidgets(
+      'connecting view offers Cancel and returns to the URL form',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+          workspaceCacheProvider
+              .overrideWith(_EmptyWorkspaceCacheNotifier.new),
+        ],
+        child: const GGCodeApp(),
+      ),
+    );
+    await tester.pump();
+    // AppShell cross-fades Connect <-> Chat (AnimatedSwitcher, 300ms): let the
+    // outgoing screen leave before asserting a single instance.
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump();
+
+    final context = tester.element(find.byType(GGCodeApp));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier =
+        container.read(connectionProvider.notifier) as _FakeConnectionNotifier;
+
+    // The immersive progress view (a hung handshake, or a connected socket
+    // whose host never sends session data).
+    notifier.emit(TunnelConnectionState(
+      status: ConnectionStatus.connecting,
+      url: 'wss://example.test/ws?token=abc',
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump();
+
+    expect(find.byType(ConnectScreen), findsOneWidget);
+    expect(find.text(t('connect.button_connect')), findsNothing);
+    expect(find.text(t('common.cancel')), findsOneWidget);
+
+    await tester.tap(find.text(t('common.cancel')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump();
+
+    expect(container.read(connectionProvider).status,
+        ConnectionStatus.disconnected);
+    // Back on the URL form: the primary action is reachable again.
+    expect(find.text(t('connect.button_connect')), findsOneWidget);
   });
 
   testWidgets(
@@ -828,6 +878,56 @@ void main() {
     expect(textField.enabled, isTrue);
     // When agent is busy and can send, the stop button is shown (not send).
     expect(find.byIcon(Icons.stop_circle), findsOneWidget);
+  });
+
+  testWidgets('InputBar offers Send next to Stop while busy once drafted',
+      (WidgetTester tester) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+        ],
+        child: MaterialApp(
+          home: Scaffold(body: InputBar(controller: controller)),
+        ),
+      ),
+    );
+
+    final context = tester.element(find.byType(InputBar));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier =
+        container.read(connectionProvider.notifier) as _FakeConnectionNotifier;
+    notifier.emit(TunnelConnectionState(
+      status: ConnectionStatus.connected,
+      url: 'wss://example.test/ws?token=abc',
+    ));
+    container.read(agentStatusProvider.notifier).set('busy');
+    await tester.pump();
+    expect(find.byIcon(Icons.stop_circle), findsOneWidget);
+    expect(find.byIcon(Icons.send), findsNothing);
+
+    // Drafting while the agent works: the placeholder says you can still
+    // send, so Send must appear - without taking Stop away.
+    await tester.enterText(find.byType(TextField), 'queued while running');
+    await tester.pump();
+    // AnimatedSwitcher (micro duration): let the Row fade in.
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump();
+    expect(find.byIcon(Icons.stop_circle), findsOneWidget);
+    expect(find.byIcon(Icons.send), findsOneWidget);
+
+    final messagesBefore = container.read(chatProvider).length;
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+
+    expect(container.read(chatProvider).length, messagesBefore + 1);
+    expect(controller.text, isEmpty);
+    // addUserMessage schedules a 5s delivery watchdog; let it fire so the
+    // test leaves no pending timer behind.
+    await tester.pump(const Duration(seconds: 6));
   });
 
   testWidgets('workspace scanner allows manual URL entry',

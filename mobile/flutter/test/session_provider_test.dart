@@ -1452,6 +1452,122 @@ void main() {
     expect(state.url, 'wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
   });
 
+  test('a handshake that never completes is abandoned after the timeout',
+      () async {
+    final service = _ManualConnectionService(
+      connectGate: Completer<void>(),
+      emitConnectedOnConnect: false,
+    );
+    _TestConnectionNotifier.factory = (_) => service;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final notifier = container.read(connectionProvider.notifier)
+      ..connectHandshakeTimeout = const Duration(milliseconds: 100);
+    await notifier.connect(
+        'wss://example.test/ws?proto=3&room_id=room-t&kx_pub=test-pub');
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+
+    final state = container.read(connectionProvider);
+    expect(state.status, ConnectionStatus.disconnected);
+    expect(state.error, isNotEmpty);
+    expect(state.relaySync, isNull);
+    expect(service.disconnectCalls, 1);
+    expect(service.disposeCalls, 1);
+
+    // The late handshake result must not resurrect the abandoned attempt.
+    service.emitStatus(ConnectionStatus.connected);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(container.read(connectionProvider).status,
+        ConnectionStatus.disconnected);
+  });
+
+  test('a relay sync with no progress is flagged stalled, then abandoned',
+      () async {
+    final service = _ManualConnectionService();
+    _TestConnectionNotifier.factory = (_) => service;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final notifier = container.read(connectionProvider.notifier)
+      ..relaySyncStallTimeout = const Duration(milliseconds: 100);
+    // Fresh connect: the relay sync starts before the handshake, and this
+    // host never sends session_info.
+    await notifier.connect(
+        'wss://example.test/ws?proto=3&room_id=room-s&kx_pub=test-pub');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    var state = container.read(connectionProvider);
+    expect(state.relaySync, isNotNull);
+    expect(state.relaySync!.stalled, isFalse);
+
+    // Stage 1: flagged stalled, still connecting.
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    state = container.read(connectionProvider);
+    expect(state.relaySync?.stalled, isTrue);
+    expect(state.status, isNot(ConnectionStatus.disconnected));
+
+    // Stage 2: abandoned back to the Connect form with an error.
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    state = container.read(connectionProvider);
+    expect(state.status, ConnectionStatus.disconnected);
+    expect(state.relaySync, isNull);
+    expect(state.error, isNotEmpty);
+    expect(service.disconnectCalls, 1);
+    expect(service.disposeCalls, 1);
+  });
+
+  test('retrying right after Cancel starts a fresh connect attempt', () async {
+    final first = _ManualConnectionService(
+      connectGate: Completer<void>(),
+      emitConnectedOnConnect: false,
+    );
+    final second = _ManualConnectionService();
+    var factoryCalls = 0;
+    _TestConnectionNotifier.factory = (_) => factoryCalls++ == 0 ? first : second;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final notifier = container.read(connectionProvider.notifier);
+    final url = 'wss://example.test/ws?proto=3&room_id=room-c&kx_pub=test-pub';
+    // A hung handshake, cancelled by the user from the progress view.
+    unawaited(notifier.connect(url));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(first.connectCalls, 1);
+    expect(container.read(connectionProvider).status,
+        ConnectionStatus.connecting);
+    notifier.disconnect();
+
+    // The retry must not be coalesced into the cancelled attempt.
+    await notifier.connect(url);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(factoryCalls, 2);
+    expect(second.connectCalls, 1);
+    expect(container.read(connectionProvider).status,
+        ConnectionStatus.connected);
+  });
+
   test(
       'connect keeps the current same-url service while relay connected is still pending',
       () async {
