@@ -8,7 +8,7 @@
 | Module | `github.com/topcheer/ggcode` |
 | Go version | 1.26.10 (see `go.mod`) |
 | Build tag | **`-tags goolm`** required for ALL `go build` / `go test` |
-| Current release | v1.3.297 |
+| Current release | v1.3.298 |
 | Platform | Linux / macOS / Windows (amd64 + arm64) |
 
 ## Validation Commands
